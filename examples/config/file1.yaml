@@ -1,0 +1,70 @@
+# -----------------------------------------------------------------
+# Application and Server Configuration
+# -----------------------------------------------------------------
+server:
+  host: 0.0.0.0
+  port: 8443
+
+  # TLS/SSL configuration
+  tls:
+    enabled: true
+    certfile: /etc/ssl/certs/myapp/fullchain.pem
+    keyfile: /etc/ssl/private/myapp/privkey.pem
+
+  # Timeout settings in milliseconds
+  timeouts:
+    request_timeout_ms: 5000
+    keep_alive_timeout_ms: 10000
+
+# -----------------------------------------------------------------
+# Database Configuration
+# -----------------------------------------------------------------
+database:
+  enabled: true
+  type: postgresql
+  host: db.example.com
+  port: 5432
+  user: app_user
+  password: "${DB_PASSWORD}" # Use environment variable for sensitive data
+  name: myapp_production
+  pool:
+    max_connections: 50
+    idle_timeout_ms: 30000
+
+# -----------------------------------------------------------------
+# API Configuration
+# -----------------------------------------------------------------
+api:
+  version: v1
+  endpoints:
+    - /api/v1/users
+    - /api/v1/products
+    - /api/v1/orders
+
+# -----------------------------------------------------------------
+# Logging Configuration
+# -----------------------------------------------------------------
+logging:
+  level: info
+  format: json
+  output: /var/log/myapp/production.log
+  max_size_mb: 100
+  max_backups: 5
+
+# -----------------------------------------------------------------
+# Feature Flags (Example)
+# -----------------------------------------------------------------
+features:
+  new_ui:
+    enabled: false
+    rollout_percentage: 10
+  maintenance_mode:
+    enabled: false
+    message: "The server is currently undergoing scheduled maintenance. Please try again later."
+
+# -----------------------------------------------------------------
+# Rate Limiting
+# -----------------------------------------------------------------
+rate_limit:
+  enabled: true
+  max_requests_per_minute: 100

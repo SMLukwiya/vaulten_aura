@@ -1,0 +1,8 @@
+- conan create on the conan recipes (conan create . --build=missing -pr debug)
+- conan install root --build=missing
+- cmake --preset conan-debug
+- cmake --build --preset conan-debug
+- export PATH=$PATH:$(pwd)/build/Debug/bin
+- tail --f /var/log/syslog
+- conan remove "*"
+- nghttp -v --hexdump https://vaultenaura.local:8080

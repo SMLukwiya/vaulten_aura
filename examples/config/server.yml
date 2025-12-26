@@ -1,0 +1,59 @@
+version: v1beta1
+
+server:
+  name: edge-runtime
+  environment: dev
+  port: 8080
+  addr: 0.0.0.0
+  max_connections: 5000
+  timeout:
+    read: 30s
+    write: 30s
+    idle: 120s
+
+tls:
+  identities:
+    - cert_file: /home/lukwiya/studies/C/vaulten_aura/examples/config/cert_chain.pem
+      key_file: /home/lukwiya/studies/C/vaulten_aura/examples/config/aura_local_leaf_keypair.pem
+      tag: default
+    # - cert_file: /etc/edge-runtime/certs/server.crt
+    #   key_file: /etc/edge-runtime/certs/server.key
+  # - key_file: /etc/edge-runtime/certs/server.crt
+  #   cert_file: /etc/edge-runtime/certs/server.key
+  cipher_suites:
+    - TLS_AES_256_GCM_SHA384
+    - TLS_CHACHA20_POLY1305_SHA256
+
+hosts:
+  - name: vaultenaura.local
+    tls: default
+    http2_origin_frame:
+      - "api.vaultenaura.local"
+      - "admin.vaultenaura.local"
+  # - name: admin.example.com
+
+logging:
+  level: info
+  format: json
+  output: /var/log/edge-runtime/runtime.log
+  rotation:
+    max_size: 100MB
+    max_age: 7d
+    max_backups: 5
+    compress: true
+
+monitoring:
+  metrics:
+    enabled: true
+    endpoint: /metrics
+    port: 9090
+  healthcheck:
+    interval: 10s
+    timeout: 3s
+    path: /health
+
+security:
+  rate_limit:
+    enabled: true
+    requests_per_second: 100
+    burst: 200

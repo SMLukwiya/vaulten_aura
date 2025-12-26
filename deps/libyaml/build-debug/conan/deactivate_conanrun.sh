@@ -1,0 +1,1 @@
+. "/home/lukwiya/studies/C/vaulten_aura/deps/libyaml/build-debug/conan/deactivate_conanrunenv-debug-x86_64.sh"

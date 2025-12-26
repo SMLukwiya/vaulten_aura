@@ -1,0 +1,119 @@
+version: v1beta1
+
+function:
+  name: aura_hello_api
+  description: Aura Hello function deploy configs JS
+  version: 1
+  host: vaultenaura.local # @todo: get a better way to tie function to host
+  # runtime: "js"
+  entrypoint: index.js
+  env:
+    - name: DB_URL
+      value: postgresql://localhost:5432/mydb
+
+triggers:
+  http:
+    path: /api/v1/hello
+    method: GET
+    auth: none
+
+  cron:
+    schedule: 0 0 * * *
+    jitter_seconds: 0
+    misfire_policy: run_once
+    retries:
+      retry_on:
+        - "5xx"
+        - "connect timeout"
+      count: 1
+      backoff: "exponential"
+
+  queue:
+    topic: "aura queue"
+
+concurrency:
+  min_instances: 1 # defaults to 0, otherwise 1 when pre_warm on deploy is true
+  max_instances: 5
+  pre_warm_on_deploy: "true"
+  delay: 5
+  background_tasks: false
+
+resources:
+  memory:
+    soft: 100
+    hard: 128
+    oom_policy: "throttle"
+  cpu_shares: 1
+  cpu_burst_credit: 0
+  timeout: 1
+
+networking:
+  ingress:
+    ip_whitelist:
+      - "0.0.0.0"
+
+  egress:
+    policy: "whitelist" # []
+    whitelist:
+      - host: "example.com"
+        port: 443
+        protocol: "tcp"
+        tls_version: "1.3"
+        secure: "true"
+        idle_ttl: 5
+        max_per_origin: 1
+
+storage:
+  key_value_store: "false"
+  persistent_volume:
+    enabled: "true"
+    size: 100
+  static_assets:
+    bucket_name: "some read only bucket to replicate locally"
+
+observability:
+  logging:
+    level: "debug"
+    destination: "some external logging service"
+    log_reduction: "none" # ["none","pii-default","strict"]
+
+  tracing:
+    enabled: "true"
+    sample_rate: 1
+
+  custom__metrics:
+    enabled: "true"
+
+placement:
+  prefer_regions:
+    - "us_central"
+    - "us_west"
+
+  avoid_regions:
+    - "us_east"
+
+deploy:
+  fleets:
+    - name: us_central
+      strategy: canary
+      percentage: 5
+      expand_on: healthy_5min
+    - name: africa
+      strategy: blue_green
+      primary: green
+    - name: us-east
+      strategy: rolling
+      batch: 20%
+
+success_criteria:
+  health_check: /heathz
+  rules:
+    - min_availability: 95%
+    - error_rate: 1%
+    - p95_latency_lt: 95
+  rollback_after: 2m
+
+circuit_breaker:
+  - name: "look into this name"
+    failure_ratio: 0
+    window: 0 # define a time window here

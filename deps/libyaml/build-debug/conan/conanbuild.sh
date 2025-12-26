@@ -1,0 +1,1 @@
+. "/home/lukwiya/studies/C/vaulten_aura/deps/libyaml/build-debug/conan/conanautotoolstoolchain.sh" && . "/home/lukwiya/studies/C/vaulten_aura/deps/libyaml/build-debug/conan/conanbuildenv-debug-x86_64.sh"

@@ -1,0 +1,14 @@
+approach.h
+build/*
+.*.swp
+*.o
+*.xo
+*.so
+*.d
+*.log
+.make-*
+*.dSYM
+Makefile.dep
+.vscode/*
+.idea/*
+compile_commands.json
