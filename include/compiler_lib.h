@@ -1,6 +1,8 @@
 #ifndef AURA_COMPILER_TOOLS_H
 #define AURA_COMPILER_TOOLS_H
 
+/** @todo: Just GCC currently, Fill CLANG */
+
 #define __user
 #define __rcu
 #define __read_mostly

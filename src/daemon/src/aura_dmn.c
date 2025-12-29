@@ -58,7 +58,6 @@ int handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) {
             return 0;
 
         case A_CMD_FN_DEPLOY:
-            app_debug(true, 0, "*******Deploy function*******");
             aura_dmn_function_deploy(msg->fd, poll_fds[A_SOCKET_PAIR_FD_INDEX].fd, cli_fd);
             return 0;
 
@@ -86,7 +85,6 @@ int handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) {
  *
  */
 static void sig_ch_handler(int signo) {
-    app_debug(true, 0, "SERVER DIED");
     /* kill the registered socket pair */
     if (waitpid(server_pid, NULL, 0) < 0) {
         sys_debug(true, errno, "Failed to wait for server ----->>>> %d", server_pid);
@@ -117,7 +115,6 @@ void a_setup_app_paths() {
     glob_conf.fn_data_path = aura_resolve_app_path(AURA_DATA_DIR, AURA_FN_DIR);
     if (!glob_conf.fn_data_path.base)
         goto err;
-    app_debug(true, 0, "a_setup_app_paths: value: %s len: %d", glob_conf.fn_data_path.base, glob_conf.fn_data_path.len);
 
     res = aura_ensure_app_path(&glob_conf.fn_data_path, S_IRWXU);
     if (res == false)
@@ -211,7 +208,6 @@ int aura_daemon() {
                     if (res > 0) {
                         if (i == A_SOCKET_PAIR_FD_INDEX) {
                             /* aura_server request */
-                            app_debug(true, 0, "SOCKET PAIR READ*************");
                             aura_dump_msg(&aura_msg, true);
                         } else {
                             /* aura_cli request */
@@ -232,28 +228,3 @@ int aura_daemon() {
     unlink(AURA_PID);
     sys_exit(true, errno, "Exiting daemon"); // Do clean up
 }
-
-/**1.
- * Parse and Establish Configuration Sovereignty
- * config, user, grp to drop, log level, help (validate all)
- * config file: json or yaml (sanitize path)
- * Environment Variable Parsing/ Setting (establish precedence)
- * Read kernel tunables for accurate values
- * 2. Daemonize
- * 3. Drop privileges, determine order of operation before dropping privileges
- * 4. Resource limit (if applicable)
- * 5. Process Title setting
- * 6. Subsystem 2 init->cache, logging with log level from config, signal handler,sighup,
- *    connection pools, thread pools
- * 7. ssl/tls (perform all expensive ops)
- * 8. Epoll creation->eventfd (inter thread wakeup, timerfd - cron, healthfd, )
- * 9. Metrics and stats->atomic counters and gauges for all critical metrics
- *    e.g, connections accepted, request-served, 4xx, 5xx errors, response time(per func)
- *    rate limiting,
- * 10. Load shared libs
- * 11. set sockets, fastopen, nodelay
- * 12. Load runtime binaries (according to some metrics), Test probes(smoke test),
- * 13. Log high level started info level,Tracing
- * 14. Developer options, dry run mode (load config, bind socket and exit),
- * 15. Self test on launch
- */
