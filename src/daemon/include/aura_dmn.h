@@ -1,6 +1,7 @@
 #ifndef AURA_DMN_H
 #define AURA_DMN_H
 
+#include "db/db.h"
 #include "error_lib.h"
 #include "types_lib.h"
 
@@ -12,7 +13,8 @@
 #define LOCKMODE (S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
 
 struct aura_daemon_glob_conf {
-    struct aura_iovec fn_data_path;
+    struct aura_iovec aura_db_path;
+    AURA_DBHANDLE db_handle;
 };
 
 int aura_daemon(void);

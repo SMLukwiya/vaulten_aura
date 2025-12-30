@@ -2,7 +2,6 @@
 #include "file_lib.h"
 #include "hash_lib.h"
 #include "time_lib.h"
-#include "types_lib.h"
 #include "utils_lib.h"
 
 #include <errno.h>
@@ -122,13 +121,15 @@ AURA_DBHANDLE aura_db_open(const char *pathname, int oflag, ...) {
 
         /* Open index file and data file. */
         db->db_fd = open(db->name, oflag, mode);
-    } else {
-        /* Open index file and data file. */
-        db->db_fd = open(db->name, oflag);
     }
 
-    if (db->db_fd < 0)
+    if (db->db_fd < 0 && errno != EEXIST)
         goto exception;
+
+    if (errno == EEXIST) {
+        oflag &= ~(O_CREAT | O_TRUNC | O_EXCL);
+        db->db_fd = open(db->name, oflag);
+    }
 
     if ((oflag & (O_CREAT | O_TRUNC)) == (O_CREAT | O_TRUNC)) {
         /*
@@ -145,12 +146,12 @@ AURA_DBHANDLE aura_db_open(const char *pathname, int oflag, ...) {
         i = sizeof(*db_hdr);
         if (statbuf.st_size == 0) {
             /* Build db, initialize header */
-            db_hdr = (struct aura_hdr_db *)(db_hdr_buf);
+            db_hdr = (struct aura_db_hdr *)(db_hdr_buf);
             db_hdr->magic = A_DB_MAGIC;
             db_hdr->bucket_cnt = db->bucket_cnt;
             db_hdr->bucket_off = db->bucket_off;
             db_hdr->record_off = db->record_off;
-            db_hdr->version = 0x10000; /* 1.0.0 */
+            db_hdr->version = (uint16_t)0x10000; /* 1.0.0 */
             db_hdr->created_ts = aura_now_ms();
             db_hdr->file_size = 0;
             db_hdr->flags = 0;
@@ -161,19 +162,21 @@ AURA_DBHANDLE aura_db_open(const char *pathname, int oflag, ...) {
             if (res != i)
                 sys_exit(true, errno, "db_open: db file init write error");
         }
-        if (un_lock(db->db_fd, 0, SEEK_SET, 0) < 0)
+        if (a_unlock(db->db_fd, 0, SEEK_SET, 0) < 0)
             sys_exit(true, errno, "db_open: un_lock error");
     } else {
         /* read bucket into buffer */
+        /** @todo: lock this read */
         res = lseek(db->db_fd, db->bucket_off, SEEK_SET);
         if (res < 0)
             goto exception;
 
         res = read(db->db_fd, db->buckets, bucket_arr_size);
-        if (res != bucket_arr_size)
+        if (res < 0)
             goto exception;
     }
-    a_db_rewind(db);
+
+    a_db_rewind(db->db_fd);
     return db;
 
 exception:
@@ -228,7 +231,7 @@ void aura_db_close(AURA_DBHANDLE h) {
 /** */
 static off_t a_db_read_bucket_head(int fd, off_t offset) {
     off_t head;
-    char *buf[sizeof(off_t)];
+    char buf[sizeof(off_t)];
     ssize_t res;
 
     res = lseek(fd, offset, SEEK_SET);
@@ -246,8 +249,8 @@ static off_t a_db_read_bucket_head(int fd, off_t offset) {
     return head;
 }
 
-static inline a_db_append_record(int fd, struct aura_db_rec_hdr *hdr, const void *key,
-                                 const void *data, struct aura_db_rec_len *rec_len) {
+static inline int a_db_append_record(int fd, struct aura_db_rec_hdr *hdr, const void *key,
+                                     const void *data, struct aura_db_rec_len *rec_len) {
     struct iovec iov[3];
     off_t offset;
     ssize_t written;
@@ -255,10 +258,13 @@ static inline a_db_append_record(int fd, struct aura_db_rec_hdr *hdr, const void
 
     iov[0].iov_base = hdr;
     iov[0].iov_len = sizeof(*hdr);
-    iov[1].iov_base = key;
+    iov[1].iov_base = (void *)key;
     iov[1].iov_len = hdr->key_len;
-    iov[2].iov_base = data;
+    iov[2].iov_base = (void *)data;
     iov[2].iov_len = hdr->data_len;
+
+    if (a_writew_lock(fd, 0, SEEK_SET, 0) < 0)
+        sys_exit(true, errno, "a_db_append_record: a_writew_lock error");
 
     /* Append the record */
     offset = lseek(fd, 0, SEEK_END);
@@ -277,16 +283,21 @@ static inline a_db_append_record(int fd, struct aura_db_rec_hdr *hdr, const void
         }
     }
 
+    if (a_unlock(fd, 0, SEEK_SET, 0) < 0)
+        sys_exit(true, errno, "a_db_append_record: a_unlock error");
+
     return offset;
 }
 
-int aura_db_put_record(AURA_DB *db, uint16_t namespace, uint16_t schema_id, struct aura_iovec *key, struct aura_iovec *data) {
+int aura_db_put_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id, struct aura_iovec *key, struct aura_iovec *data) {
     struct aura_db_rec_hdr *rec_hdr;
     uint32_t hash;
     uint32_t old_head;
     off_t offset;
     char *rec_hdr_buf[sizeof(*rec_hdr)];
+    AURA_DB *db;
 
+    db = (AURA_DB *)_db;
     hash = a_fnv1a_hash(db->bucket_cnt, namespace, key);
     // offset = A_BUCKET_TAB_OFFSET + (hash * sizeof(off_t));
     // old_head = a_db_read_bucket_head(db->db_fd, offset);
@@ -332,7 +343,7 @@ int aura_db_fetch_record(AURA_DB *db, uint16_t namespace, struct aura_iovec *key
     uint32_t hash;
     off_t offset;
     ssize_t res;
-    char *record, *key, *data;
+    char *record;
     char key_buf[4096];
 
     hash = a_fnv1a_hash(db->bucket_cnt, namespace, key);

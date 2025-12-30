@@ -83,8 +83,8 @@ int aura_save_fn(const char *fn_name, uint32_t fn_version, void *fn_config, size
     bool res;
 
     snprintf(fn_version_str, sizeof(fn_version_str), "v%d", fn_version);
-    len = glob_conf.fn_data_path.len + strlen(fn_name) + strlen(fn_version_str) + 3;
-    snprintf(dir, len, "%s/%s/%s", glob_conf.fn_data_path.base, fn_name, fn_version_str);
+    len = glob_conf.aura_db_path.len + strlen(fn_name) + strlen(fn_version_str) + 3;
+    snprintf(dir, len, "%s/%s/%s", glob_conf.aura_db_path.base, fn_name, fn_version_str);
     fn_dir.base = dir;
     fn_dir.len = len - 1;
 
@@ -96,7 +96,6 @@ int aura_save_fn(const char *fn_name, uint32_t fn_version, void *fn_config, size
     len = strlen(dir) + 4 /* strlen("main")=4 */ + 2;
     /* store function under filename=main */
     snprintf(fn_path, len, "%s/%s", dir, "main");
-    app_debug(true, 0, "aura_save_fn <<<<: path value: %s", fn_path);
 
     fd = open(fn_path, O_WRONLY | O_SYNC | O_CREAT | O_EXCL, S_IRWXU);
     if (fd == -1) {

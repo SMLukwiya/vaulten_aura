@@ -87,7 +87,7 @@ int handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) {
 static void sig_ch_handler(int signo) {
     /* kill the registered socket pair */
     if (waitpid(server_pid, NULL, 0) < 0) {
-        sys_debug(true, errno, "Failed to wait for server ----->>>> %d", server_pid);
+        sys_debug(true, errno, "sig_ch_handler: waitpid server: %d", server_pid);
     }
     server_pid = 0;
     if (poll_fds[A_SOCKET_PAIR_FD_INDEX].fd == -1)
@@ -108,20 +108,33 @@ static inline void setup_sockfd(int fd, pid_t srv_pid) {
     server_pid = srv_pid;
 }
 
-/**/
-void a_setup_app_paths() {
+/* @todo: move to ipc lib */
+void a_setup_app_paths(struct aura_iovec *path) {
+    app_debug(true, 0, "a_setup_app_paths <<<<");
     bool res;
 
-    glob_conf.fn_data_path = aura_resolve_app_path(AURA_DATA_DIR, AURA_FN_DIR);
-    if (!glob_conf.fn_data_path.base)
+    *path = aura_resolve_app_path(AURA_DATA_DIR, NULL);
+    if (!path->base)
         goto err;
 
-    res = aura_ensure_app_path(&glob_conf.fn_data_path, S_IRWXU);
+    res = aura_ensure_app_path(path, S_IRWXU);
     if (res == false)
         goto err;
     return;
 err:
     sys_exit(true, errno, "Failed to create app paths");
+}
+
+static void a_setup_database(struct aura_daemon_glob_conf *glob_conf) {
+    app_debug(true, 0, "a_setup_database <<<<");
+    size_t len;
+
+    len = glob_conf->aura_db_path.len + strlen(AURA_DB_FILE);
+    glob_conf->aura_db_path.base = realloc(glob_conf->aura_db_path.base, len);
+    strcat(glob_conf->aura_db_path.base, AURA_DB_FILE);
+    glob_conf->db_handle = aura_db_open(glob_conf->aura_db_path.base, O_RDWR | O_CREAT | O_EXCL | O_TRUNC, A_DB_FILE_MODE);
+    if (!glob_conf->db_handle)
+        sys_exit(true, errno, "a_setup_database: aura_db_open");
 }
 
 int aura_daemon() {
@@ -181,7 +194,9 @@ int aura_daemon() {
         sys_exit(true, errno, "error locking pid file");
 
     /* check app paths */
-    a_setup_app_paths();
+    a_setup_app_paths(&glob_conf.aura_db_path);
+    /* Setup database */
+    a_setup_database(&glob_conf);
 
     for (;;) {
         if (poll(poll_fds, num_fd, -1) < 0 && errno != EINTR)

@@ -5,6 +5,9 @@
 
 #include "align_lib.h"
 #include "error_lib.h"
+#include "types_lib.h"
+
+#include <stdint.h>
 
 /* Inspired by APUE key-value db */
 
@@ -12,7 +15,7 @@ typedef void *AURA_DBHANDLE;
 
 AURA_DBHANDLE aura_db_open(const char *, int, ...);
 void aura_db_close(AURA_DBHANDLE);
-int aura_db_put_record(AURA_DB *db, uint16_t namespace, uint16_t schema_id, struct aura_iovec *key, struct aura_iovec *data);
+int aura_db_put_record(AURA_DBHANDLE db, uint16_t namespace, uint16_t schema_id, struct aura_iovec *key, struct aura_iovec *data);
 void db_rewind(AURA_DBHANDLE);
 
 /* Limits */
@@ -28,6 +31,8 @@ void db_rewind(AURA_DBHANDLE);
 #define A_DB_SUFFIX_CODE "code"
 
 #define A_DB_REC_NOT_FOUND 1
+
+#define A_DB_FILE_MODE (S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
 
 /* Namespaces */
 typedef enum {

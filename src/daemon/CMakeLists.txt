@@ -11,6 +11,9 @@ set(lib_sources
     ../../lib/blobber_v1_lib.c
     ../../lib/encrypt_lib.c
     ../../lib/ipc_lib.c
+    ../../lib/hash_lib.c
+    ../../lib/db/db.c
+    ../../lib/file_lib.c
     ../../lib/runtime_lib.c # remove this once I have a good place to put runtime stuff
 )
 
@@ -36,8 +39,7 @@ target_include_directories(aura_daemon PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/inclu
 
 add_compile_definitions(_GNU_SOURCE)
 add_compile_definitions(AURA_APP_NAME="vaulten_aura")
-add_compile_definitions(AURA_FN_DIR="functions")
-add_compile_definitions(AURA_FN_METRICS_DIR="metrics")
+add_compile_definitions(AURA_DB_FILE="aura.db")
 target_compile_definitions(aura_daemon 
     PRIVATE AURA_DATA_DIR="${DEFAULT_DATA_DIR}"
     # PRIVATE AURA_FN_DIR="${DEFAULT_FUNCTION_DIR}"

@@ -7,6 +7,9 @@ set(lib_sources
     ../../lib/radix_v1_lib.c
     ../../lib/memory_lib_v1.c
     ../../lib/slab_lib_v1.c
+    ../../lib/hash_lib.c
+    ../../lib/db/db.c
+    ../../lib/file_lib.c
     ../../lib/runtime_lib.c
 )
 

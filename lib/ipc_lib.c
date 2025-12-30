@@ -46,8 +46,6 @@ static struct aura_iovec aura_resolve_xdg_path(const char *suffix) {
 
     path.base = NULL;
     path.len = 0;
-    if (!suffix)
-        return path;
 
     base = "/vaulten_aura";
     app_dir = getenv("XDG_DATA_HOME");
@@ -58,7 +56,11 @@ static struct aura_iovec aura_resolve_xdg_path(const char *suffix) {
             return path;
         base = "/.local/share/vaulten_aura";
     }
-    len = strlen(app_dir) + strlen(base) + strlen(suffix) + 2;
+
+    len = strlen(app_dir) + strlen(base) + 2;
+    if (suffix) {
+        len += strlen(suffix);
+    }
     path.base = malloc(len);
     snprintf(path.base, len, "%s%s/%s", app_dir, base, suffix);
     path.len = len;
