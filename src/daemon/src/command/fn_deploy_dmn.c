@@ -1,6 +1,7 @@
 #include "aura_dmn.h"
 #include "bug_lib.h"
 #include "common_dmn.h"
+#include "db/db.h"
 #include "file_lib.h"
 #include "function_lib.h"
 #include "ipc_lib.h"
@@ -66,51 +67,30 @@ static inline void *a_build_fn_config(struct aura_yml_fn_data_ctx *usr_data, voi
 }
 
 /**
- * Create symlink to current active funtion
- */
-// static int a_create_sym
-
-/**
  * Save function with particular version
  */
 int aura_save_fn(const char *fn_name, uint32_t fn_version, void *fn_config, size_t fn_config_size, int cli_fd) {
-    int fd, len;
-    struct aura_iovec fn_dir;
-    char dir[2048];
-    char fn_path[2056];
+    struct aura_iovec key, data;
+    char key_buf[2048];
     char fn_version_str[64];
-    ssize_t write_size;
-    bool res;
+    int res;
 
     snprintf(fn_version_str, sizeof(fn_version_str), "v%d", fn_version);
-    len = glob_conf.aura_db_path.len + strlen(fn_name) + strlen(fn_version_str) + 3;
-    snprintf(dir, len, "%s/%s/%s", glob_conf.aura_db_path.base, fn_name, fn_version_str);
-    fn_dir.base = dir;
-    fn_dir.len = len - 1;
+    snprintf(key_buf, sizeof(key_buf), "%s-%s", fn_name, fn_version_str);
 
-    res = aura_ensure_app_path(&fn_dir, S_IRWXU);
-    if (res == false) {
-        goto exception;
+    key.base = key_buf;
+    key.len = strlen(key_buf);
+    data.base = fn_config;
+    data.len = fn_config_size;
+
+    if (aura_db_record_exists(glob_conf.db_handle, A_DB_NS_FN, A_DB_SCHEMA_FN_META_V1, &key)) {
+        aura_send_resp(cli_fd, (void *)file_aready_exists, sizeof(file_aready_exists) - 1);
+        return 0;
     }
 
-    len = strlen(dir) + 4 /* strlen("main")=4 */ + 2;
-    /* store function under filename=main */
-    snprintf(fn_path, len, "%s/%s", dir, "main");
-
-    fd = open(fn_path, O_WRONLY | O_SYNC | O_CREAT | O_EXCL, S_IRWXU);
-    if (fd == -1) {
-        if (errno == EEXIST) {
-            aura_send_resp(cli_fd, (void *)file_aready_exists, sizeof(file_aready_exists) - 1);
-            return -1;
-        }
+    res = aura_db_put_record(glob_conf.db_handle, A_DB_NS_FN, A_DB_SCHEMA_FN_META_V1, &key, &data);
+    if (res != 0)
         return -1;
-    }
-
-    write_size = write(fd, fn_config, fn_config_size);
-    if (write_size != fn_config_size) {
-        unlink(fn_path);
-        goto exception;
-    }
 
     return 0;
 
@@ -188,8 +168,6 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
     }
 
     bytecode = aura_qjs_create_bytecode(ctx, entry_script, entry_file_len, entry_file, &bytecode_len);
-    app_debug(true, 0, ">>>> BYTECODE len %d", bytecode_len);
-    app_debug(true, 0, "%s", bytecode);
 
     void *fn_config = a_build_fn_config(&usr_data, (void *)bytecode, bytecode_len);
     fn_config_size = aura_blob_get_size(fn_config);
@@ -206,7 +184,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
     a_init_msg_hdr(hdr, fn_config_size, A_MSG_CMD_EXECUTE, A_CMD_FN_DEPLOY);
     res = aura_msg_send(srv_fd, &hdr, (void *)fn_config, fn_config_size, -1);
     if (res != 0) {
-        app_debug(true, 0, "> Failed to deploy to server");
+        app_debug(true, 0, "aura_dmn_function_deploy: aura_msg_send to server");
     }
     aura_send_resp(cli_fd, (void *)fn_deploy_success, sizeof(fn_deploy_success) - 1);
 

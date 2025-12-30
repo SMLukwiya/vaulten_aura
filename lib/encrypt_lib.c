@@ -1,3 +1,7 @@
+#include "encrypt_lib.h"
+#include "error_lib.h"
+#include "utils_lib.h"
+
 #include "types_lib.h"
 #include <openssl/core_names.h>
 #include <openssl/err.h>
@@ -7,14 +11,10 @@
 #include <stdbool.h>
 #include <sys/uio.h>
 
-#include "types_lib.h"
-#include "utils_lib.h"
-
 #define BLOCK_SIZE 16 /* 256 bits AES */
 #define KEY_LEN 32
 #define INIT_VEC_LEN 12
 #define AUTH_TAG_LEN 16
-#define DIGEST_LEN (256 / 8)
 
 static inline bool aura_generate_key(uint8_t *buf, size_t len) {
     int res;
@@ -66,7 +66,7 @@ struct aura_iovec aura_encrypt_bytes(struct aura_iovec *bytes, const uint8_t *ke
         /* read in 4k chunks, get the minimum between 4k and what is left */
         in_nbytes = a_min(bytes->len - total_read, 4096);
         ok = EVP_EncryptUpdate(ctx, out_buf, &out_nbytes, bytes->base + total_read, in_nbytes);
-        if (ok != 0)
+        if (ok == 0)
             goto err_cipher_ctx;
         out_buf += out_nbytes;
         total_written += out_nbytes;
@@ -75,14 +75,14 @@ struct aura_iovec aura_encrypt_bytes(struct aura_iovec *bytes, const uint8_t *ke
 
     out_nbytes = 0;
     ok = EVP_EncryptFinal(ctx, out_buf, &out_nbytes);
-    if (ok != 0)
+    if (ok == 0)
         goto err_cipher_ctx;
     out_buf += out_nbytes;
     total_written += out_nbytes;
 
     /* finalize to get authentication tag */
     ok = EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, AUTH_TAG_LEN, auth_tag);
-    if (ok != 0)
+    if (ok == 0)
         goto err_cipher_ctx;
 
     /* Append initialization vector */
@@ -143,7 +143,7 @@ struct aura_iovec aura_decrypt_bytes(struct aura_iovec *bytes, const uint8_t *ke
     /* read initialization vector */
     snprintf(init_vec, sizeof(init_vec), "%s", bytes->base + decode_length);
     ok = EVP_DecryptInit(ctx, EVP_aes_256_gcm(), key, init_vec);
-    if (ok != 0) {
+    if (ok == 0) {
         goto err_cipher_ctx;
     }
 
@@ -154,7 +154,7 @@ struct aura_iovec aura_decrypt_bytes(struct aura_iovec *bytes, const uint8_t *ke
         in_nbytes = a_min(bytes->len - total_read, 4096);
         out_nbytes = 0;
         ok = EVP_DecryptUpdate(ctx, out_buf, &out_nbytes, bytes->base + total_read, in_nbytes);
-        if (ok != 0)
+        if (ok == 0)
             goto err_cipher_ctx;
         out_buf += out_nbytes;
         total_written += out_nbytes;
@@ -164,13 +164,13 @@ struct aura_iovec aura_decrypt_bytes(struct aura_iovec *bytes, const uint8_t *ke
     /* read authentication tag */
     snprintf(auth_tag, sizeof(auth_tag), "%s", bytes->base + decode_length + INIT_VEC_LEN);
     ok = EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, AUTH_TAG_LEN, auth_tag);
-    if (ok != 0)
+    if (ok == 0)
         goto err_cipher_ctx;
 
     /* finalize decryption */
     out_nbytes = 0;
     ok = EVP_DecryptFinal(ctx, out_buf, &out_nbytes);
-    if (ok != 0)
+    if (ok == 0)
         goto err_cipher_ctx;
     total_written += out_nbytes;
 
@@ -191,7 +191,7 @@ err_outbuf:
 }
 
 /* calculate file digest and store in digest buffer */
-struct aura_iovec aura_calculate_digest(struct aura_iovec *bytes) { // digest len = 256/8
+struct aura_iovec aura_calculate_digest(struct aura_iovec *bytes) {
     EVP_MD_CTX *digest_context;
     size_t in_nbytes, total_read;
     struct aura_iovec md;
@@ -208,7 +208,7 @@ struct aura_iovec aura_calculate_digest(struct aura_iovec *bytes) { // digest le
         goto err_md;
 
     ok = EVP_DigestInit(digest_context, EVP_blake2s256());
-    if (ok != 0) {
+    if (ok == 0) {
         goto err_digest_ctx;
     }
 
@@ -216,14 +216,14 @@ struct aura_iovec aura_calculate_digest(struct aura_iovec *bytes) { // digest le
     while (total_read < bytes->len) {
         in_nbytes = a_min(bytes->len - total_read, 4096);
         ok = EVP_DigestUpdate(digest_context, bytes->base + total_read, in_nbytes);
-        if (ok != 0) {
+        if (ok == 0) {
             return md;
         }
         total_read += in_nbytes;
     }
 
     ok = EVP_DigestFinal(digest_context, md.base, NULL);
-    if (ok != 0) {
+    if (ok == 0) {
         goto err_digest_ctx;
     }
 

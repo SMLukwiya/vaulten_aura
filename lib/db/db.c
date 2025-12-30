@@ -62,7 +62,6 @@ typedef struct {
  * Internal functions.
  */
 static AURA_DB *a_db_alloc(int);
-static void _db_dodelete(AURA_DB *);
 static void a_db_free(AURA_DB *);
 
 static inline uint32_t a_fnv1a_hash(uint32_t bucket_cnt, uint16_t namespace, struct aura_iovec *key) {
@@ -81,6 +80,29 @@ static inline void a_db_rewind(int fd) {
     res = lseek(fd, 0, SEEK_SET);
     if (res < 0)
         sys_exit(true, errno, "a_db_rewind error");
+}
+
+/*
+ * Allocate & initialize a DB structure and its buffers.
+ */
+static AURA_DB *a_db_alloc(int namelen) {
+    AURA_DB *db;
+
+    db = calloc(1, sizeof(AURA_DB));
+    if (!db)
+        sys_exit(true, errno, "a_db_alloc: calloc error for DB");
+    /* init db file descriptor */
+    db->db_fd = -1;
+
+    /* Null terminated string */
+    db->name = malloc(namelen + 1);
+    if (!db->name)
+        sys_exit(true, errno, "a_db_alloc: malloc error for name");
+
+    db->db_buf = malloc(4096);
+    if (!db->db_buf)
+        sys_exit(true, errno, "a_db_alloc: malloc error for index buffer");
+    return db;
 }
 
 /*
@@ -185,29 +207,6 @@ exception:
 }
 
 /*
- * Allocate & initialize a DB structure and its buffers.
- */
-static AURA_DB *a_db_alloc(int namelen) {
-    AURA_DB *db;
-
-    db = calloc(1, sizeof(AURA_DB));
-    if (!db)
-        sys_exit(true, errno, "a_db_alloc: calloc error for DB");
-    /* init db file descriptor */
-    db->db_fd = -1;
-
-    /* Null terminated string */
-    db->name = malloc(namelen + 1);
-    if (!db->name)
-        sys_exit(true, errno, "a_db_alloc: malloc error for name");
-
-    db->db_buf = malloc(4096);
-    if (!db->db_buf)
-        sys_exit(true, errno, "a_db_alloc: malloc error for index buffer");
-    return db;
-}
-
-/*
  * Free up a DB structure, and all the malloc'ed buffers it
  * may point to.  Also close the file descriptors if still open.
  */
@@ -249,8 +248,8 @@ static off_t a_db_read_bucket_head(int fd, off_t offset) {
     return head;
 }
 
-static inline int a_db_append_record(int fd, struct aura_db_rec_hdr *hdr, const void *key,
-                                     const void *data, struct aura_db_rec_len *rec_len) {
+static inline int a_db_append_record(int fd, struct aura_db_rec_hdr *hdr, const void *key, const void *data,
+                                     struct aura_db_rec_len *rec_len, off_t start_offset) {
     struct iovec iov[3];
     off_t offset;
     ssize_t written;
@@ -267,7 +266,11 @@ static inline int a_db_append_record(int fd, struct aura_db_rec_hdr *hdr, const 
         sys_exit(true, errno, "a_db_append_record: a_writew_lock error");
 
     /* Append the record */
-    offset = lseek(fd, 0, SEEK_END);
+    if (offset == 0) {
+        offset = lseek(fd, 0, SEEK_END);
+    } else {
+        offset = lseek(fd, start_offset, SEEK_SET);
+    }
     if (offset < 0)
         return -1;
 
@@ -296,6 +299,7 @@ int aura_db_put_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id
     off_t offset;
     char *rec_hdr_buf[sizeof(*rec_hdr)];
     AURA_DB *db;
+    struct aura_iovec data_checksum;
 
     db = (AURA_DB *)_db;
     hash = a_fnv1a_hash(db->bucket_cnt, namespace, key);
@@ -304,6 +308,12 @@ int aura_db_put_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id
     // if (old_head == -1)
     // goto exception;
     old_head = db->buckets[hash].head_off;
+
+    data_checksum = aura_calculate_digest(data);
+    if (data_checksum.base == NULL) {
+        app_debug(true, 0, "aura_db_put_record: aura_calculate_digest");
+        return -1;
+    }
 
     rec_hdr = (struct aura_db_rec_hdr *)rec_hdr_buf;
     rec_hdr->magic = A_DB_REC_MAGIC;
@@ -316,8 +326,15 @@ int aura_db_put_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id
     rec_hdr->rec_len = a_get_db_record_len(key->len, data->len);
     rec_hdr->key_len = key->len;
     rec_hdr->data_len = data->len;
+    memcpy(rec_hdr->check_sum, data_checksum.base, DIGEST_LEN);
 
-    offset = a_db_append_record(db->db_fd, rec_hdr, (const void *)key->base, (const void *)data->base, &rec_hdr->rec_len);
+    offset = a_db_append_record(
+      db->db_fd, rec_hdr,
+      (const void *)key->base,
+      (const void *)data->base,
+      &rec_hdr->rec_len,
+      old_head < db->record_off ? db->record_off : 0);
+
     if (offset == -1)
         return -1;
 
@@ -338,14 +355,58 @@ void aura_db_record_free(void *record) {
     free(record);
 }
 
-int aura_db_fetch_record(AURA_DB *db, uint16_t namespace, struct aura_iovec *key, struct aura_iovec *data_out) {
+bool aura_db_record_exists(AURA_DBHANDLE _db, uint16_t namespace, uint16_t scheme_id, struct aura_iovec *key) {
+    struct aura_db_rec_hdr rec_hdr;
+    uint32_t hash;
+    AURA_DB *db;
+    off_t offset;
+    ssize_t res;
+    char key_buf[4096];
+
+    db = (AURA_DB *)_db;
+    hash = a_fnv1a_hash(db->bucket_cnt, namespace, key);
+    offset = db->buckets[hash].head_off;
+
+    while (offset != 0) {
+        res = pread(db->db_fd, &rec_hdr, sizeof(rec_hdr), offset);
+        if (res < 0)
+            goto exception;
+
+        aura_db_dump_rec_hdr(&rec_hdr);
+        if (rec_hdr.magic != A_DB_REC_MAGIC)
+            break;
+
+        memset(key_buf, 0, sizeof(key_buf));
+        if (rec_hdr.ns == namespace && rec_hdr.key_len == key->len) {
+            res = pread(db->db_fd, key_buf, key->len, offset + sizeof(rec_hdr));
+            if (res < 0)
+                goto exception;
+
+            if (aura_mem_is_eq(key_buf, strlen(key_buf), key->base, key->len)) {
+                if (rec_hdr.flags & A_DB_REC_TOMBSTONE)
+                    return false;
+                return true;
+            }
+        }
+
+        offset = rec_hdr.prev_off;
+    }
+
+    return false;
+exception:
+    sys_exit(true, errno, "aura_db_record_exists");
+}
+
+int aura_db_fetch_record(AURA_DBHANDLE _db, uint16_t namespace, struct aura_iovec *key, struct aura_iovec *data_out) {
     struct aura_db_rec_hdr rec_hdr;
     uint32_t hash;
     off_t offset;
     ssize_t res;
     char *record;
     char key_buf[4096];
+    AURA_DB *db;
 
+    db = (AURA_DB *)_db;
     hash = a_fnv1a_hash(db->bucket_cnt, namespace, key);
     offset = db->buckets[hash].head_off;
 
@@ -392,4 +453,18 @@ int aura_db_fetch_record(AURA_DB *db, uint16_t namespace, struct aura_iovec *key
 
 exception:
     sys_exit(true, errno, "aura_db_put_record");
+}
+
+void aura_db_dump_rec_hdr(struct aura_db_rec_hdr *hdr) {
+    app_debug(true, 0, "AURA DB RECORD HEADER");
+    app_debug(true, 0, "    Magic: %zu", hdr->magic);
+    app_debug(true, 0, "    Version: %zu", hdr->version);
+    app_debug(true, 0, "    Namespace: %zu", hdr->ns);
+    app_debug(true, 0, "    Schema Id: %zu", hdr->schema_id);
+    app_debug(true, 0, "    Flags: %zu", hdr->flags);
+    app_debug(true, 0, "    Key len: %zu", hdr->key_len);
+    app_debug(true, 0, "    Data len: %zu", hdr->data_len);
+    app_debug(true, 0, "    Record len: %zu", hdr->rec_len);
+    app_debug(true, 0, "    Previous offset: %zu", hdr->prev_off);
+    app_debug(true, 0, "    Timestamp: %zu", hdr->timestamp);
 }

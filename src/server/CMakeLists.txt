@@ -10,6 +10,7 @@ set(lib_sources
     ../../lib/hash_lib.c
     ../../lib/db/db.c
     ../../lib/file_lib.c
+    ../../lib/encrypt_lib.c
     ../../lib/runtime_lib.c
 )
 

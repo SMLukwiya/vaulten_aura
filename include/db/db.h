@@ -4,6 +4,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "align_lib.h"
+#include "encrypt_lib.h"
 #include "error_lib.h"
 #include "types_lib.h"
 
@@ -12,11 +13,6 @@
 /* Inspired by APUE key-value db */
 
 typedef void *AURA_DBHANDLE;
-
-AURA_DBHANDLE aura_db_open(const char *, int, ...);
-void aura_db_close(AURA_DBHANDLE);
-int aura_db_put_record(AURA_DBHANDLE db, uint16_t namespace, uint16_t schema_id, struct aura_iovec *key, struct aura_iovec *data);
-void db_rewind(AURA_DBHANDLE);
 
 /* Limits */
 #define A_DB_BUCKET_CNT 1024
@@ -36,16 +32,16 @@ void db_rewind(AURA_DBHANDLE);
 
 /* Namespaces */
 typedef enum {
-    A_NS_FN = 1,   /* Function namespace */
-    A_NS_CFG = 2,  /* Config namespace*/
-    A_NS_STAT = 3, /* Stat namespace */
+    A_DB_NS_FN = 1,   /* Function namespace */
+    A_DB_NS_CFG = 2,  /* Config namespace*/
+    A_DB_NS_STAT = 3, /* Stat namespace */
 } aura_db_namespace;
 
 /* Schemas */
 typedef enum {
-    A_SCHEMA_FN_META_V1 = 1,
-    A_SCHEMA_CFG_KV_V1 = 2,
-    A_SCHEMA_STAT_DELTA = 3,
+    A_DB_SCHEMA_FN_META_V1 = 1,
+    A_DB_SCHEMA_CFG_KV_V1 = 2,
+    A_DB_SCHEMA_STAT_DELTA = 3,
 } aura_db_schema_id;
 
 typedef enum {
@@ -75,10 +71,11 @@ struct aura_db_rec_hdr {
     u_int32_t data_len;
     u_int64_t timestamp;
     u_int64_t prev_off; /* bucket chain */
+    char check_sum[DIGEST_LEN];
 }; /* [key][data][padding] */
 
 struct aura_db_bucket_entry {
-    _Atomic u_int64_t head_off; /* offset of newest record */
+    _Atomic off_t head_off; /* offset of newest record */
 };
 
 struct aura_db_wal_rec {
@@ -100,5 +97,20 @@ static inline struct aura_db_rec_len a_get_db_record_len(size_t key_len, size_t 
     len.aligned_len = A_ALIGN(len.raw_len, sizeof(void *));
     return len;
 }
+
+/** Create or open a database */
+AURA_DBHANDLE aura_db_open(const char *, int, ...);
+
+/**Store record with key and value into db */
+int aura_db_put_record(AURA_DBHANDLE db, uint16_t namespace, uint16_t schema_id, struct aura_iovec *key, struct aura_iovec *data);
+
+/** Close db plus associated buffer */
+void aura_db_close(AURA_DBHANDLE);
+
+/** Check if record with given key exists */
+bool aura_db_record_exists(AURA_DBHANDLE _db, uint16_t namespace, uint16_t scheme_id, struct aura_iovec *key);
+
+/**/
+void aura_db_dump_rec_hdr(struct aura_db_rec_hdr *hdr);
 
 #endif /* AURA_DB_H */
