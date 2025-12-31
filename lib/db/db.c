@@ -64,6 +64,7 @@ typedef struct {
 static AURA_DB *a_db_alloc(int);
 static void a_db_free(AURA_DB *);
 
+/* Calculate key hash */
 static inline uint32_t a_fnv1a_hash(uint32_t bucket_cnt, uint16_t namespace, struct aura_iovec *key) {
     uint32_t hash, hash_val;
 
@@ -73,6 +74,7 @@ static inline uint32_t a_fnv1a_hash(uint32_t bucket_cnt, uint16_t namespace, str
     hash &= (bucket_cnt - 1);
     return hash;
 }
+
 static inline void a_db_rewind(int fd) {
     off_t res;
 
@@ -188,14 +190,19 @@ AURA_DBHANDLE aura_db_open(const char *pathname, int oflag, ...) {
             sys_exit(true, errno, "db_open: un_lock error");
     } else {
         /* read bucket into buffer */
-        /** @todo: lock this read */
         res = lseek(db->db_fd, db->bucket_off, SEEK_SET);
         if (res < 0)
             goto exception;
 
+        if (a_readw_lock(db->db_fd, db->bucket_off, SEEK_SET, 0) < 0)
+            sys_exit(true, errno, "db_open: a_readw_lock error");
+
         res = read(db->db_fd, db->buckets, bucket_arr_size);
         if (res < 0)
             goto exception;
+
+        if (a_unlock(db->db_fd, db->bucket_off, SEEK_SET, 0) < 0)
+            sys_exit(true, errno, "db_open: un_lock error");
     }
 
     a_db_rewind(db->db_fd);
@@ -227,25 +234,23 @@ void aura_db_close(AURA_DBHANDLE h) {
     a_db_free((AURA_DB *)h); /* closes fds, free buffers & struct */
 }
 
-/** */
-static off_t a_db_read_bucket_head(int fd, off_t offset) {
-    off_t head;
-    char buf[sizeof(off_t)];
+/* Write header back to db */
+static int a_db_write_bucket_array(AURA_DB *db) {
     ssize_t res;
 
-    res = lseek(fd, offset, SEEK_SET);
+    res = lseek(db->db_fd, db->bucket_off, SEEK_SET);
     if (res < 0)
         return -1;
 
-    res = read(fd, buf, sizeof(buf));
-    if (res < 0)
-        return -1;
+    if (a_writew_lock(db->db_fd, db->bucket_off, SEEK_SET, 0) < 0)
+        sys_exit(true, errno, "a_db_write_bucket_array: a_writew_lock error");
 
-    head = (off_t)aura_strtoul(buf, sizeof(buf));
-    if (res == SIZE_MAX)
-        return -1;
+    res = write(db->db_fd, db->buckets, db->bucket_cnt * sizeof(struct aura_db_bucket_entry));
 
-    return head;
+    if (a_unlock(db->db_fd, db->bucket_off, SEEK_SET, 0) < 0)
+        sys_exit(true, errno, "a_db_write_bucket_array: a_unlock error");
+
+    return res;
 }
 
 static inline int a_db_append_record(int fd, struct aura_db_rec_hdr *hdr, const void *key, const void *data,
@@ -294,19 +299,15 @@ static inline int a_db_append_record(int fd, struct aura_db_rec_hdr *hdr, const 
 
 int aura_db_put_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id, struct aura_iovec *key, struct aura_iovec *data) {
     struct aura_db_rec_hdr *rec_hdr;
-    uint32_t hash;
-    uint32_t old_head;
+    uint32_t hash, old_head;
     off_t offset;
     char *rec_hdr_buf[sizeof(*rec_hdr)];
-    AURA_DB *db;
     struct aura_iovec data_checksum;
+    ssize_t res;
+    AURA_DB *db;
 
     db = (AURA_DB *)_db;
     hash = a_fnv1a_hash(db->bucket_cnt, namespace, key);
-    // offset = A_BUCKET_TAB_OFFSET + (hash * sizeof(off_t));
-    // old_head = a_db_read_bucket_head(db->db_fd, offset);
-    // if (old_head == -1)
-    // goto exception;
     old_head = db->buckets[hash].head_off;
 
     data_checksum = aura_calculate_digest(data);
@@ -342,6 +343,10 @@ int aura_db_put_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id
 
     /* store new bucket entry head */
     __atomic_store_n(&db->buckets[hash].head_off, offset, __ATOMIC_RELEASE);
+    res = a_db_write_bucket_array(db);
+    if (res < 0)
+        return -1;
+
     return 0;
 
 exception:
@@ -394,7 +399,7 @@ bool aura_db_record_exists(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schem
 
     return false;
 exception:
-    sys_exit(true, errno, "aura_db_record_exists");
+    sys_exit(true, errno, "aura_db_record_exists error");
 }
 
 int aura_db_fetch_record(AURA_DBHANDLE _db, uint16_t namespace, struct aura_iovec *key, struct aura_iovec *data_out) {
@@ -452,7 +457,7 @@ int aura_db_fetch_record(AURA_DBHANDLE _db, uint16_t namespace, struct aura_iove
     return A_DB_REC_NOT_FOUND;
 
 exception:
-    sys_exit(true, errno, "aura_db_put_record");
+    sys_exit(true, errno, "aura_db_put_record error");
 }
 
 void aura_db_dump_rec_hdr(struct aura_db_rec_hdr *hdr) {

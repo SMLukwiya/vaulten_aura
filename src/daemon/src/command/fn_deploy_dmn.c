@@ -36,6 +36,7 @@ const char file_aready_exists[] = "\x1B[1;31mDeployment failed. Function with sa
 
 struct aura_builder_stack fn_stack;
 
+/* Fn config table */
 int fn_conf_tab[] = {
   [A_IDX_FN_NONE] = 0,
   [A_IDX_FN_NAME] = 0,
@@ -176,7 +177,6 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
 
     res = aura_save_fn(fn_name, fn_version, fn_config, fn_config_size, cli_fd);
     if (res != 0) {
-        // aura_send_resp(cli_fd, (void *)fn_deployment_failed, sizeof(fn_deployment_failed) - 1);
         goto out;
     }
 
@@ -184,7 +184,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
     a_init_msg_hdr(hdr, fn_config_size, A_MSG_CMD_EXECUTE, A_CMD_FN_DEPLOY);
     res = aura_msg_send(srv_fd, &hdr, (void *)fn_config, fn_config_size, -1);
     if (res != 0) {
-        app_debug(true, 0, "aura_dmn_function_deploy: aura_msg_send to server");
+        app_debug(true, 0, "aura_dmn_function_deploy: aura_msg_send to server error");
     }
     aura_send_resp(cli_fd, (void *)fn_deploy_success, sizeof(fn_deploy_success) - 1);
 

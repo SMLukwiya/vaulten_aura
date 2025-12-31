@@ -74,6 +74,7 @@ struct aura_db_rec_hdr {
     char check_sum[DIGEST_LEN];
 }; /* [key][data][padding] */
 
+/* Bucket offset entry */
 struct aura_db_bucket_entry {
     _Atomic off_t head_off; /* offset of newest record */
 };
