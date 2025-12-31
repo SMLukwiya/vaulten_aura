@@ -70,7 +70,7 @@ static inline void *a_build_fn_config(struct aura_yml_fn_data_ctx *usr_data, voi
 /**
  * Save function with particular version
  */
-int aura_save_fn(const char *fn_name, uint32_t fn_version, void *fn_config, size_t fn_config_size, int cli_fd) {
+static int a_save_fn(const char *fn_name, uint32_t fn_version, void *fn_config, size_t fn_config_size, int cli_fd) {
     struct aura_iovec key, data;
     char key_buf[2048];
     char fn_version_str[64];
@@ -175,7 +175,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
     fn_name = usr_data.node_arr[A_IDX_FN_NAME].str_val;
     fn_version = usr_data.node_arr[A_IDX_FN_VERSION].int_val;
 
-    res = aura_save_fn(fn_name, fn_version, fn_config, fn_config_size, cli_fd);
+    res = a_save_fn(fn_name, fn_version, fn_config, fn_config_size, cli_fd);
     if (res != 0) {
         goto out;
     }
@@ -203,7 +203,7 @@ out:
     a_fn_free_user_data_ctx(&usr_data);
 }
 
-static int detect_anomaly(struct statistical_baseline *baseline, double current_value, double threshold_sigma) {
+static int a_detect_anomaly(struct statistical_baseline *baseline, double current_value, double threshold_sigma) {
     /**/
     return 0;
 }
@@ -212,7 +212,7 @@ static int detect_anomaly(struct statistical_baseline *baseline, double current_
  * Most of this values will be received from the server
  * And I would be watching several functions
  */
-void rollback_detector_evaluate(struct aura_rollback_detector *detector) {
+void aura_rollback_detector_evaluate(struct aura_rollback_detector *detector) {
     int num_of_deployments = 10;
     struct aura_fn_deployment *curr;
     /**/

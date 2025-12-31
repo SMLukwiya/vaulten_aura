@@ -109,7 +109,10 @@ int aura_db_put_record(AURA_DBHANDLE db, uint16_t namespace, uint16_t schema_id,
 void aura_db_close(AURA_DBHANDLE);
 
 /** Check if record with given key exists */
-bool aura_db_record_exists(AURA_DBHANDLE _db, uint16_t namespace, uint16_t scheme_id, struct aura_iovec *key);
+bool aura_db_record_exists(AURA_DBHANDLE db, uint16_t namespace, uint16_t scheme_id, struct aura_iovec *key);
+
+/** Retrieve a record */
+int aura_db_fetch_record(AURA_DBHANDLE db, uint16_t namespace, struct aura_iovec *key, struct aura_iovec *data_out);
 
 /**/
 void aura_db_dump_rec_hdr(struct aura_db_rec_hdr *hdr);

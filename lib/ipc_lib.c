@@ -75,7 +75,7 @@ struct aura_iovec aura_resolve_app_path(const char *env_name, const char *suffix
 #endif
 }
 
-bool aura_ensure_app_path(struct aura_iovec *path, int32_t mode) {
+static bool aura_ensure_app_path(struct aura_iovec *path, int32_t mode) {
     char temp[4096];
     char *p;
 
@@ -97,4 +97,30 @@ bool aura_ensure_app_path(struct aura_iovec *path, int32_t mode) {
         return -1;
 
     return true;
+}
+
+int aura_setup_app_paths(struct aura_iovec *path) {
+    bool res;
+
+    *path = aura_resolve_app_path(AURA_DATA_DIR, NULL);
+    if (!path->base)
+        return -1;
+
+    res = aura_ensure_app_path(path, S_IRWXU | S_IRGRP | S_IROTH);
+    if (res == false)
+        return -1;
+    return 0;
+}
+
+int aura_setup_database_file_path(struct aura_iovec *aura_db_path) {
+    size_t len;
+
+    len = aura_db_path->len + strlen(AURA_DB_FILE);
+    aura_db_path->base = realloc(aura_db_path->base, len);
+    if (!aura_db_path->base)
+        return -1;
+
+    aura_db_path->len = len;
+    strcat(aura_db_path->base, AURA_DB_FILE);
+    return 0;
 }

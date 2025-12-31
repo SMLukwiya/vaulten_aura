@@ -1,6 +1,7 @@
 #ifndef AURA_SERVER_H
 #define AURA_SERVER_H
 
+#include "db/db.h"
 #include "defaults_srv.h"
 #include "list_lib.h"
 #include "memory_lib.h"
@@ -202,6 +203,9 @@ struct aura_srv_global_conf {
 
     struct aura_memory_ctx mem_ctx;
     struct aura_iovec user;
+
+    struct aura_iovec aura_db_path;
+    AURA_DBHANDLE db_handle;
 };
 
 #endif

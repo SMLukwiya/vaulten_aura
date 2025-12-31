@@ -92,18 +92,18 @@ static AURA_DB *a_db_alloc(int namelen) {
 
     db = calloc(1, sizeof(AURA_DB));
     if (!db)
-        sys_exit(true, errno, "a_db_alloc: calloc error for DB");
+        sys_exit(true, errno, "a_db_alloc: DB error");
     /* init db file descriptor */
     db->db_fd = -1;
 
     /* Null terminated string */
     db->name = malloc(namelen + 1);
     if (!db->name)
-        sys_exit(true, errno, "a_db_alloc: malloc error for name");
+        sys_exit(true, errno, "a_db_alloc: name error");
 
     db->db_buf = malloc(4096);
     if (!db->db_buf)
-        sys_exit(true, errno, "a_db_alloc: malloc error for index buffer");
+        sys_exit(true, errno, "a_db_alloc: index buffer error");
     return db;
 }
 
@@ -145,14 +145,18 @@ AURA_DBHANDLE aura_db_open(const char *pathname, int oflag, ...) {
 
         /* Open index file and data file. */
         db->db_fd = open(db->name, oflag, mode);
-    }
 
-    if (db->db_fd < 0 && errno != EEXIST)
-        goto exception;
+        if (db->db_fd < 0 && errno != EEXIST)
+            goto exception;
 
-    if (errno == EEXIST) {
-        oflag &= ~(O_CREAT | O_TRUNC | O_EXCL);
+        if (errno == EEXIST) {
+            oflag &= ~(O_CREAT | O_TRUNC | O_EXCL);
+            db->db_fd = open(db->name, oflag);
+        }
+    } else {
         db->db_fd = open(db->name, oflag);
+        if (db->db_fd < 0)
+            goto exception;
     }
 
     if ((oflag & (O_CREAT | O_TRUNC)) == (O_CREAT | O_TRUNC)) {
@@ -312,7 +316,7 @@ int aura_db_put_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id
 
     data_checksum = aura_calculate_digest(data);
     if (data_checksum.base == NULL) {
-        app_debug(true, 0, "aura_db_put_record: aura_calculate_digest");
+        app_debug(true, 0, "aura_db_put_record: aura_calculate_digest error");
         return -1;
     }
 
@@ -350,7 +354,7 @@ int aura_db_put_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id
     return 0;
 
 exception:
-    sys_exit(true, errno, "aura_db_put_record");
+    sys_exit(true, errno, "aura_db_put_record error");
 }
 
 void aura_db_record_free(void *record) {

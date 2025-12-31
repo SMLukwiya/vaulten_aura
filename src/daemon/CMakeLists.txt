@@ -17,10 +17,6 @@ set(lib_sources
     ../../lib/runtime_lib.c # remove this once I have a good place to put runtime stuff
 )
 
-# Default Paths
-set(DEFAULT_DATA_DIR /var/lib/vaulten_aura CACHE PATH "Default data directory")
-# set(DEFAULT_FUNCTION_DIR function CACHE PATH "Default function directory")
-
 add_executable(aura_daemon
     src/main.c
     src/aura_dmn.c
@@ -37,10 +33,6 @@ target_link_libraries(aura_daemon PRIVATE quickjs::quickjs PRIVATE wasmtime::was
 
 target_include_directories(aura_daemon PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include PRIVATE ${PROJECT_INCLUDE_DIR})
 
-add_compile_definitions(_GNU_SOURCE)
-add_compile_definitions(AURA_APP_NAME="vaulten_aura")
-add_compile_definitions(AURA_DB_FILE="aura.db")
 target_compile_definitions(aura_daemon 
-    PRIVATE AURA_DATA_DIR="${DEFAULT_DATA_DIR}"
-    # PRIVATE AURA_FN_DIR="${DEFAULT_FUNCTION_DIR}"
+    PRIVATE AURA_DATA_DIR="${DEFAULT_DATA_DIR}" # defined in global CMakeLists.txt
 )

@@ -68,7 +68,7 @@ size_t _strlcat(char *dest, const char *src, size_t size) {
 size_t decode_url(const char *url, char *dest, size_t size) {
     char *c, *dest_ptr;
 
-    for (c = url; *c && size > 0; ++c) {
+    for (c = (char *)url; *c && size > 0; ++c) {
         if (*c == '%' && isxdigit(c[1]) && isxdigit(c[2])) {
             *dest_ptr++ = BASE_16_TO_10(c[1]) * 16 + BASE_16_TO_10(c[2]);
             c += 2;

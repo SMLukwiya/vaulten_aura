@@ -28,7 +28,7 @@ int server_pid = 0;
  * @arg is an opaque pointer to data passed according
  * to whatever contexts
  */
-int handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) {
+static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) {
     aura_dump_msg(msg, true);
 
     switch (msg->hdr.type) {
@@ -84,10 +84,10 @@ int handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) {
 /**
  *
  */
-static void sig_ch_handler(int signo) {
+static void a_sig_ch_handler(int signo) {
     /* kill the registered socket pair */
     if (waitpid(server_pid, NULL, 0) < 0) {
-        sys_debug(true, errno, "sig_ch_handler: waitpid server: %d", server_pid);
+        sys_debug(true, errno, "a_sig_ch_handler: waitpid server: %d", server_pid);
     }
     server_pid = 0;
     if (poll_fds[A_SOCKET_PAIR_FD_INDEX].fd == -1)
@@ -101,40 +101,23 @@ static void sig_ch_handler(int signo) {
  * start successfully, it registers the
  * created socket pair for polling
  */
-static inline void setup_sockfd(int fd, pid_t srv_pid) {
+static inline void a_setup_sockfd(int fd, pid_t srv_pid) {
     poll_fds[A_SOCKET_PAIR_FD_INDEX].fd = fd;
     poll_fds[A_SOCKET_PAIR_FD_INDEX].events = POLLIN;
     poll_fds[A_SOCKET_PAIR_FD_INDEX].revents = 0;
     server_pid = srv_pid;
 }
 
-/* @todo: move to ipc lib */
-void a_setup_app_paths(struct aura_iovec *path) {
-    app_debug(true, 0, "a_setup_app_paths <<<<");
-    bool res;
-
-    *path = aura_resolve_app_path(AURA_DATA_DIR, NULL);
-    if (!path->base)
-        goto err;
-
-    res = aura_ensure_app_path(path, S_IRWXU);
-    if (res == false)
-        goto err;
-    return;
-err:
-    sys_exit(true, errno, "Failed to create app paths");
-}
-
 static void a_setup_database(struct aura_daemon_glob_conf *glob_conf) {
-    app_debug(true, 0, "a_setup_database <<<<");
-    size_t len;
+    int res;
 
-    len = glob_conf->aura_db_path.len + strlen(AURA_DB_FILE);
-    glob_conf->aura_db_path.base = realloc(glob_conf->aura_db_path.base, len);
-    strcat(glob_conf->aura_db_path.base, AURA_DB_FILE);
+    res = aura_setup_database_file_path(&glob_conf->aura_db_path);
+    if (res == -1)
+        sys_exit(true, errno, "a_setup_database: aura_setup_database_file_path error");
+
     glob_conf->db_handle = aura_db_open(glob_conf->aura_db_path.base, O_RDWR | O_CREAT | O_EXCL | O_TRUNC, A_DB_FILE_MODE);
     if (!glob_conf->db_handle)
-        sys_exit(true, errno, "a_setup_database: aura_db_open");
+        sys_exit(true, errno, "a_setup_database: aura_db_open error");
 }
 
 int aura_daemon() {
@@ -150,15 +133,15 @@ int aura_daemon() {
     struct iovec iov[1];
     struct aura_msg aura_msg;
     struct srv_start_arg srv_arg = {
-      .cb = setup_sockfd,
+      .cb = a_setup_sockfd,
     };
 
     lock_file_fd = open(AURA_PID, O_RDWR | O_CREAT, LOCKMODE);
     if (lock_file_fd < 0)
-        sys_exit(false, errno, "Failed to open pid file");
+        sys_exit(false, errno, "aura_daemon: lock_file error");
 
     if (already_running(lock_file_fd))
-        sys_exit(false, 0, "Aura daemon already running");
+        sys_exit(false, 0, "aura_daemon: already_running error");
 
     app_debug(false, 0, "Daemon tests"); /* probably after setting socket */
 
@@ -167,7 +150,7 @@ int aura_daemon() {
      */
     res = aura_unix_server_listen(&d_sock, AURA_SOCKET);
     if (res < 0)
-        sys_exit(false, 0, "Failed to setup daemon unix socket");
+        sys_exit(false, 0, "aura_daemon: aura_unix_server_listen error");
 
     for (i = 0; i < MAX_CONN; ++i) {
         poll_fds[i].fd = -1;
@@ -184,28 +167,30 @@ int aura_daemon() {
     /* starting number of fds to watch */
     num_fd = ARRAY_SIZE(keep_fd);
 
-    aura_install_signal_handler(SIGCHLD, sig_ch_handler);
+    aura_install_signal_handler(SIGCHLD, a_sig_ch_handler);
 
     /* Daemonize */
     daemonize("aurad", keep_fd, ARRAY_SIZE(keep_fd));
 
     res = set_pid_lock(lock_file_fd);
     if (res < 0)
-        sys_exit(true, errno, "error locking pid file");
+        sys_exit(true, errno, "aura_daemon: set_pid_lock error");
 
     /* check app paths */
-    a_setup_app_paths(&glob_conf.aura_db_path);
+    res = aura_setup_app_paths(&glob_conf.aura_db_path);
+    if (res == -1)
+        sys_exit(true, errno, "aura_daemon: a_setup_app_paths");
     /* Setup database */
     a_setup_database(&glob_conf);
 
     for (;;) {
         if (poll(poll_fds, num_fd, -1) < 0 && errno != EINTR)
-            sys_exit(true, errno, "poll error");
+            sys_exit(true, errno, "aura_daemon: poll error");
 
         if (poll_fds[0].revents & POLLIN) {
             cli_fd = aura_unix_server_accept(d_sock.sock_fd, &uid);
             if (cli_fd < 0)
-                sys_exit(true, errno, "Error accepting cli request");
+                sys_exit(true, errno, "aura_daemon: aura_unix_server_accept");
 
             poll_fds[num_fd].fd = cli_fd;
             poll_fds[num_fd].events = POLLIN;
@@ -226,7 +211,7 @@ int aura_daemon() {
                             aura_dump_msg(&aura_msg, true);
                         } else {
                             /* aura_cli request */
-                            handle_client_request(&aura_msg, poll_fds[i].fd, (void *)&srv_arg);
+                            a_handle_client_request(&aura_msg, poll_fds[i].fd, (void *)&srv_arg);
                             break;
                         }
                     } else
@@ -241,5 +226,5 @@ int aura_daemon() {
     }
 
     unlink(AURA_PID);
-    sys_exit(true, errno, "Exiting daemon"); // Do clean up
+    sys_exit(true, errno, "aura_daemon: Exiting daemon"); // @todo Do clean up
 }

@@ -8,6 +8,7 @@
 #include "error_lib.h"
 #include "evt_loop_srv.h"
 #include "function_lib.h"
+#include "ipc_lib.h"
 #include "memory_lib.h"
 #include "openssl/err.h"
 #include "openssl/ocsp.h"
@@ -973,9 +974,9 @@ static inline int a_add_host_conf(struct aura_srv_host_conf *hc) {
  * Create host conf for this hostname, insert into global
  * host conf table and return the offset of the added conf
  */
-static int a_create_host_conf(struct aura_srv_listener_conf *lc, int fd,
-                              struct sockaddr *addr, socklen_t addr_len, const char *hostname,
-                              const char *port, uint32_t default_tls_idx, struct aura_iovec *h2_frames) {
+static int a_create_host_config(struct aura_srv_listener_conf *lc, int fd,
+                                struct sockaddr *addr, socklen_t addr_len, const char *hostname,
+                                const char *port, uint32_t default_tls_idx, struct aura_iovec *h2_frames) {
     struct aura_srv_host_conf conf;
     uint16_t port_num;
     int host_off;
@@ -1012,8 +1013,7 @@ static int a_create_host_conf(struct aura_srv_listener_conf *lc, int fd,
 }
 
 /* Add a new sock to global socket table */
-// @todo: perhaps the function name should be better
-static inline void add_sock_to_fdmap(struct aura_srv_sock *sock) {
+static inline void a_add_sock_to_fdmap(struct aura_srv_sock *sock) {
     glob_conf->fdmap[sock->sock_fd] = sock;
 }
 
@@ -1086,11 +1086,10 @@ static void a_setup_configs(void *config, struct aura_srv_listener_conf *lc) {
             tls_ident_entry_node = &nodes[arrs[arr_idx + i].node_idx];
             res = a_tls_add_iden(&blob_arg, tls_ident_entry_node, key_exchanges, cipher_suites, ech.create_opener, ech.retry_configs, lc);
             if (res) {
-                sys_exit(true, errno, "Failed to add tls identity");
+                sys_exit(true, errno, "a_setup_configs: a_tls_add_iden error");
             }
         }
     }
-    app_debug(true, 0, "----tls added suc");
 
     /* parse hosts */
     if (srv_tab[A_IDX_HOSTS] != 0) {
@@ -1120,7 +1119,7 @@ static void a_setup_configs(void *config, struct aura_srv_listener_conf *lc) {
                     hostname = strtab + entry_node->str_offset;
                     ailist = a_resolve_address(hostname, port, IPPROTO_TCP, SOCK_STREAM);
                     if (ailist == NULL)
-                        app_exit(true, 0, "Failed to resolve address");
+                        app_exit(true, 0, "a_setup_configs: a_resolve_address error");
 
                     for (aip = ailist; aip != NULL; aip = aip->ai_next) {
                         res = a_listener_is_new(aip->ai_addr, aip->ai_addrlen);
@@ -1129,7 +1128,7 @@ static void a_setup_configs(void *config, struct aura_srv_listener_conf *lc) {
 
                         sock = a_server_init(SOCK_STREAM, aip->ai_addr, aip->ai_addrlen);
                         if (sock == NULL) {
-                            sys_debug(true, errno, "Failed to initialize server for %s", hostname);
+                            sys_debug(true, errno, "a_setup_configs: a_server_init error: %s", hostname);
                             continue;
                         }
                         break;
@@ -1137,10 +1136,10 @@ static void a_setup_configs(void *config, struct aura_srv_listener_conf *lc) {
 
                     if (sock == NULL)
                         // freeaddrinfo(ailist);
-                        app_exit(true, errno, "Failed to setup listener_conf");
+                        app_exit(true, errno, "a_setup_configs: Failed to setup listener_conf");
                     continue;
                 }
-                add_sock_to_fdmap(sock);
+                a_add_sock_to_fdmap(sock);
 
                 if (strcmp(key, "tls") == 0) {
                     tls = strtab + entry_node->str_offset;
@@ -1157,17 +1156,15 @@ static void a_setup_configs(void *config, struct aura_srv_listener_conf *lc) {
                 if (strcmp(key, "http2_origin_frame") == 0) {
                     h2_origin_frames = a_build_h2_origin_frame(&blob_arg, entry_node);
                     if (!h2_origin_frames)
-                        sys_exit(true, errno, "Failed to build h2 origin frames for %s", hostname);
+                        sys_exit(true, errno, "a_setup_configs: a_build_h2_origin_frame for %s", hostname);
                 }
-                app_debug(true, 0, "Built origin frames for %s", hostname);
             }
 
             /* add host */
-            res = a_create_host_conf(lc, sock->sock_fd, aip->ai_addr, aip->ai_addrlen, hostname, port, tls_idx, h2_origin_frames);
+            res = a_create_host_config(lc, sock->sock_fd, aip->ai_addr, aip->ai_addrlen, hostname, port, tls_idx, h2_origin_frames);
             if (res == -1)
-                sys_exit(true, errno, "Failed to create host config for %s", hostname);
+                sys_exit(true, errno, "a_setup_configs: a_create_host_config error: %s", hostname);
 
-            app_debug(true, 0, "Built host config for %s", hostname);
             /* ocsp */
             struct aura_ocsp_updater ocsp_updater; // attached to host
         }
@@ -1176,42 +1173,28 @@ static void a_setup_configs(void *config, struct aura_srv_listener_conf *lc) {
     aura_install_signal_handler(SIGINT, SIG_IGN);
     aura_install_signal_handler(SIGQUIT, SIG_IGN);
     aura_install_signal_handler(SIGTERM, a_server_shutdown);
-    /** @todo: how about SIGPIPE */
 
     if (glob_conf->user.base != NULL) {
         int err;
         err = aura_drop_privileges(glob_conf->user.base);
-        if (err == 1)
-            app_exit(true, errno, "Failed to drop privileges");
-        else if (err == 2)
+        if (err == 1) {
+            app_exit(true, errno, "a_setup_configs: aura_drop_privileges error");
+        } else if (err == 2) {
             app_exit(true, 0, "Refusing to run as root, failed to drop to 'nobody', set user in the server config");
+        }
         glob_conf->user.len = strlen(glob_conf->user.base);
     } else {
         if (getuid() == 0)
             app_exit(true, 0, "Refusing to run as root, failed to drop to 'nobody', set user in the server config");
     }
 
-    // set_capabilities();
-    // get capability from config or set normally on linux
-    // drop_capabilities();
-
-    // register file configs
-    // get throttle response
-    // get header commands
-    // get redirect options
-    // get/register config status handlers
-    // get/register debug handler
-    // get/register timing config
-    // get/register trace (self trace)
-    // get/register logging
-    app_debug(true, 0, ">>>> Done setting up configurations");
+    /**/
 }
 
 /**
  * Setup global server context
  */
 struct aura_srv_ctx *a_server_ctx_init(st_aura_evt_loop *loop, struct aura_srv_listener_conf *lc) {
-    app_debug(true, 0, "a_server_ctx_init <<<<");
     struct aura_srv_ctx *ctx;
 
     ctx = malloc(sizeof(*ctx));
@@ -1235,17 +1218,11 @@ struct aura_srv_ctx *a_server_ctx_init(st_aura_evt_loop *loop, struct aura_srv_l
     return ctx;
 }
 
-static inline int num_of_conn(struct aura_srv_ctx *ctx) {
-    return ctx->metrics.connections;
-}
-
 /**
  *
  */
 static inline void a_close_idle_connections(struct aura_srv_ctx *ctx) {
-    if (num_of_conn(ctx) - ctx->glob_conf->conn.soft_limit) {
-        // aura_close_idle_connections();
-    }
+    /**/
 }
 
 /**
@@ -1429,7 +1406,7 @@ static inline void a_handle_internal_request(st_aura_evt_loop *loop) {
             break;
         case A_CMD_FN_DEPLOY:
             a_parse_function_config(msg.data);
-            // handle error internally by reading and parsing from the file if neccessary
+
             break;
         default:
             app_debug(true, 0, "Unknown cmd type %d", hdr.cmd_type);
@@ -1448,11 +1425,10 @@ static inline void a_handle_internal_request(st_aura_evt_loop *loop) {
 /**
  * Setup global memory context
  */
-bool a_setup_memory() {
+bool a_setup_memory_caches() {
+    app_debug(true, 0, "a_setup_memory_caches <<<<");
     struct aura_slab_cache *sc;
     bool res;
-
-    aura_memory_ctx_init(&glob_conf->mem_ctx);
 
     res = aura_create_dynamic_slab_alloc_caches(&glob_conf->mem_ctx);
     if (!res)
@@ -1473,14 +1449,6 @@ bool a_setup_memory() {
     if (!sc)
         goto exception;
 
-    // aura_slab_cache_dump(sc);
-    // struct aura_srv_sock *sock;
-    // sock = a_sock_alloc(&glob_conf->mem_ctx);
-    // app_debug(true, 0, "<><><><><> Alloc");
-    // aura_slab_cache_dump(sc);
-    // aura_slab_free(sock);
-    // app_debug(true, 0, "<><><><><> Free");
-    // aura_slab_cache_dump(sc);
     return true;
 
 exception:
@@ -1574,8 +1542,29 @@ int a_run_loop(struct aura_srv_ctx *ctx) {
  * substituted when config is parsed
  */
 static inline int a_glob_conf_init() {
+    int res;
+
     memset(glob_conf, 0, sizeof(struct aura_srv_global_conf));
     glob_conf->boot_time = aura_now_ms();
+    glob_conf->shutdown_requested = false;
+    glob_conf->user.base = NULL;
+    glob_conf->user.len = 0;
+
+    /* init app memory context */
+    aura_memory_ctx_init(&glob_conf->mem_ctx);
+
+    res = aura_setup_app_paths(&glob_conf->aura_db_path);
+    if (res == -1)
+        sys_exit(true, errno, "a_glob_conf_init: aura_setup_app_paths error");
+
+    /* setup shared database */
+    res = aura_setup_database_file_path(&glob_conf->aura_db_path);
+    if (res == -1)
+        sys_exit(true, errno, "a_glob_conf_init: aura_setup_database_file_path error");
+
+    glob_conf->db_handle = aura_db_open(glob_conf->aura_db_path.base, O_RDWR, A_DB_FILE_MODE);
+    if (!glob_conf->db_handle)
+        sys_exit(true, errno, "a_glob_conf_init: aura_db_open error");
 
     return 0;
 }
@@ -1599,7 +1588,8 @@ static inline int a_listener_conf_init(struct aura_srv_listener_conf *lc) {
  * Load busy functions
  */
 static void a_load_functions() {
-    // DIR
+    struct aura_iovec data;
+    int res;
 }
 
 /**
@@ -1631,13 +1621,13 @@ int main(int argc, char *argv[]) {
 
     res = a_glob_conf_init();
     if (res) {
-        sys_debug(true, errno, "Failed to initialize global configs");
+        sys_debug(true, errno, "main: a_glob_conf_init error");
         goto exception;
     }
 
-    res = a_setup_memory();
+    res = a_setup_memory_caches();
     if (!res) {
-        sys_debug(true, errno, "Failed to create memory context!");
+        sys_debug(true, errno, "main: a_setup_memory_caches error");
         goto exception;
     }
 
@@ -1647,7 +1637,7 @@ int main(int argc, char *argv[]) {
 
     res = a_listener_conf_init(listener_conf);
     if (res) {
-        sys_debug(true, 0, "Failed to init listener conf");
+        sys_debug(true, 0, "main: a_listener_conf_init error");
         goto exception;
     }
 
@@ -1656,13 +1646,13 @@ int main(int argc, char *argv[]) {
 
     loop = aura_evt_loop_create(sock_fd, 100);
     if (!loop) {
-        sys_debug(false, errno, "Failed to create event loop");
+        sys_debug(false, errno, "main: aura_evt_loop_create error");
         goto exception;
     }
 
     ctx = a_server_ctx_init(loop, listener_conf);
     if (!ctx) {
-        sys_debug(true, errno, "Failed to create server context");
+        sys_debug(true, errno, "main: a_server_ctx_init error");
         goto exception;
     }
 
@@ -1676,9 +1666,9 @@ int main(int argc, char *argv[]) {
         loop->ops->add(loop, listener_conf->fd_pool.fds[i], AURA_EVENT_READ);
     }
 
-    a_run_loop(ctx);
+    res = a_run_loop(ctx);
 
-    exit(0);
+    exit(res);
 exception:
     sys_info(true, errno, "Server exiting");
     exit(1);

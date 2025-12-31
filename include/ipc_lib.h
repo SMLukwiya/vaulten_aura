@@ -6,8 +6,6 @@
 #include <stdint.h>
 #include <unistd.h>
 
-#define AURA_DEV_DATA_DIR "AURA_DEV_DATA_DIR"
-
 typedef enum {
     AURA_DATA_DIR_PATH,
     AURA_CONFIG_DIR_PATH
@@ -17,7 +15,12 @@ typedef enum {
  * Ensure provided app path exists, creating it
  * if it does not exist
  */
-bool aura_ensure_app_path(struct aura_iovec *path, int32_t mode);
+int aura_setup_app_paths(struct aura_iovec *path);
+
+/**
+ * Construct the database file path
+ */
+int aura_setup_database_file_path(struct aura_iovec *aura_db_path);
 
 /**
  * Construct given app path

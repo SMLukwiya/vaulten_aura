@@ -15,12 +15,18 @@ find_package(yaml REQUIRED)
 # target_link_libraries(target CURL::libcurl)
 
 set(PROJECT_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/include)
-# set(PROJECT_LIB_DIR ${CMAKE_BINARY_DIR}/lib)
 
 # todo: find a better way
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 endif()
+
+add_compile_definitions(_GNU_SOURCE)
+# Default Paths
+set(DEFAULT_DATA_DIR /var/lib/vaulten_aura CACHE PATH "Default data directory")
+
+add_compile_definitions(AURA_APP_NAME="vaulten_aura")
+add_compile_definitions(AURA_DB_FILE="aura.db")
 
 add_subdirectory(src/cli)
 add_subdirectory(src/daemon)
@@ -28,16 +34,6 @@ add_subdirectory(src/server)
 
 # installation
 set(install_dir ${PROJECT_BINARY_DIR}/install)
-
-# compile flags
-
-# if (BUILD_TESTING)
-#     add_subdirectory(test)
-# endif()
-
-# target_link_libraries(vaulten_aura cli daemon)
-
-# target_sources()
 
 # packaging
 include(GNUInstallDirs)

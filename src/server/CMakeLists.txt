@@ -12,6 +12,7 @@ set(lib_sources
     ../../lib/file_lib.c
     ../../lib/encrypt_lib.c
     ../../lib/runtime_lib.c
+    ../../lib/ipc_lib.c
 )
 
 add_executable(aura_server 
@@ -34,24 +35,10 @@ add_executable(aura_server
     ${lib_sources}
 )
 
-# if (it bsd)
-# target_sources(aura_server path_to_kevent)
-# else() #if linux
-# target_sources(aura_server path_to_epoll)
-# endif() # if apple etc
-
 target_link_libraries(aura_server PRIVATE picotls::picotls PRIVATE quickjs::quickjs PUBLIC openssl::openssl)
 
 target_include_directories(aura_server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include PRIVATE ${PROJECT_INCLUDE_DIR})
 
-add_compile_definitions(_GNU_SOURCE)
-
-# todo: find a better way
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    # set(CMAKE_STATIC_LINKER_FLAGS "")
-endif()
-
-# if (UNIX AND NOT APPLE)
-#     target_compile_definitions(aura_daemon PRIVATE HAS_SYSTEMD) # or another manager
-# # else others
-# endif()
+target_compile_definitions(aura_server 
+    PRIVATE AURA_DATA_DIR="${DEFAULT_DATA_DIR}" # defined in global CMakeLists.txt
+)
