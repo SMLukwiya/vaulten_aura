@@ -48,6 +48,10 @@ typedef enum {
     A_DB_REC_TOMBSTONE = 1
 } aura_db_flags;
 
+typedef enum {
+    A_FNV1A_HASH_ALGO = 1,
+} aura_db_hash_algo;
+
 struct aura_fn_stat_delta {
     u_int64_t ts;
     int64_t delta;
@@ -114,7 +118,7 @@ bool aura_db_record_exists(AURA_DBHANDLE db, uint16_t namespace, uint16_t scheme
 /** Retrieve a record */
 int aura_db_fetch_record(AURA_DBHANDLE db, uint16_t namespace, struct aura_iovec *key, struct aura_iovec *data_out);
 
-/**/
-void aura_db_dump_rec_hdr(struct aura_db_rec_hdr *hdr);
+/* Dump record header */
+void aura_db_dump_rec_header(struct aura_db_rec_hdr *hdr);
 
 #endif /* AURA_DB_H */

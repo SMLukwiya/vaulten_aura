@@ -1426,7 +1426,6 @@ static inline void a_handle_internal_request(st_aura_evt_loop *loop) {
  * Setup global memory context
  */
 bool a_setup_memory_caches() {
-    app_debug(true, 0, "a_setup_memory_caches <<<<");
     struct aura_slab_cache *sc;
     bool res;
 
