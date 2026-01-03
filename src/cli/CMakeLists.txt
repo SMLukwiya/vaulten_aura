@@ -1,14 +1,14 @@
-# @todo: should I call project()?
+list(APPEND CMAKE_MESSAGE_CONTEXT cli)
+# project(aura_cli VERSION 1.0.0)
 
-# find_package(libyaml REQUIRED)
+message(STATUS "Building cli")
+list(APPEND CMAKE_MESSAGE_INDENT " ")
 
 set(lib_sources
-    ../../lib/unix_socket_lib.c
-    ../../lib/string_lib.c
-    ../../lib/error_lib.c
-    ../../lib/file_lib.c
-    ../../lib/yaml_lib.c # remove this not needed here
-    ../../lib/radix_v1_lib.c # remove this not needed as well
+    ${vaulten_aura_SOURCE_DIR}/lib/unix_socket_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/error_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
 )
 
 add_executable(aura 
@@ -32,6 +32,8 @@ add_executable(aura
 target_link_libraries(aura PRIVATE yaml::yaml)
 
 target_include_directories(aura PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include PRIVATE ${PROJECT_INCLUDE_DIR})
+
+list(POP_BACK CMAKE_MESSAGE_INDENT)
 
 # install(TARGETS cli RUNTIME DESTINATION bin)
 

@@ -1,20 +1,24 @@
+list(APPEND CMAKE_MESSAGE_CONTEXT daemon)
+
+message(STATUS "Building daemon")
+list(APPEND CMAKE_MESSAGE_INDENT " ")
 
 # Daemon library sources
 set(lib_sources
-    ../../lib/unix_socket_lib.c
-    ../../lib/daemon_lib.c
-    ../../lib/error_lib.c
-    ../../lib/file_lib.c
-    ../../lib/yaml_lib.c
-    ../../lib/utils_lib.c
-    ../../lib/radix_v1_lib.c
-    ../../lib/blobber_v1_lib.c
-    ../../lib/encrypt_lib.c
-    ../../lib/ipc_lib.c
-    ../../lib/hash_lib.c
-    ../../lib/db/db.c
-    ../../lib/file_lib.c
-    ../../lib/runtime_lib.c # remove this once I have a good place to put runtime stuff
+    ${vaulten_aura_SOURCE_DIR}/lib/unix_socket_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/daemon_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/error_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/yaml_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/utils_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/radix_v1_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/blobber_v1_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/encrypt_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/ipc_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/hash_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/db/db.c
+    ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/runtime_lib.c # remove this once I have a good place to put quickjs and other runtime stuff
 )
 
 add_executable(aura_daemon
@@ -36,3 +40,5 @@ target_include_directories(aura_daemon PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/inclu
 target_compile_definitions(aura_daemon 
     PRIVATE AURA_DATA_DIR="${DEFAULT_DATA_DIR}" # defined in global CMakeLists.txt
 )
+
+list(POP_BACK CMAKE_MESSAGE_INDENT)

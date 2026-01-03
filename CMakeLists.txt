@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.31.5)
+list(APPEND CMAKE_MESSAGE_CONTEXT vaulten_aura)
 project(vaulten_aura VERSION 1.0.0)
 
 find_package(OpenSSL REQUIRED)
