@@ -112,15 +112,16 @@ int aura_setup_app_paths(struct aura_iovec *path) {
     return 0;
 }
 
-int aura_setup_database_file_path(struct aura_iovec *aura_db_path) {
-    size_t len;
+int aura_setup_database_file_path(struct aura_iovec *db_file_path) {
+    size_t db_file_len, db_compact_file_len;
+    char *db_compact_file_path;
 
-    len = aura_db_path->len + strlen(AURA_DB_FILE);
-    aura_db_path->base = realloc(aura_db_path->base, len);
-    if (!aura_db_path->base)
+    db_file_len = db_file_path->len + strlen(AURA_DB_FILE);
+    db_file_path->base = realloc(db_file_path->base, db_file_len);
+    if (!db_file_path->base)
         return -1;
 
-    aura_db_path->len = len;
-    strcat(aura_db_path->base, AURA_DB_FILE);
+    db_file_path->len = db_file_len;
+    strcat(db_file_path->base, AURA_DB_FILE);
     return 0;
 }

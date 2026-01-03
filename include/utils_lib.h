@@ -29,6 +29,12 @@
 
 #define a_str_lit_static(str) (str), sizeof(str) - 1
 
+/* Read size bytes from fd to buf */
+int aura_read_n(int fd, char *buf, size_t size);
+
+/* Write size bytes from buf to fd */
+int aura_write_n(int fd, char *buf, size_t size);
+
 /**
  * Returns 0 when num is 0, so one might want to explicitly handle 0 edge case
  * When the power is already two, the correct power is returned

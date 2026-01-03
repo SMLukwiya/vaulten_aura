@@ -203,6 +203,9 @@ struct aura_iovec aura_calculate_digest(struct aura_iovec *bytes) {
     if (!md.base)
         return md;
 
+    if (bytes->base == NULL || bytes->len == 0)
+        return md;
+
     digest_context = EVP_MD_CTX_new();
     if (!digest_context)
         goto err_md;
@@ -237,37 +240,3 @@ err_md:
     free(md.base);
     return md;
 }
-
-// void calculate_hmac(struct aura_iovec *file, uint8_t *hmac) {
-//     bool ok;
-//     EVP_MAC *mac = NULL;
-//     EVP_MAC_CTX *mac_context = NULL;
-
-//     mac = EVP_MAC_fetch(NULL, OSSL_MAC_NAME_HMAC, NULL);
-//     if (!mac) {
-//         // error : check if the functions indeed return an error
-//         return;
-//     }
-//     OSSL_PARAM params[] = {
-//       OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, OSSL_DIGEST_NAME_SHA3_256, 0), /* maybe blakeb512 */
-//       OSSL_PARAM_construct_end()};
-
-//     mac_context = EVP_MAC_CTX_new(mac);
-//     ok = EVP_MAC_init(mac_context, key, key_len, params);
-//     if (!mac_context || !ok) {
-//         // error
-//         return;
-//     }
-
-//     ok = EVP_MAC_update(mac_context, file->base, file->len);
-//     if (!ok) {
-//     }
-
-//     size_t out_bytes;
-//     ok = EVP_MAC_final(mac_context, hmac, &out_bytes, HMAC_LEN);
-//     if (!ok) {
-//     }
-
-//     EVP_MAC_free(mac);
-//     EVP_MAC_CTX_free(mac_context);
-// }

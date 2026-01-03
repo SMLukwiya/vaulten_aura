@@ -27,7 +27,7 @@ int aura_clear_fd_flag(int fd, int flag) {
     return fcntl(fd, F_SETFL, val);
 }
 
-int read_n(int fd, char *buf, size_t size) {
+int aura_read_n(int fd, char *buf, size_t size) {
     int n_left;
     int n_read = 0;
     char *ptr = buf;
@@ -50,7 +50,7 @@ int read_n(int fd, char *buf, size_t size) {
     return (size - n_left); /* return how much was read */
 }
 
-int write_n(int fd, char *buf, size_t size) {
+int aura_write_n(int fd, char *buf, size_t size) {
     int n_left;
     int n_written = 0;
     char *ptr = buf;

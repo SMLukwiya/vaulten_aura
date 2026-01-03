@@ -83,12 +83,14 @@ struct aura_db_bucket_entry {
     _Atomic off_t head_off; /* offset of newest record */
 };
 
-struct aura_db_wal_rec {
+struct aura_db_wal_rec_hdr {
     u_int32_t magic;
     u_int16_t op;
     u_int16_t ns;
+    uint16_t schema_id;
     u_int32_t key_len;
     u_int32_t data_len;
+    struct aura_db_rec_len rec_len;
     u_int64_t timestamp;
 }; /* [key][data] */
 

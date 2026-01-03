@@ -18,7 +18,7 @@ typedef enum {
 int aura_setup_app_paths(struct aura_iovec *path);
 
 /**
- * Construct the database file path
+ * Construct the database file paths
  */
 int aura_setup_database_file_path(struct aura_iovec *aura_db_path);
 

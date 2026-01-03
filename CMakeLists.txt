@@ -27,6 +27,7 @@ set(DEFAULT_DATA_DIR /var/lib/vaulten_aura CACHE PATH "Default data directory")
 
 add_compile_definitions(AURA_APP_NAME="vaulten_aura")
 add_compile_definitions(AURA_DB_FILE="aura.db")
+add_compile_definitions(AURA_DB_COMPACT_FILE="aura_compact.db")
 
 add_subdirectory(src/cli)
 add_subdirectory(src/daemon)
