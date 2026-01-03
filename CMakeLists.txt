@@ -34,6 +34,10 @@ add_subdirectory(src/cli)
 add_subdirectory(src/daemon)
 add_subdirectory(src/server)
 
+#test
+enable_testing()
+add_subdirectory(tests)
+
 # installation
 set(install_dir ${PROJECT_BINARY_DIR}/install)
 

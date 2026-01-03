@@ -12,3 +12,4 @@ Makefile.dep
 .vscode/*
 .idea/*
 compile_commands.json
+tests/Testing
