@@ -1,8 +1,6 @@
 #include "bug_lib.h"
 #include "compiler_lib.h"
 #include "error_lib.h"
-#include "list_lib.h"
-#include "memory_lib.h"
 #include "slab_lib.h"
 #include "utils_lib.h"
 

@@ -106,7 +106,7 @@ static inline struct aura_db_rec_len a_get_db_record_len(size_t key_len, size_t 
 }
 
 /** Create or open a database */
-AURA_DBHANDLE aura_db_open(const char *, int, ...);
+AURA_DBHANDLE aura_db_open(const char *, const char *, int, ...);
 
 /**Store record with key and value into db */
 int aura_db_put_record(AURA_DBHANDLE db, uint16_t namespace, uint16_t schema_id, struct aura_iovec *key, struct aura_iovec *data);
@@ -119,6 +119,9 @@ bool aura_db_record_exists(AURA_DBHANDLE db, uint16_t namespace, uint16_t scheme
 
 /** Retrieve a record */
 int aura_db_fetch_record(AURA_DBHANDLE db, uint16_t namespace, struct aura_iovec *key, struct aura_iovec *data_out);
+
+/** Delete a record */
+int aura_db_delete_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id, struct aura_iovec *key);
 
 /* Dump record header */
 void aura_db_dump_rec_header(struct aura_db_rec_hdr *hdr);

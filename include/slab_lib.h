@@ -2,6 +2,8 @@
 #define AURA_SLAB_H
 
 #include "align_lib.h"
+#include "list_lib.h"
+#include "memory_lib.h"
 #include <stdint.h>
 
 #define A_PAGE_SIZE 4096

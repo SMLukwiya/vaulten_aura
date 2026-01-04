@@ -204,6 +204,7 @@ struct aura_srv_global_conf {
     struct aura_memory_ctx mem_ctx;
     struct aura_iovec user;
 
+    struct aura_iovec aura_app_path;
     struct aura_iovec aura_db_path;
     AURA_DBHANDLE db_handle;
 };

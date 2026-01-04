@@ -111,11 +111,15 @@ static inline void a_setup_sockfd(int fd, pid_t srv_pid) {
 static void a_setup_database(struct aura_daemon_glob_conf *glob_conf) {
     int res;
 
-    res = aura_setup_database_file_path(&glob_conf->aura_db_path);
+    res = aura_setup_database_file_path(&glob_conf->aura_app_path, &glob_conf->aura_db_path);
     if (res == -1)
         sys_exit(true, errno, "a_setup_database: aura_setup_database_file_path error");
 
-    glob_conf->db_handle = aura_db_open(glob_conf->aura_db_path.base, O_RDWR | O_CREAT | O_EXCL | O_TRUNC, A_DB_FILE_MODE);
+    glob_conf->db_handle = aura_db_open(
+      glob_conf->aura_app_path.base,
+      glob_conf->aura_db_path.base,
+      O_RDWR | O_CREAT | O_EXCL | O_TRUNC,
+      A_DB_FILE_MODE);
     if (!glob_conf->db_handle)
         sys_exit(true, errno, "a_setup_database: aura_db_open error");
 }
@@ -177,7 +181,7 @@ int aura_daemon() {
         sys_exit(true, errno, "aura_daemon: set_pid_lock error");
 
     /* check app paths */
-    res = aura_setup_app_paths(&glob_conf.aura_db_path);
+    res = aura_setup_app_paths(&glob_conf.aura_app_path);
     if (res == -1)
         sys_exit(true, errno, "aura_daemon: a_setup_app_paths");
     /* Setup database */

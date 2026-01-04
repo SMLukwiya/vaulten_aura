@@ -4,6 +4,7 @@
 #include "time_lib.h"
 #include "utils_lib.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h> /* open & db_open flags */
 #include <stdarg.h>
@@ -140,12 +141,36 @@ static inline ssize_t a_db_read_db_meta(AURA_DB *db) {
     return readv(db->db_fd, iov, 2);
 }
 
+static inline int a_open_db_file(int dir_fd, const char *filename, int flags, int mode) {
+    int fd;
+
+    if (flags & O_CREAT) {
+        fd = openat(dir_fd, filename, flags, mode);
+
+        if (fd < 0) {
+            if (errno != EEXIST)
+                return -1;
+
+            if (errno == EEXIST) {
+                /* Open normally */
+                flags &= ~(O_CREAT | O_TRUNC | O_EXCL);
+                fd = openat(dir_fd, filename, flags);
+            }
+        }
+    } else {
+        fd = openat(dir_fd, filename, flags);
+    }
+
+    return fd;
+}
+
 /*
- * Open or create a database.  Same arguments as open(2).
+ * Open or create a database.  Structured similar to open(2).
  */
-AURA_DBHANDLE aura_db_open(const char *db_pathname, int oflag, ...) {
+AURA_DBHANDLE aura_db_open(const char *app_path, const char *db_pathname, int oflag, ...) {
     AURA_DB *db;
-    int db_namelen, mode;
+    DIR *dp;
+    int db_namelen, mode, dir_fd;
     size_t i, bucket_arr_size;
     ssize_t res;
     struct stat statbuf;
@@ -154,41 +179,34 @@ AURA_DBHANDLE aura_db_open(const char *db_pathname, int oflag, ...) {
     db_namelen = strlen(db_pathname);
     db = a_db_alloc(db_namelen);
     if (!db)
-        sys_exit(true, errno, "db_open error");
+        sys_exit(true, errno, "aura_db_open error");
+    strcpy(db->name, db_pathname);
 
     bucket_arr_size = sizeof(struct aura_db_bucket_entry) * A_DB_BUCKET_CNT;
     db->buckets = malloc(bucket_arr_size);
     if (!db->buckets)
-        sys_exit(true, errno, "db_open: db->buckets error");
+        sys_exit(true, errno, "aura_db_open: db->buckets error");
     memset(db->buckets, 0, bucket_arr_size);
 
-    strcpy(db->name, db_pathname);
+    dp = opendir(app_path);
+    if (!dp)
+        sys_exit(true, errno, "aura_db_open: opendir");
 
-    if (oflag & O_CREAT) {
-        va_list ap;
+    dir_fd = dirfd(dp);
+    if (dir_fd < 0)
+        sys_exit(true, errno, "aura_db_open: dirfd error");
 
-        va_start(ap, oflag);
-        mode = va_arg(ap, int);
-        va_end(ap);
+    va_list ap;
 
-        /* Open index file and data file. */
-        db->db_fd = open(db->name, oflag, mode);
-
-        if (db->db_fd < 0) {
-            if (errno != EEXIST)
-                goto exception;
-
-            if (errno == EEXIST) {
-                /* Open normally */
-                oflag &= ~(O_CREAT | O_TRUNC | O_EXCL);
-                db->db_fd = open(db->name, oflag);
-            }
-        }
-    } else {
-        db->db_fd = open(db->name, oflag);
-    }
-
+    va_start(ap, oflag);
+    mode = va_arg(ap, int);
+    va_end(ap);
+    db->db_fd = a_open_db_file(dir_fd, AURA_DB_FILE, oflag, mode);
     if (db->db_fd < 0)
+        goto exception;
+
+    db->wal_fd = a_open_db_file(dir_fd, AURA_DB_WAL_FILE, oflag, mode);
+    if (db->wal_fd < 0)
         goto exception;
 
     if ((oflag & (O_CREAT | O_TRUNC)) == (O_CREAT | O_TRUNC)) {
@@ -240,9 +258,11 @@ AURA_DBHANDLE aura_db_open(const char *db_pathname, int oflag, ...) {
             sys_exit(true, errno, "db_open: un_lock error");
     }
 
+    closedir(dp);
     a_db_rewind(db->db_fd);
     return db;
 exception:
+    closedir(dp);
     a_db_free(db);
     return NULL;
 }
@@ -254,6 +274,9 @@ exception:
 static void a_db_free(AURA_DB *db) {
     if (db->db_fd >= 0)
         close(db->db_fd);
+
+    if (db->wal_fd >= 0)
+        close(db->wal_fd);
     if (db->name != NULL)
         free(db->name);
     free(db);
@@ -463,6 +486,7 @@ int aura_db_fetch_record(AURA_DBHANDLE _db, uint16_t namespace, struct aura_iove
                 goto exception;
 
             if (aura_mem_is_eq(key_buf, strlen(key_buf), key->base, key->len)) {
+                app_debug(true, 0, "RECORD FOUND: %s -> %d ", key_buf, rec_hdr.flags);
                 if (rec_hdr.flags & A_DB_REC_TOMBSTONE)
                     return A_DB_REC_NOT_FOUND;
 
@@ -498,6 +522,7 @@ int aura_db_delete_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema
     AURA_DB *db;
     off_t old_head, offset;
     struct aura_db_rec_len rec_len;
+    int res;
 
     db = (AURA_DB *)_db;
     rec_len = a_get_db_record_len(key->len, 0);
@@ -512,7 +537,7 @@ int aura_db_delete_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema
     rec_hdr.ns = namespace;
     rec_hdr.schema_id = schema_id;
     rec_hdr.version = A_DB_VERSION;
-    rec_hdr.flags &= A_DB_REC_TOMBSTONE;
+    rec_hdr.flags |= A_DB_REC_TOMBSTONE;
     rec_hdr.timestamp = aura_now_ms();
     rec_hdr.key_len = key->len;
     rec_hdr.data_len = 0;
@@ -531,6 +556,10 @@ int aura_db_delete_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema
         return -1;
 
     __atomic_store_n(&db->buckets[hash].head_off, offset, __ATOMIC_RELEASE);
+    res = a_db_write_bucket_array(db);
+    if (res < 0)
+        return -1;
+
     return 0;
 }
 
@@ -589,7 +618,7 @@ static inline off_t a_db_wal_append(int wal_fd, struct aura_db_wal_rec_hdr *wal_
     iov[1].iov_len = wal_hdr->key_len;
     iov[2].iov_base = NULL;
     iov[2].iov_len = 0;
-    if (wal_hdr->op == A_WAL_PUT) {
+    if (wal_hdr->op == A_WAL_PUT && data) {
         iov[2].iov_base = (void *)data;
         iov[2].iov_len = wal_hdr->data_len;
     }
@@ -619,11 +648,13 @@ static off_t a_db_wal_commit(int wal_fd, uint16_t namespace, uint16_t schema_id,
     wal_hdr.ns = namespace;
     wal_hdr.schema_id = schema_id;
     wal_hdr.key_len = key->len;
-    wal_hdr.data_len = data->len;
+    wal_hdr.data_len = 0;
+    if (data != NULL)
+        wal_hdr.data_len = data->len;
     wal_hdr.timestamp = aura_now_ms();
     wal_hdr.rec_len = *rec_len;
 
-    offset = a_db_wal_append(wal_fd, &wal_hdr, (const void *)key->base, (const void *)data->base);
+    offset = a_db_wal_append(wal_fd, &wal_hdr, (const void *)key->base, data ? (const void *)data->base : NULL);
     return offset;
 }
 

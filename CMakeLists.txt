@@ -12,9 +12,6 @@ find_package(picotls REQUIRED)
 
 find_package(yaml REQUIRED)
 
-# find_package(CURL REQUIRED)
-# target_link_libraries(target CURL::libcurl)
-
 set(PROJECT_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/include)
 
 # todo: find a better way
@@ -28,6 +25,7 @@ set(DEFAULT_DATA_DIR /var/lib/vaulten_aura CACHE PATH "Default data directory")
 
 add_compile_definitions(AURA_APP_NAME="vaulten_aura")
 add_compile_definitions(AURA_DB_FILE="aura.db")
+add_compile_definitions(AURA_DB_WAL_FILE="aura_db.wal")
 add_compile_definitions(AURA_DB_COMPACT_FILE="aura_compact.db")
 
 add_subdirectory(src/cli)

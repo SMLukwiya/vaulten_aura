@@ -20,7 +20,7 @@ int aura_setup_app_paths(struct aura_iovec *path);
 /**
  * Construct the database file paths
  */
-int aura_setup_database_file_path(struct aura_iovec *aura_db_path);
+int aura_setup_database_file_path(struct aura_iovec *app_path, struct aura_iovec *db_file_path);
 
 /**
  * Construct given app path

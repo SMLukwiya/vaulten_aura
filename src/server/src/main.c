@@ -1552,16 +1552,16 @@ static inline int a_glob_conf_init() {
     /* init app memory context */
     aura_memory_ctx_init(&glob_conf->mem_ctx);
 
-    res = aura_setup_app_paths(&glob_conf->aura_db_path);
+    res = aura_setup_app_paths(&glob_conf->aura_app_path);
     if (res == -1)
         sys_exit(true, errno, "a_glob_conf_init: aura_setup_app_paths error");
 
     /* setup shared database */
-    res = aura_setup_database_file_path(&glob_conf->aura_db_path);
+    res = aura_setup_database_file_path(&glob_conf->aura_app_path, &glob_conf->aura_db_path);
     if (res == -1)
         sys_exit(true, errno, "a_glob_conf_init: aura_setup_database_file_path error");
 
-    glob_conf->db_handle = aura_db_open(glob_conf->aura_db_path.base, O_RDWR, A_DB_FILE_MODE);
+    glob_conf->db_handle = aura_db_open(glob_conf->aura_app_path.base, glob_conf->aura_db_path.base, O_RDWR, A_DB_FILE_MODE);
     if (!glob_conf->db_handle)
         sys_exit(true, errno, "a_glob_conf_init: aura_db_open error");
 

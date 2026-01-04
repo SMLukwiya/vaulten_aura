@@ -62,7 +62,7 @@ static struct aura_iovec aura_resolve_xdg_path(const char *suffix) {
         len += strlen(suffix);
     }
     path.base = malloc(len);
-    snprintf(path.base, len, "%s%s/%s", app_dir, base, suffix);
+    snprintf(path.base, len, "%s%s/%s/", app_dir, base, suffix);
     path.len = len;
     return path;
 }
@@ -112,16 +112,16 @@ int aura_setup_app_paths(struct aura_iovec *path) {
     return 0;
 }
 
-int aura_setup_database_file_path(struct aura_iovec *db_file_path) {
+int aura_setup_database_file_path(struct aura_iovec *app_path, struct aura_iovec *db_file_path) {
     size_t db_file_len, db_compact_file_len;
     char *db_compact_file_path;
 
-    db_file_len = db_file_path->len + strlen(AURA_DB_FILE);
-    db_file_path->base = realloc(db_file_path->base, db_file_len);
+    db_file_len = app_path->len + strlen(AURA_DB_FILE);
+    db_file_path->base = malloc(db_file_len);
     if (!db_file_path->base)
         return -1;
 
     db_file_path->len = db_file_len;
-    strcat(db_file_path->base, AURA_DB_FILE);
+    snprintf(db_file_path->base, db_file_path->len, "%s%s", app_path->base, AURA_DB_FILE);
     return 0;
 }
