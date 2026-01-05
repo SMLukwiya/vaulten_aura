@@ -62,10 +62,46 @@ static void a_test_put_get_delete(void) {
     aura_db_close(db);
 }
 
+static void a_test_wal_replay(void) {
+    AURA_DBHANDLE db;
+    char db_path[512];
+    int res;
+    struct aura_iovec key, data;
+
+    a_setup_temp_dir();
+    snprintf(db_path, sizeof(db_path), "%s/aura.db", test_dir);
+
+    db = aura_db_open(test_dir, db_path, O_RDWR | O_CREAT | O_TRUNC, A_DB_FILE_MODE);
+    assert(db != NULL);
+
+    /* PUT */
+    key.base = "fn:hello",
+    key.len = sizeof("fn:hello") - 1;
+    data.base = "World";
+    data.len = sizeof("World") - 1;
+    res = aura_db_put_record(db, 1, 1, &key, &data);
+    assert(res == 0);
+
+    aura_db_close(db);
+
+    db = aura_db_open(test_dir, db_path, O_RDWR);
+    assert(db != NULL);
+
+    /* FETCH */
+    char buf[32];
+    res = aura_db_fetch_record(db, 1, &key, &data);
+    assert(res == 0);
+    assert(data.len == 5);
+    assert(strncmp(data.base, "World", data.len) == 0);
+
+    aura_db_close(db);
+}
+
 int main(int argc, char *argv[]) {
     a_setup_temp_dir();
 
     a_test_put_get_delete();
+    a_test_wal_replay();
 
     a_cleanup_temp_dir();
     return 0;

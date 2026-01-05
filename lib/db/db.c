@@ -81,6 +81,7 @@ static void a_db_free(AURA_DB *);
 static off_t a_db_wal_commit(int wal_fd, int wal_op, struct aura_db_rec_hdr *hdr,
                              struct aura_iovec *key, struct aura_iovec *data);
 static int a_db_wal_replay(AURA_DB *);
+static void aura_db_dump_wal_header(struct aura_db_wal_rec_hdr *hdr);
 
 /* Calculate key hash */
 static inline uint32_t a_fnv1a_hash(uint32_t bucket_cnt, uint16_t namespace, struct aura_iovec *key) {
@@ -323,8 +324,12 @@ static void a_db_free(AURA_DB *db) {
 /*
  * Relinquish access to the database.
  */
-void aura_db_close(AURA_DBHANDLE h) {
-    a_db_free((AURA_DB *)h); /* closes fds, free buffers & struct */
+void aura_db_close(AURA_DBHANDLE _db) {
+    AURA_DB *db;
+
+    db = (AURA_DB *)_db;
+    a_db_wal_replay(db);
+    a_db_free(db); /* closes fds, free buffers & struct */
 }
 
 /* Write header + bucket array back to db file */
@@ -339,19 +344,35 @@ static inline ssize_t a_db_bucket_array_write(AURA_DB *db) {
     return res;
 }
 
-static inline int a_db_append_record(int fd, struct aura_db_rec_hdr *hdr, const void *key, const void *data,
+static inline int a_db_append_record(int fd, struct aura_db_rec_hdr *rec_hdr, void *key, void *data,
                                      struct aura_db_rec_len *rec_len, off_t start_offset) {
-    struct iovec iov[3];
+    struct iovec iov[4];
     off_t offset;
     ssize_t written;
+    size_t pad_len;
     static const uint64_t db_zero = 0;
 
-    iov[0].iov_base = hdr;
-    iov[0].iov_len = sizeof(*hdr);
+    iov[0].iov_base = rec_hdr;
+    iov[0].iov_len = sizeof(*rec_hdr);
     iov[1].iov_base = (void *)key;
-    iov[1].iov_len = hdr->key_len;
+    iov[1].iov_len = rec_hdr->key_len;
     iov[2].iov_base = (void *)data;
-    iov[2].iov_len = hdr->data_len;
+    iov[2].iov_len = rec_hdr->data_len;
+
+    char k[512];
+    // snprintf(k, iov[1].iov_len + 1, "%s", (char *)iov[1].iov_base);
+    snprintf(k, rec_hdr->key_len + 1, "%s", (char *)key);
+    app_debug(true, 0, "APPEND RECORD KEY --> : %s", k);
+
+    // snprintf(k, iov[2].iov_len + 1, "%s", (char *)iov[2].iov_base);
+    snprintf(k, rec_hdr->data_len + 1, "%s", (char *)data);
+    app_debug(true, 0, "APPEND RECORD DATA --> : %s", k);
+
+    pad_len = rec_hdr->rec_len.aligned_len - rec_hdr->rec_len.raw_len;
+    char pad[pad_len];
+    memset(pad, 0, pad_len);
+    iov[3].iov_base = pad;
+    iov[3].iov_len = pad_len;
 
     if (a_writew_lock(fd, 0, SEEK_SET, 0) < 0)
         sys_exit(true, errno, "a_db_append_record: a_writew_lock error");
@@ -365,17 +386,9 @@ static inline int a_db_append_record(int fd, struct aura_db_rec_hdr *hdr, const 
     if (offset < 0)
         return -1;
 
-    written = writev(fd, iov, 3);
-    if (written != rec_len->raw_len)
+    written = writev(fd, iov, 4);
+    if (written != rec_len->aligned_len)
         return -1;
-
-    /* Pad the remaining space */
-    if (rec_len->aligned_len > rec_len->raw_len) {
-        written = write(fd, &db_zero, rec_len->aligned_len - rec_len->raw_len);
-        if (written != (rec_len->aligned_len - rec_len->raw_len)) {
-            /* Nothing fatal here! We can proceed I think*/
-        }
-    }
 
     if (a_unlock(fd, 0, SEEK_SET, 0) < 0)
         sys_exit(true, errno, "a_db_append_record: a_unlock error");
@@ -596,8 +609,6 @@ int aura_db_fetch_record(AURA_DBHANDLE _db, uint16_t namespace, struct aura_iove
         }
     }
 
-    return -1;
-
     while (offset != 0) {
         res = pread(db->db_fd, &rec_hdr, sizeof(rec_hdr), offset);
         if (res < 0)
@@ -608,7 +619,7 @@ int aura_db_fetch_record(AURA_DBHANDLE _db, uint16_t namespace, struct aura_iove
 
         memset(key_buf, 0, sizeof(key_buf));
         if (rec_hdr.ns == namespace && rec_hdr.key_len == key->len) {
-            res = pread(db->db_fd, key_buf, key->len, offset + sizeof(rec_hdr));
+            res = pread(db->db_fd, key_buf, rec_hdr.key_len, offset + sizeof(rec_hdr));
             if (res < 0)
                 goto exception;
 
@@ -627,6 +638,11 @@ int aura_db_fetch_record(AURA_DBHANDLE _db, uint16_t namespace, struct aura_iove
                 }
                 data_out->base = record;
                 data_out->len = rec_hdr.data_len;
+
+                res = a_db_record_cache_append(db, &rec_hdr, key, data_out, hash);
+                if (res < 0) {
+                    /**/
+                }
                 return 0;
             }
         }
@@ -715,23 +731,40 @@ static void a_db_buckets_rebuild(AURA_DB *db) {
     }
 }
 
-static inline off_t a_db_wal_append(int wal_fd, struct aura_db_wal_rec_hdr *wal_hdr, struct aura_db_rec_hdr *rec_hdr) {
+static inline off_t a_db_wal_append(int wal_fd, struct aura_db_wal_rec_hdr *wal_hdr, struct aura_db_rec_hdr *rec_hdr, struct aura_iovec *key, struct aura_iovec *data) {
     off_t offset;
-    struct iovec iov[2];
+    struct iovec iov[5];
     ssize_t res;
+    size_t pad_len;
 
     if (a_writew_lock(wal_fd, 0, SEEK_SET, 0) < 0)
         sys_exit(true, errno, "a_db_wal_append: a_writew_lock error:");
 
-    if (lseek(wal_fd, 0, SEEK_END) < 0)
+    offset = lseek(wal_fd, 0, SEEK_END);
+    if (offset < 0)
         sys_exit(true, errno, "a_db_wal_append: lseek error:");
 
     iov[0].iov_base = wal_hdr;
     iov[0].iov_len = sizeof(*wal_hdr);
     iov[1].iov_base = (void *)rec_hdr;
-    iov[1].iov_len = wal_hdr->rec_len;
+    iov[1].iov_len = sizeof(*rec_hdr);
+    iov[2].iov_base = key->base;
+    iov[2].iov_len = key->len;
+    iov[3].iov_base = NULL;
+    iov[3].iov_len = 0;
+    if (data) {
+        iov[3].iov_base = data->base;
+        iov[3].iov_len = data->len;
+    }
 
-    res = writev(wal_fd, iov, 2);
+    /* Add padding */
+    pad_len = rec_hdr->rec_len.aligned_len - rec_hdr->rec_len.raw_len;
+    char pad[pad_len];
+    memset(pad, 0, pad_len);
+    iov[4].iov_base = pad;
+    iov[4].iov_len = pad_len;
+
+    res = writev(wal_fd, iov, 5);
     if (res < 0)
         sys_exit(true, errno, "a_db_wal_append: writev error:");
 
@@ -754,7 +787,7 @@ static off_t a_db_wal_commit(int wal_fd, int wal_op, struct aura_db_rec_hdr *rec
     wal_hdr.op = wal_op;
     wal_hdr.rec_len = rec_hdr->rec_len.aligned_len;
 
-    offset = a_db_wal_append(wal_fd, &wal_hdr, rec_hdr);
+    offset = a_db_wal_append(wal_fd, &wal_hdr, rec_hdr, key, data);
     return offset;
 }
 
@@ -811,16 +844,17 @@ static int a_db_wal_replay(AURA_DB *db) {
 
         if (wal_hdr.op == A_WAL_PUT) {
             rec_hdr = (struct aura_db_rec_hdr *)record_buf;
+
             write_offset = a_db_append_record(
               db->db_fd, rec_hdr,
-              (const void *)(rec_hdr + sizeof(*rec_hdr)),
-              (const void *)(rec_hdr + sizeof(*rec_hdr) + rec_hdr->key_len),
+              (const void *)((char *)rec_hdr + sizeof(*rec_hdr)),
+              (const void *)((char *)rec_hdr + sizeof(*rec_hdr) + rec_hdr->key_len),
               &rec_hdr->rec_len, 0);
 
         } else if (wal_hdr.op == A_WAL_DEL) {
             write_offset = a_db_append_record(
               db->db_fd, rec_hdr,
-              (const void *)(rec_hdr + sizeof(*rec_hdr)),
+              (const void *)((char *)rec_hdr + sizeof(*rec_hdr)),
               NULL,
               &rec_hdr->rec_len, 0);
         }
@@ -999,7 +1033,7 @@ err_out_fd:
 
 void aura_db_dump_db_header(struct aura_db_hdr *hdr) {
     app_debug(true, 0, "AURA DB HEADER");
-    app_debug(true, 0, "    Magic: %zu", hdr->magic);
+    app_debug(true, 0, "    Magic: %x", hdr->magic);
     app_debug(true, 0, "    Version: %zu", hdr->version);
     app_debug(true, 0, "    Flags: %zu", hdr->flags);
     app_debug(true, 0, "    Created at: %zu", hdr->created_ts);
@@ -1012,7 +1046,7 @@ void aura_db_dump_db_header(struct aura_db_hdr *hdr) {
 
 void aura_db_dump_rec_header(struct aura_db_rec_hdr *hdr) {
     app_debug(true, 0, "AURA DB RECORD HEADER");
-    app_debug(true, 0, "    Magic: %zu", hdr->magic);
+    app_debug(true, 0, "    Magic: %x", hdr->magic);
     app_debug(true, 0, "    Version: %zu", hdr->version);
     app_debug(true, 0, "    Namespace: %zu", hdr->ns);
     app_debug(true, 0, "    Schema Id: %zu", hdr->schema_id);
@@ -1022,4 +1056,11 @@ void aura_db_dump_rec_header(struct aura_db_rec_hdr *hdr) {
     app_debug(true, 0, "    Record len: %zu", hdr->rec_len);
     app_debug(true, 0, "    Previous offset: %zu", hdr->prev_off);
     app_debug(true, 0, "    Timestamp: %zu", hdr->timestamp);
+}
+
+static void aura_db_dump_wal_header(struct aura_db_wal_rec_hdr *hdr) {
+    app_debug(true, 0, "AURA DB WAL RECORD HEADER");
+    app_debug(true, 0, "    Magic: %x", hdr->magic);
+    app_debug(true, 0, "    Op: %u", hdr->op);
+    app_debug(true, 0, "    Rec len: %zu", hdr->rec_len);
 }
