@@ -57,49 +57,6 @@ struct aura_fn_stat_delta {
     int64_t delta;
 };
 
-/* Record len structure */
-struct aura_db_rec_len {
-    size_t raw_len;     /* Exact record length not aligned */
-    size_t aligned_len; /* Record len aligned */
-};
-
-/* Internal */
-struct aura_db_rec_hdr {
-    u_int32_t magic;
-    u_int32_t version;
-    u_int16_t ns; /* namespace */
-    u_int16_t schema_id;
-    u_int16_t flags;
-    struct aura_db_rec_len rec_len;
-    u_int32_t key_len;
-    u_int32_t data_len;
-    u_int64_t timestamp;
-    u_int64_t prev_off; /* bucket chain */
-    char check_sum[DIGEST_LEN];
-}; /* [key][data][padding] */
-
-/* Bucket offset entry */
-struct aura_db_bucket_entry {
-    _Atomic off_t head_off; /* offset of newest record */
-};
-
-struct aura_db_wal_rec_hdr {
-    u_int32_t magic;
-    u_int16_t op;
-    uint64_t rec_len;
-}; /* [rec_hdr][key][data][padding] */
-
-/**
- * Get record size possibly 8-byte aligned
- */
-static inline struct aura_db_rec_len a_get_db_record_len(size_t key_len, size_t data_len) {
-    struct aura_db_rec_len len;
-
-    len.raw_len = sizeof(struct aura_db_rec_hdr) + key_len + data_len;
-    len.aligned_len = A_ALIGN(len.raw_len, sizeof(void *));
-    return len;
-}
-
 /** Create or open a database */
 AURA_DBHANDLE aura_db_open(const char *, const char *, int, ...);
 
@@ -118,7 +75,13 @@ int aura_db_fetch_record(AURA_DBHANDLE db, uint16_t namespace, struct aura_iovec
 /** Delete a record */
 int aura_db_delete_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id, struct aura_iovec *key);
 
-/* Dump record header */
-void aura_db_dump_rec_header(struct aura_db_rec_hdr *hdr);
+/* Get database true size */
+size_t aura_db_get_size(AURA_DBHANDLE db);
+
+/* Scan database file and print all records */
+void aura_db_scan(AURA_DBHANDLE db);
+
+/* Scan wal file and print all records */
+void aura_db_wal_scan(AURA_DBHANDLE _db);
 
 #endif /* AURA_DB_H */

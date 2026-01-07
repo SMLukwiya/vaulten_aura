@@ -14,17 +14,19 @@
 #include <sys/uio.h> /* struct iovec */
 #include <unistd.h>
 
+/* DB header structure */
 struct aura_db_hdr {
-    u_int32_t magic;
-    u_int16_t version;
-    u_int16_t flags;
-    u_int64_t created_ts;
-    u_int64_t last_compact_ts;
-    u_int32_t hash_algo;
+    uint32_t magic;
+    uint16_t version;
+    uint16_t flags;
+    uint64_t created_ts;
+    uint64_t last_compact_ts;
+    uint32_t hash_algo;
+    uint32_t bucket_cnt;
     off_t bucket_off;
-    u_int32_t bucket_cnt;
     off_t record_off;
-    u_int64_t file_size;
+    uint64_t file_size;
+    uint64_t wasted_bytes; /* total deleted records in the db */
 };
 
 #define A_DB_MAGIC 0x5D5D5D5D
@@ -35,13 +37,42 @@ struct aura_db_hdr {
 #define A_DB_REC_BUF_SIZE (32 * 1024) /* 32KB */
 #define A_DB_VERSION 0x10000U
 
-/* Dump database header */
-void aura_db_dump_db_header(struct aura_db_hdr *hdr);
-
 /**
  * @todo: can I mmap the entire db file?
  * Point to it from DB_HANDLE perhaps!
  */
+
+/* Record len structure */
+struct aura_db_rec_len {
+    size_t raw_len;     /* Exact record length not aligned */
+    size_t aligned_len; /* Record len aligned */
+};
+
+/* record header structure */
+struct aura_db_rec_hdr {
+    uint32_t magic;
+    uint32_t version;
+    uint16_t ns; /* namespace */
+    uint16_t schema_id;
+    uint16_t flags;
+    struct aura_db_rec_len rec_len;
+    uint32_t key_len;
+    uint32_t data_len;
+    uint64_t timestamp;
+    uint64_t prev_off; /* link for bucket chain */
+    char check_sum[DIGEST_LEN];
+}; /* [key][data][padding] */
+
+/* Bucket offset entry */
+struct aura_db_bucket_entry {
+    _Atomic off_t head_off; /* offset of newest record */
+};
+
+struct aura_db_wal_rec_hdr {
+    uint32_t magic;
+    uint16_t op;
+    uint64_t rec_len;
+}; /* [rec_hdr][key][data][padding] */
 
 /*
  * Library's private representation of the database.
@@ -53,19 +84,16 @@ typedef struct {
     struct aura_db_hdr db_hdr;            /* database header */
     struct aura_db_bucket_entry *buckets; /* hash buckets */
     void *record_buf;                     /* In memory record buffer */
+    size_t record_buf_size;               /* Size of record buffer */
     off_t append_off;                     /* In memory append offset */
     size_t curr_file_size;                /* Current main db file size (updated on every wal replay) */
     pthread_mutex_t db_lock;              /* Memory lock for in memory structure */
-    u_int32_t cnt_delok;                  /* delete OK */
-    u_int32_t cnt_delerr;                 /* delete error */
-    u_int32_t cnt_fetchok;                /* fetch OK */
-    u_int32_t cnt_fetcherr;               /* fetch error */
-    u_int32_t cnt_nextrec;                /* nextrec */
-    u_int32_t cnt_stor1;                  /* store: DB_INSERT, no empty, appended */
-    u_int32_t cnt_stor2;                  /* store: DB_INSERT, found empty, reused */
-    u_int32_t cnt_stor3;                  /* store: DB_REPLACE, diff len, appended */
-    u_int32_t cnt_stor4;                  /* store: DB_REPLACE, same len, overwrote */
-    u_int32_t cnt_storerr;                /* store error */
+    uint32_t cnt_del_ok;                  /* delete OK */
+    uint32_t cnt_del_err;                 /* delete error */
+    uint32_t cnt_fetch_ok;                /* fetch OK */
+    uint32_t cnt_fetch_err;               /* fetch error */
+    uint32_t cnt_stor_ok;                 /* store OK */
+    uint32_t cnt_stor_err;                /* store error */
 } AURA_DB;
 
 typedef enum {
@@ -81,7 +109,24 @@ static void a_db_free(AURA_DB *);
 static off_t a_db_wal_commit(int wal_fd, int wal_op, struct aura_db_rec_hdr *hdr,
                              struct aura_iovec *key, struct aura_iovec *data);
 static int a_db_wal_replay(AURA_DB *);
-static void aura_db_dump_wal_header(struct aura_db_wal_rec_hdr *hdr);
+static int a_db_compact(AURA_DB *db);
+/* Dump database header */
+void aura_db_dump_db_header(struct aura_db_hdr *hdr);
+/* Print wal record header */
+static void a_db_dump_wal_header(struct aura_db_wal_rec_hdr *hdr);
+/* Print record header */
+void a_db_dump_rec_header(struct aura_db_rec_hdr *hdr);
+
+/**
+ * Get record size possibly 8-byte aligned
+ */
+static inline struct aura_db_rec_len a_get_db_record_len(size_t key_len, size_t data_len) {
+    struct aura_db_rec_len len;
+
+    len.raw_len = sizeof(struct aura_db_rec_hdr) + key_len + data_len;
+    len.aligned_len = A_ALIGN(len.raw_len, sizeof(void *));
+    return len;
+}
 
 /* Calculate key hash */
 static inline uint32_t a_fnv1a_hash(uint32_t bucket_cnt, uint16_t namespace, struct aura_iovec *key) {
@@ -125,6 +170,7 @@ static AURA_DB *a_db_alloc(int namelen) {
     db->record_buf = malloc(A_DB_REC_BUF_SIZE);
     if (!db->record_buf)
         goto exception;
+    db->record_buf_size = A_DB_REC_BUF_SIZE;
     memset(db->record_buf, 0, A_DB_REC_BUF_SIZE);
 
     bucket_arr_size = sizeof(struct aura_db_bucket_entry) * A_DB_BUCKET_CNT;
@@ -142,6 +188,9 @@ exception:
 static inline ssize_t a_db_meta_write(AURA_DB *db) {
     struct iovec iov[2];
 
+    if (lseek(db->db_fd, 0, SEEK_SET) < 0)
+        return -1;
+
     iov[0].iov_base = &db->db_hdr;
     iov[0].iov_len = sizeof(struct aura_db_hdr);
     iov[1].iov_base = db->buckets;
@@ -153,6 +202,9 @@ static inline ssize_t a_db_meta_write(AURA_DB *db) {
 /* Read db meta data */
 static inline ssize_t a_db_meta_read(AURA_DB *db) {
     struct iovec iov[2];
+
+    if (lseek(db->db_fd, 0, SEEK_SET) < 0)
+        return -1;
 
     iov[0].iov_base = &db->db_hdr;
     iov[0].iov_len = sizeof(struct aura_db_hdr);
@@ -193,7 +245,6 @@ AURA_DBHANDLE aura_db_open(const char *app_path, const char *db_pathname, int of
     DIR *dp;
     int db_namelen, mode, dir_fd;
     size_t i, bucket_arr_size;
-    ssize_t res;
     struct stat statbuf;
 
     /* Allocate a DB structure, and the buffers it needs. */
@@ -260,30 +311,26 @@ AURA_DBHANDLE aura_db_open(const char *app_path, const char *db_pathname, int of
             /* Store current file size */
             db->curr_file_size = db->db_hdr.file_size;
 
-            res = a_db_meta_write(db);
-            if (res < 0)
+            if (a_db_meta_write(db) < 0)
                 sys_exit(true, errno, "db_open: db file init write error");
         }
         if (a_unlock(db->db_fd, 0, SEEK_SET, 0) < 0)
             sys_exit(true, errno, "db_open: un_lock error");
     } else {
         /* read db hdr and buckets into their buffers */
-        res = lseek(db->db_fd, 0, SEEK_SET);
-        if (res < 0)
+        if (lseek(db->db_fd, 0, SEEK_SET) < 0)
             goto exception;
 
         if (a_writew_lock(db->db_fd, 0, SEEK_SET, 0) < 0)
             sys_exit(true, errno, "db_open: a_readw_lock error");
 
-        /* wal replay */
-        res = a_db_wal_replay(db);
-        if (res != 0) {
+        /* wal replay incase of a crash */
+        if (a_db_wal_replay(db) != 0) {
             /** @todo: Proceed on replay error: Should I? */
             sys_debug(true, errno, "aura_db_open: a_db_wal_replay error:");
         }
 
-        res = a_db_meta_read(db);
-        if (res < 0)
+        if (a_db_meta_read(db) < 0)
             goto exception;
         /* Store current file size */
         db->curr_file_size = db->db_hdr.file_size;
@@ -309,9 +356,9 @@ exception:
 static void a_db_free(AURA_DB *db) {
     if (db->db_fd >= 0)
         close(db->db_fd);
-
     if (db->wal_fd >= 0)
         close(db->wal_fd);
+
     if (db->name != NULL)
         free(db->name);
     if (db->buckets)
@@ -329,19 +376,7 @@ void aura_db_close(AURA_DBHANDLE _db) {
 
     db = (AURA_DB *)_db;
     a_db_wal_replay(db);
-    a_db_free(db); /* closes fds, free buffers & struct */
-}
-
-/* Write header + bucket array back to db file */
-static inline ssize_t a_db_bucket_array_write(AURA_DB *db) {
-    ssize_t res;
-
-    res = lseek(db->db_fd, 0, SEEK_SET);
-    if (res < 0)
-        return -1;
-
-    res = a_db_meta_write(db);
-    return res;
+    a_db_free(db);
 }
 
 static inline int a_db_append_record(int fd, struct aura_db_rec_hdr *rec_hdr, void *key, void *data,
@@ -358,15 +393,6 @@ static inline int a_db_append_record(int fd, struct aura_db_rec_hdr *rec_hdr, vo
     iov[1].iov_len = rec_hdr->key_len;
     iov[2].iov_base = (void *)data;
     iov[2].iov_len = rec_hdr->data_len;
-
-    char k[512];
-    // snprintf(k, iov[1].iov_len + 1, "%s", (char *)iov[1].iov_base);
-    snprintf(k, rec_hdr->key_len + 1, "%s", (char *)key);
-    app_debug(true, 0, "APPEND RECORD KEY --> : %s", k);
-
-    // snprintf(k, iov[2].iov_len + 1, "%s", (char *)iov[2].iov_base);
-    snprintf(k, rec_hdr->data_len + 1, "%s", (char *)data);
-    app_debug(true, 0, "APPEND RECORD DATA --> : %s", k);
 
     pad_len = rec_hdr->rec_len.aligned_len - rec_hdr->rec_len.raw_len;
     char pad[pad_len];
@@ -407,7 +433,6 @@ static inline struct aura_db_rec_hdr *a_db_record_cache_fetch(AURA_DB *db, uint1
         cache_offset = offset - db->curr_file_size;
         hdr = db->record_buf + cache_offset;
 
-        aura_db_dump_rec_header(hdr);
         if (hdr->magic != A_DB_REC_MAGIC)
             break;
 
@@ -427,24 +452,17 @@ static inline struct aura_db_rec_hdr *a_db_record_cache_fetch(AURA_DB *db, uint1
 
 static inline off_t a_db_record_cache_append(AURA_DB *db, struct aura_db_rec_hdr *hdr,
                                              struct aura_iovec *key, struct aura_iovec *data, uint32_t hash) {
-    int record_len, res;
     off_t new_append_off;
-    size_t db_file_size;
     off_t file_offset; /* actual offset in the main db file */
-
-    record_len = sizeof(*hdr) + key->len;
-    if (data)
-        record_len += data->len;
 
     pthread_mutex_lock(&db->db_lock);
 
     /* actual file offset given by current main db file size + in memory offset */
     file_offset = db->curr_file_size + db->append_off;
-    new_append_off = db->append_off + record_len;
-    if (new_append_off > A_DB_REC_BUF_SIZE || record_len > A_DB_REC_BUF_SIZE) {
+    new_append_off = db->append_off + hdr->rec_len.aligned_len;
+    if (new_append_off > db->record_buf_size || hdr->rec_len.aligned_len > db->record_buf_size) {
         /* Use these opportunities to flush to db file */
-        res = a_db_wal_replay(db);
-        if (res != 0) {
+        if (a_db_wal_replay(db) != 0) {
             pthread_mutex_unlock(&db->db_lock);
             return -1;
         }
@@ -452,20 +470,22 @@ static inline off_t a_db_record_cache_append(AURA_DB *db, struct aura_db_rec_hdr
         /* update new current db file size */
         db->curr_file_size = db->db_hdr.file_size;
         /** new record fits in cache, so we clear cache and start filling again */
-        if (new_append_off > A_DB_REC_BUF_SIZE && record_len <= A_DB_REC_BUF_SIZE) {
-            memset(db->record_buf, 0, A_DB_REC_BUF_SIZE);
-            memcpy(db->record_buf, hdr, sizeof(*hdr));
-            memcpy(db->record_buf + sizeof(*hdr), key->base, hdr->key_len);
+        char *write_ptr = (char *)db->record_buf;
+        if (new_append_off > db->record_buf_size && hdr->rec_len.aligned_len <= db->record_buf_size) {
+            memset(db->record_buf, 0, db->record_buf_size);
+            memcpy(write_ptr, hdr, sizeof(*hdr));
+            memcpy(write_ptr + sizeof(*hdr), key->base, hdr->key_len);
             if (data)
-                memcpy(&db->record_buf + sizeof(*hdr) + hdr->key_len, data->base, data->len);
+                memcpy(write_ptr + sizeof(*hdr) + hdr->key_len, data->base, data->len);
             db->append_off = new_append_off;
         }
 
     } else {
-        memcpy(db->record_buf + db->append_off, hdr, sizeof(*hdr));
-        memcpy(db->record_buf + db->append_off + sizeof(*hdr), key->base, hdr->key_len);
+        char *write_ptr = (char *)db->record_buf + db->append_off;
+        memcpy(write_ptr, hdr, sizeof(*hdr));
+        memcpy(write_ptr + sizeof(*hdr), key->base, hdr->key_len);
         if (data)
-            memcpy(db->record_buf + db->append_off + sizeof(*hdr) + hdr->key_len, data->base, data->len);
+            memcpy(write_ptr + sizeof(*hdr) + hdr->key_len, data->base, data->len);
         db->append_off = new_append_off;
     }
 
@@ -480,12 +500,9 @@ int aura_db_put_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id
                        struct aura_iovec *key, struct aura_iovec *data) {
     struct aura_db_rec_hdr *rec_hdr;
     uint32_t hash, old_head;
-    off_t offset;
     char *rec_hdr_buf[sizeof(*rec_hdr)];
     struct aura_iovec data_checksum;
-    ssize_t res;
     AURA_DB *db;
-    size_t db_file_size;
 
     db = (AURA_DB *)_db;
     hash = a_fnv1a_hash(db->db_hdr.bucket_cnt, namespace, key);
@@ -510,13 +527,11 @@ int aura_db_put_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id
     rec_hdr->data_len = data->len;
     memcpy(rec_hdr->check_sum, data_checksum.base, DIGEST_LEN);
 
-    offset = a_db_wal_commit(db->wal_fd, A_WAL_PUT, rec_hdr, key, data);
-    if (offset < 0)
+    if (a_db_wal_commit(db->wal_fd, A_WAL_PUT, rec_hdr, key, data) < 0)
         return -1;
 
     /* update in memory */
-    res = a_db_record_cache_append(db, rec_hdr, key, data, hash);
-    if (res < 0)
+    if (a_db_record_cache_append(db, rec_hdr, key, data, hash) < 0)
         return -1;
 
     return 0;
@@ -555,7 +570,6 @@ bool aura_db_record_exists(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schem
         if (res < 0)
             goto exception;
 
-        aura_db_dump_rec_header(&rec_hdr);
         if (rec_hdr.magic != A_DB_REC_MAGIC)
             break;
 
@@ -594,20 +608,27 @@ int aura_db_fetch_record(AURA_DBHANDLE _db, uint16_t namespace, struct aura_iove
     offset = db->buckets[hash].head_off;
 
     record = NULL;
+    data_out->base = NULL;
+    data_out->len = 0;
     /* Value possible in cache */
-    if (offset - db->curr_file_size < db->append_off) {
+    if (offset >= db->curr_file_size) {
         hdr = a_db_record_cache_fetch(db, namespace, key, offset, hash);
         if (hdr) {
             if (hdr->flags & A_DB_REC_TOMBSTONE)
                 return A_DB_REC_NOT_FOUND;
 
-            record = malloc(hdr->data_len);
+            record = calloc(1, hdr->data_len);
             if (!record)
                 goto exception;
-            memcpy(record, hdr + sizeof(*hdr) + hdr->key_len, hdr->data_len);
+            memcpy(record, (char *)hdr + sizeof(*hdr) + hdr->key_len, hdr->data_len);
+            data_out->base = record;
+            data_out->len = hdr->data_len;
             return 0;
         }
     }
+
+    if (a_readw_lock(db->db_fd, 0, SEEK_SET, 0) < 0)
+        sys_exit(true, errno, "aura_db_fetch_record: a_readw_lock error:");
 
     while (offset != 0) {
         res = pread(db->db_fd, &rec_hdr, sizeof(rec_hdr), offset);
@@ -627,7 +648,7 @@ int aura_db_fetch_record(AURA_DBHANDLE _db, uint16_t namespace, struct aura_iove
                 if (rec_hdr.flags & A_DB_REC_TOMBSTONE)
                     return A_DB_REC_NOT_FOUND;
 
-                record = malloc(rec_hdr.data_len);
+                record = calloc(1, rec_hdr.data_len);
                 if (!record)
                     goto exception;
 
@@ -649,6 +670,9 @@ int aura_db_fetch_record(AURA_DBHANDLE _db, uint16_t namespace, struct aura_iove
 
         offset = rec_hdr.prev_off;
     }
+
+    if (a_unlock(db->db_fd, 0, SEEK_SET, 0) < 0)
+        sys_exit(true, errno, "aura_db_fetch_record: a_unlock error:");
 
     if (record)
         aura_db_record_free(record);
@@ -672,6 +696,7 @@ int aura_db_delete_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema
     hash = a_fnv1a_hash(db->db_hdr.bucket_cnt, namespace, key);
     old_head = db->buckets[hash].head_off;
 
+    memset(&rec_hdr, 0, sizeof(rec_hdr));
     rec_hdr.magic = A_DB_REC_MAGIC;
     rec_hdr.ns = namespace;
     rec_hdr.schema_id = schema_id;
@@ -690,6 +715,10 @@ int aura_db_delete_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema
     if (res < 0)
         return -1;
 
+    pthread_mutex_lock(&db->db_lock);
+    db->db_hdr.wasted_bytes += rec_hdr.rec_len.aligned_len;
+    pthread_mutex_unlock(&db->db_lock);
+
     return 0;
 }
 
@@ -697,6 +726,7 @@ int aura_db_delete_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema
  * Construct buckets array from records.
  * This is done after compacting the database
  * inorder to restore correct database metadata
+ * @todo: not used
  */
 static void a_db_buckets_rebuild(AURA_DB *db) {
     off_t offset;
@@ -731,6 +761,7 @@ static void a_db_buckets_rebuild(AURA_DB *db) {
     }
 }
 
+/* Append to WAL file */
 static inline off_t a_db_wal_append(int wal_fd, struct aura_db_wal_rec_hdr *wal_hdr, struct aura_db_rec_hdr *rec_hdr, struct aura_iovec *key, struct aura_iovec *data) {
     off_t offset;
     struct iovec iov[5];
@@ -775,9 +806,7 @@ static inline off_t a_db_wal_append(int wal_fd, struct aura_db_wal_rec_hdr *wal_
     return offset;
 }
 
-/**
- * Write operation to WAL file
- */
+/** Write operation to WAL file */
 static off_t a_db_wal_commit(int wal_fd, int wal_op, struct aura_db_rec_hdr *rec_hdr,
                              struct aura_iovec *key, struct aura_iovec *data) {
     struct aura_db_wal_rec_hdr wal_hdr;
@@ -785,7 +814,7 @@ static off_t a_db_wal_commit(int wal_fd, int wal_op, struct aura_db_rec_hdr *rec
 
     wal_hdr.magic = A_DB_WAL_MAGIC;
     wal_hdr.op = wal_op;
-    wal_hdr.rec_len = rec_hdr->rec_len.aligned_len;
+    wal_hdr.rec_len = rec_hdr->rec_len.aligned_len + sizeof(wal_hdr);
 
     offset = a_db_wal_append(wal_fd, &wal_hdr, rec_hdr, key, data);
     return offset;
@@ -800,6 +829,7 @@ static int a_db_wal_replay(AURA_DB *db) {
     struct aura_db_rec_hdr *rec_hdr;
     off_t read_offset, write_offset;
     ssize_t res;
+    size_t record_len;
     struct stat statbuf;
     char key_buf[4096], *record_buf;
     int ok;
@@ -825,7 +855,7 @@ static int a_db_wal_replay(AURA_DB *db) {
         if (res == 0) {
             /* EOF */
             ftruncate(db->wal_fd, 0);
-            return 0;
+            return a_db_meta_write(db);
         }
 
         if (res != sizeof(wal_hdr))
@@ -834,27 +864,27 @@ static int a_db_wal_replay(AURA_DB *db) {
         if (wal_hdr.magic != A_DB_WAL_MAGIC)
             break;
 
-        record_buf = malloc(wal_hdr.rec_len);
+        record_len = wal_hdr.rec_len - sizeof(wal_hdr);
+        record_buf = malloc(record_len);
         if (!record_buf)
             return -1;
 
-        res = pread(db->wal_fd, record_buf, wal_hdr.rec_len, read_offset + sizeof(wal_hdr));
-        if (res != wal_hdr.rec_len)
+        res = pread(db->wal_fd, record_buf, record_len, read_offset + sizeof(wal_hdr));
+        if (res != record_len)
             break;
 
+        rec_hdr = (struct aura_db_rec_hdr *)record_buf;
         if (wal_hdr.op == A_WAL_PUT) {
-            rec_hdr = (struct aura_db_rec_hdr *)record_buf;
-
             write_offset = a_db_append_record(
               db->db_fd, rec_hdr,
-              (const void *)((char *)rec_hdr + sizeof(*rec_hdr)),
-              (const void *)((char *)rec_hdr + sizeof(*rec_hdr) + rec_hdr->key_len),
+              (void *)((char *)rec_hdr + sizeof(*rec_hdr)),
+              (void *)((char *)rec_hdr + sizeof(*rec_hdr) + rec_hdr->key_len),
               &rec_hdr->rec_len, 0);
 
         } else if (wal_hdr.op == A_WAL_DEL) {
             write_offset = a_db_append_record(
               db->db_fd, rec_hdr,
-              (const void *)((char *)rec_hdr + sizeof(*rec_hdr)),
+              (void *)((char *)rec_hdr + sizeof(*rec_hdr)),
               NULL,
               &rec_hdr->rec_len, 0);
         }
@@ -864,8 +894,7 @@ static int a_db_wal_replay(AURA_DB *db) {
         read_offset += wal_hdr.rec_len;
     }
 
-    res = a_db_bucket_array_write(db);
-    if (res < 0)
+    if (a_db_meta_write(db) < 0)
         return -1;
 
     /** @todo: Truncates wal file on error also: Must I? */
@@ -876,8 +905,11 @@ static int a_db_wal_replay(AURA_DB *db) {
     return -1;
 }
 
+/* Compaction table structure */
 struct aura_db_compact_table {
     char *key_buf;
+    void *record_buf;
+    size_t record_buf_size;
     size_t key_off;
     uint32_t cnt;
     size_t cap;
@@ -895,140 +927,228 @@ static inline void a_db_compact_table_append(struct aura_db_compact_table *comp_
     }
 
     comp_tab_entry_len = sizeof(size_t) + hdr->key_len; /* key_len + key_string */
-    snprintf(comp_tab->key_buf + comp_tab->key_off, comp_tab_entry_len, "%u%s", hdr->key_len, key);
+    snprintf(comp_tab->key_buf + comp_tab->key_off, sizeof(size_t) + 1, "%u", hdr->key_len);
+    strcat(comp_tab->key_buf + comp_tab->key_off + sizeof(size_t), key);
+
     comp_tab->key_off += comp_tab_entry_len;
     comp_tab->cnt++;
 }
 
 /**
  * Compact database and prune deleted records
- * @todo: improve!!
  */
 static int a_db_compact(AURA_DB *db) {
     struct aura_db_rec_hdr rec_hdr;
-    off_t read_off, write_off;
     struct aura_db_compact_table comp_tab;
-    ssize_t res;
+    struct aura_iovec key;
+    struct aura_db_bucket_entry *new_hash_table;
+    struct aura_db_hdr new_hdr;
     size_t comp_tab_entry_len, key_len, new_file_size, bucket_arr_size;
-    char buf[4096], *data_buf;
+    char key_buf[4096], *data_buf;
+    off_t read_off, write_off, old_off;
     bool record_deleted;
-    off_t offset;
-    char compact_file_path[256], *ptr;
+    ssize_t res;
     int new_fd;
 
     comp_tab.key_buf = malloc(65536); /* 64KB */
     comp_tab.cnt = comp_tab.key_off = 0;
     comp_tab.cap = 65536;
     read_off = db->db_hdr.record_off;
-    write_off = 0;
+
+    old_off = 0;
+    data_buf = NULL;
     bucket_arr_size = sizeof(struct aura_db_bucket_entry) * A_DB_BUCKET_CNT;
     new_file_size = sizeof(struct aura_db_hdr) + bucket_arr_size;
 
     /* Construct compact_file_path */
+    char compact_file_path[256], *ptr;
     size_t len;
     ptr = strrchr(db->name, '/');
     len = ptr - db->name + 2;
     snprintf(compact_file_path, len, "%s", db->name);
     strcat(compact_file_path, AURA_DB_COMPACT_FILE);
-    new_fd = open(compact_file_path, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
-    if (new_fd < 0)
+    app_debug(true, 0, "COMPACT FILE: %s", compact_file_path);
+    new_fd = open(compact_file_path, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU, A_DB_FILE_MODE);
+    if (new_fd < 0) {
+        free(comp_tab.key_buf);
         return -1;
+    }
 
-    if (a_writew_lock(db->db_fd, 0, SEEK_SET, 0) < 0)
-        sys_exit(true, errno, "a_db_compact: a_writew_lock:");
+    /* Initialize new hash table */
+    new_hash_table = malloc(db->db_hdr.bucket_cnt * sizeof(struct aura_db_bucket_entry));
+    if (!new_hash_table) {
+        free(comp_tab.key_buf);
+        close(new_fd);
+        return -1;
+    }
 
-    while (read_off < db->db_hdr.file_size) {
-        res = pread(db->db_fd, &rec_hdr, sizeof(rec_hdr), read_off);
-        if (res != sizeof(rec_hdr))
-            goto err_out_fd;
+    if (a_readw_lock(db->db_fd, 0, SEEK_SET, 0) < 0)
+        sys_exit(true, errno, "a_db_compact: a_readw_lock:");
 
-        res = pread(db->db_fd, buf, rec_hdr.key_len, read_off + sizeof(rec_hdr));
-        if (res != rec_hdr.key_len)
-            goto err_out_fd;
+    /* Loop for each hash table bucket */
+    for (int i = 0; i < db->db_hdr.bucket_cnt; ++i) {
+        int v = 0;
+        read_off = db->buckets[i].head_off;
 
-        if (rec_hdr.flags & A_DB_REC_TOMBSTONE) {
-            /* Record deleted record in compaction table */
-            a_db_compact_table_append(&comp_tab, &rec_hdr, buf);
-            read_off += rec_hdr.rec_len.aligned_len;
-            continue;
-        }
-
-        /* Search compaction table if this record was deleted */
-        record_deleted = false;
-        for (int i = 0, key_off = 0; i < comp_tab.cnt; ++i) {
-            aura_scan_str(comp_tab.key_buf + key_off, "%lu", &key_len);
-            if (aura_mem_is_eq(buf, rec_hdr.key_len, &comp_tab.key_buf[sizeof(size_t) + key_off], key_len)) {
-                record_deleted = true;
-                break;
-            }
-            key_off += sizeof(size_t) + key_len;
-        }
-
-        if (record_deleted) {
-            /* Skip */
-            read_off += rec_hdr.rec_len.aligned_len;
-            continue;
-        } else {
-            /* Append to new db file */
-            data_buf = malloc(rec_hdr.data_len);
-            if (!data_buf)
+        while (read_off > 0) {
+            res = pread(db->db_fd, &rec_hdr, sizeof(rec_hdr), read_off);
+            if (res != sizeof(rec_hdr))
                 goto err_out_fd;
 
-            res = pread(db->db_fd, data_buf, rec_hdr.data_len, read_off + sizeof(rec_hdr) + rec_hdr.key_len);
-            if (res != rec_hdr.data_len) {
-                free(data_buf);
+            res = pread(db->db_fd, key_buf, rec_hdr.key_len, read_off + sizeof(rec_hdr));
+            if (res != rec_hdr.key_len)
                 goto err_out_fd;
+
+            if (rec_hdr.flags & A_DB_REC_TOMBSTONE) {
+                /* Record deleted record in compaction table */
+                a_db_compact_table_append(&comp_tab, &rec_hdr, key_buf);
+                read_off = rec_hdr.prev_off;
+                continue;
             }
 
-            write_off = a_db_append_record(
-              new_fd, &rec_hdr,
-              (const void *)buf,
-              (const void *)data_buf,
-              &rec_hdr.rec_len,
-              0);
-
-            if (offset < 0) {
-                free(data_buf);
-                goto err_out_fd;
+            /* Search compaction table if this record was deleted */
+            record_deleted = false;
+            for (int i = 0, key_off = 0; i < comp_tab.cnt; ++i) {
+                aura_scan_str(comp_tab.key_buf + key_off, "%lu", &key_len);
+                if (aura_mem_is_eq(key_buf, rec_hdr.key_len, comp_tab.key_buf + key_off + sizeof(size_t), key_len)) {
+                    record_deleted = true;
+                    break;
+                }
+                key_off += sizeof(size_t) + key_len;
             }
 
-            read_off += rec_hdr.rec_len.aligned_len;
-            new_file_size += rec_hdr.rec_len.aligned_len;
+            if (record_deleted) {
+                /* Skip */
+                read_off = rec_hdr.prev_off;
+                continue;
+            } else {
+                /* Append to new db file */
+                data_buf = realloc(data_buf, rec_hdr.data_len);
+                if (!data_buf)
+                    goto err_out_fd;
+
+                a_db_dump_rec_header(&rec_hdr);
+                res = pread(db->db_fd, data_buf, rec_hdr.data_len, read_off + sizeof(rec_hdr) + rec_hdr.key_len);
+                if (res != rec_hdr.data_len) {
+                    free(data_buf);
+                    goto err_out_fd;
+                }
+
+                uint32_t hash;
+                key.base = key_buf;
+                key.len = rec_hdr.key_len;
+                hash = a_fnv1a_hash(db->db_hdr.bucket_cnt, rec_hdr.ns, &key);
+
+                write_off = a_db_append_record(
+                  new_fd, &rec_hdr,
+                  (void *)key_buf,
+                  (void *)data_buf,
+                  &rec_hdr.rec_len,
+                  write_off < db->db_hdr.record_off ? db->db_hdr.record_off : write_off);
+
+                if (write_off < 0) {
+                    free(data_buf);
+                    goto err_out_fd;
+                }
+
+                new_hash_table[hash].head_off = write_off;
+                read_off = rec_hdr.prev_off;
+                /* update records offsets for this file */
+                rec_hdr.prev_off = old_off;
+                old_off = write_off;
+                new_file_size += rec_hdr.rec_len.aligned_len;
+                v = 1;
+            }
         }
     }
 
-    /* Copy updated records back to original file */
-    a_db_rewind(new_fd);
-    if (lseek(db->db_fd, db->db_hdr.record_off, SEEK_SET) < 0)
-        sys_exit(true, errno, "a_db_compact: a_writew_lock:");
+    memcpy(&new_hdr, &db->db_hdr, sizeof(new_hdr));
+    new_hdr.file_size = new_file_size;
+    new_hdr.last_compact_ts = aura_now_ms();
 
-    ssize_t bytes_read, bytes_written;
-    do {
-        bytes_read = aura_read_n(new_fd, buf, sizeof(buf));
-        bytes_written = aura_write_n(db->db_fd, buf, bytes_read);
-    } while (bytes_read > 0 && bytes_written > 0);
+    struct iovec iov[2];
+    int old_fd;
 
-    /* Rebuild bucket array */
-    __atomic_store_n(&db->db_hdr.file_size, new_file_size, __ATOMIC_RELEASE);
-    a_db_buckets_rebuild(db);
-    res = a_db_meta_write(db);
-    if (res < 0) {
-        free(data_buf);
-        goto err_out_fd;
-    }
+    /* Write new db meta */
+    if (lseek(new_fd, 0, SEEK_SET) < 0)
+        sys_exit(true, errno, "a_db_compact: lseek");
 
-    if (a_writew_lock(db->db_fd, 0, SEEK_SET, 0) < 0)
-        sys_exit(true, errno, "a_db_compact: a_writew_lock:");
+    iov[0].iov_base = &new_hdr;
+    iov[0].iov_len = sizeof(struct aura_db_hdr);
+    iov[1].iov_base = new_hash_table;
+    iov[1].iov_len = db->db_hdr.bucket_cnt * sizeof(struct aura_db_bucket_entry);
 
-    close(new_fd);
+    if (lseek(new_fd, 0, SEEK_SET) < 0)
+        sys_exit(true, errno, "a_db_compact: lseek");
+
+    if (writev(new_fd, iov, 2) < 0)
+        sys_exit(true, errno, "a_db_compact: writev");
+    fsync(new_fd);
+
+    old_fd = db->db_fd;
+    pthread_mutex_lock(&db->db_lock);
+    db->db_fd = new_fd;
+    db->db_hdr.file_size = new_file_size;
+    db->db_hdr.last_compact_ts = aura_now_ms();
+    db->buckets = new_hash_table;
+    /* Reset the cache for now */
+    memset(db->record_buf, 0, db->record_buf_size);
+    pthread_mutex_unlock(&db->db_lock);
+
+    /* Remove new file and rename olf file */
+    close(old_fd);
+    unlink(db->name);
+    res = rename(compact_file_path, db->name);
+
+    if (a_unlock(db->db_fd, 0, SEEK_SET, 0) < 0)
+        sys_exit(true, errno, "a_db_compact: a_unlock:");
+
+    free(comp_tab.key_buf);
+    free(data_buf);
     return 0;
 
 err_out_fd:
-    if (a_writew_lock(db->db_fd, 0, SEEK_SET, 0) < 0)
+    if (a_unlock(db->db_fd, 0, SEEK_SET, 0) < 0)
         sys_exit(true, errno, "a_db_compact: a_writew_lock:");
 
+    free(comp_tab.key_buf);
+    free(new_hash_table);
     close(new_fd);
     return -1;
+}
+
+/* used in testing to manually trigger replay */
+int aura_db_force_wal_replay(AURA_DBHANDLE _db) {
+    AURA_DB *db;
+
+    db = (AURA_DB *)_db;
+    a_db_wal_replay(db);
+    return 0;
+}
+/* used in testing to manually trigger compaction */
+int aura_db_force_compact(AURA_DBHANDLE db) {
+    a_db_compact(db);
+    return 0;
+}
+
+/* Clear in memory cache */
+int aura_db_clear_record_cache(AURA_DBHANDLE _db) {
+    AURA_DB *db;
+
+    db = (AURA_DB *)_db;
+    pthread_mutex_lock(&db->db_lock);
+    memset(db->record_buf, 0, db->record_buf_size);
+    pthread_mutex_unlock(&db->db_lock);
+
+    return 0;
+}
+
+/**/
+size_t aura_db_get_size(AURA_DBHANDLE _db) {
+    AURA_DB *db;
+
+    db = (AURA_DB *)_db;
+    return db->db_hdr.file_size;
 }
 
 void aura_db_dump_db_header(struct aura_db_hdr *hdr) {
@@ -1044,7 +1164,7 @@ void aura_db_dump_db_header(struct aura_db_hdr *hdr) {
     app_debug(true, 0, "    Last compaction at: %zu", hdr->last_compact_ts);
 }
 
-void aura_db_dump_rec_header(struct aura_db_rec_hdr *hdr) {
+void a_db_dump_rec_header(struct aura_db_rec_hdr *hdr) {
     app_debug(true, 0, "AURA DB RECORD HEADER");
     app_debug(true, 0, "    Magic: %x", hdr->magic);
     app_debug(true, 0, "    Version: %zu", hdr->version);
@@ -1053,14 +1173,57 @@ void aura_db_dump_rec_header(struct aura_db_rec_hdr *hdr) {
     app_debug(true, 0, "    Flags: %zu", hdr->flags);
     app_debug(true, 0, "    Key len: %zu", hdr->key_len);
     app_debug(true, 0, "    Data len: %zu", hdr->data_len);
-    app_debug(true, 0, "    Record len: %zu", hdr->rec_len);
+    app_debug(true, 0, "    Record len: %zu", hdr->rec_len.aligned_len);
     app_debug(true, 0, "    Previous offset: %zu", hdr->prev_off);
     app_debug(true, 0, "    Timestamp: %zu", hdr->timestamp);
 }
 
-static void aura_db_dump_wal_header(struct aura_db_wal_rec_hdr *hdr) {
+static void a_db_dump_wal_header(struct aura_db_wal_rec_hdr *hdr) {
     app_debug(true, 0, "AURA DB WAL RECORD HEADER");
     app_debug(true, 0, "    Magic: %x", hdr->magic);
     app_debug(true, 0, "    Op: %u", hdr->op);
     app_debug(true, 0, "    Rec len: %zu", hdr->rec_len);
+}
+
+void aura_db_wal_scan(AURA_DBHANDLE _db) {
+    AURA_DB *db;
+    struct aura_db_wal_rec_hdr wal_hdr;
+    struct aura_db_rec_hdr rec_hdr;
+    off_t offset;
+    ssize_t res;
+
+    db = (AURA_DB *)_db;
+    offset = 0;
+
+    app_debug(true, 0, "wal DB file size: %zu", db->db_hdr.file_size);
+    while (true) {
+        app_debug(true, 0, "wal DB read offset: %zu", offset);
+        res = pread(db->wal_fd, &wal_hdr, sizeof(wal_hdr), offset);
+        if (res == 0)
+            break;
+        res = pread(db->wal_fd, &rec_hdr, sizeof(rec_hdr), offset + sizeof(wal_hdr));
+
+        a_db_dump_wal_header(&wal_hdr);
+        a_db_dump_rec_header(&rec_hdr);
+        offset += wal_hdr.rec_len;
+    }
+}
+
+void aura_db_scan(AURA_DBHANDLE _db) {
+    AURA_DB *db;
+    struct aura_db_rec_hdr rec_hdr;
+    off_t offset;
+    ssize_t res;
+
+    db = (AURA_DB *)_db;
+    offset = db->db_hdr.record_off;
+
+    app_debug(true, 0, "DB file size: %zu", db->db_hdr.file_size);
+    while (offset < db->db_hdr.file_size) {
+        app_debug(true, 0, "DB read offset: %zu", offset);
+        res = pread(db->db_fd, &rec_hdr, sizeof(rec_hdr), offset);
+
+        a_db_dump_rec_header(&rec_hdr);
+        offset += rec_hdr.rec_len.aligned_len;
+    }
 }
