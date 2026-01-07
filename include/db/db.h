@@ -84,4 +84,7 @@ void aura_db_scan(AURA_DBHANDLE db);
 /* Scan wal file and print all records */
 void aura_db_wal_scan(AURA_DBHANDLE _db);
 
+/* Launch database background tasks */
+int aura_db_start_bg_tasks(AURA_DBHANDLE db);
+
 #endif /* AURA_DB_H */

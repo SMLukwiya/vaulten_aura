@@ -88,6 +88,8 @@ typedef struct {
     off_t append_off;                     /* In memory append offset */
     size_t curr_file_size;                /* Current main db file size (updated on every wal replay) */
     pthread_mutex_t db_lock;              /* Memory lock for in memory structure */
+    pthread_cond_t db_cond;               /* DB conditional variable */
+    bool shutdown;                        /* Signal for db to shutdown */
     uint32_t cnt_del_ok;                  /* delete OK */
     uint32_t cnt_del_err;                 /* delete error */
     uint32_t cnt_fetch_ok;                /* fetch OK */
@@ -254,10 +256,13 @@ AURA_DBHANDLE aura_db_open(const char *app_path, const char *db_pathname, int of
         sys_exit(true, errno, "aura_db_open error");
     strcpy(db->name, db_pathname);
 
-    dp = NULL;
     if (pthread_mutex_init(&db->db_lock, NULL) != 0)
         goto exception;
 
+    if (pthread_cond_init(&db->db_cond, NULL) != 0)
+        goto exception;
+
+    dp = NULL;
     dp = opendir(app_path);
     if (!dp)
         sys_exit(true, errno, "aura_db_open: opendir");
@@ -281,6 +286,8 @@ AURA_DBHANDLE aura_db_open(const char *app_path, const char *db_pathname, int of
     db->wal_fd = a_db_file_open(dir_fd, AURA_DB_WAL_FILE, oflag, mode);
     if (db->wal_fd < 0)
         goto exception;
+
+    db->shutdown = false;
 
     if ((oflag & (O_CREAT | O_TRUNC)) == (O_CREAT | O_TRUNC)) {
         /*
@@ -375,6 +382,11 @@ void aura_db_close(AURA_DBHANDLE _db) {
     AURA_DB *db;
 
     db = (AURA_DB *)_db;
+    pthread_mutex_lock(&db->db_lock);
+    db->shutdown = true;
+    pthread_cond_signal(&db->db_cond);
+    pthread_mutex_unlock(&db->db_lock);
+
     a_db_wal_replay(db);
     a_db_free(db);
 }
@@ -854,6 +866,7 @@ static int a_db_wal_replay(AURA_DB *db) {
         res = pread(db->wal_fd, &wal_hdr, sizeof(wal_hdr), read_offset);
         if (res == 0) {
             /* EOF */
+            fsync(db->db_fd);
             ftruncate(db->wal_fd, 0);
             return a_db_meta_write(db);
         }
@@ -967,7 +980,6 @@ static int a_db_compact(AURA_DB *db) {
     len = ptr - db->name + 2;
     snprintf(compact_file_path, len, "%s", db->name);
     strcat(compact_file_path, AURA_DB_COMPACT_FILE);
-    app_debug(true, 0, "COMPACT FILE: %s", compact_file_path);
     new_fd = open(compact_file_path, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU, A_DB_FILE_MODE);
     if (new_fd < 0) {
         free(comp_tab.key_buf);
@@ -987,7 +999,6 @@ static int a_db_compact(AURA_DB *db) {
 
     /* Loop for each hash table bucket */
     for (int i = 0; i < db->db_hdr.bucket_cnt; ++i) {
-        int v = 0;
         read_off = db->buckets[i].head_off;
 
         while (read_off > 0) {
@@ -1000,7 +1011,7 @@ static int a_db_compact(AURA_DB *db) {
                 goto err_out_fd;
 
             if (rec_hdr.flags & A_DB_REC_TOMBSTONE) {
-                /* Record deleted record in compaction table */
+                /* Append deleted record in compaction table */
                 a_db_compact_table_append(&comp_tab, &rec_hdr, key_buf);
                 read_off = rec_hdr.prev_off;
                 continue;
@@ -1027,7 +1038,6 @@ static int a_db_compact(AURA_DB *db) {
                 if (!data_buf)
                     goto err_out_fd;
 
-                a_db_dump_rec_header(&rec_hdr);
                 res = pread(db->db_fd, data_buf, rec_hdr.data_len, read_off + sizeof(rec_hdr) + rec_hdr.key_len);
                 if (res != rec_hdr.data_len) {
                     free(data_buf);
@@ -1053,11 +1063,10 @@ static int a_db_compact(AURA_DB *db) {
 
                 new_hash_table[hash].head_off = write_off;
                 read_off = rec_hdr.prev_off;
-                /* update records offsets for this file */
+                /* update records offsets for this new db file */
                 rec_hdr.prev_off = old_off;
                 old_off = write_off;
                 new_file_size += rec_hdr.rec_len.aligned_len;
-                v = 1;
             }
         }
     }
@@ -1067,6 +1076,7 @@ static int a_db_compact(AURA_DB *db) {
     new_hdr.last_compact_ts = aura_now_ms();
 
     struct iovec iov[2];
+    struct aura_db_bucket_entry *old_hash_table;
     int old_fd;
 
     /* Write new db meta */
@@ -1085,8 +1095,9 @@ static int a_db_compact(AURA_DB *db) {
         sys_exit(true, errno, "a_db_compact: writev");
     fsync(new_fd);
 
-    old_fd = db->db_fd;
     pthread_mutex_lock(&db->db_lock);
+    old_fd = db->db_fd;
+    old_hash_table = db->buckets;
     db->db_fd = new_fd;
     db->db_hdr.file_size = new_file_size;
     db->db_hdr.last_compact_ts = aura_now_ms();
@@ -1095,7 +1106,8 @@ static int a_db_compact(AURA_DB *db) {
     memset(db->record_buf, 0, db->record_buf_size);
     pthread_mutex_unlock(&db->db_lock);
 
-    /* Remove new file and rename olf file */
+    /* Remove new file and rename old file */
+    free(old_hash_table);
     close(old_fd);
     unlink(db->name);
     res = rename(compact_file_path, db->name);
@@ -1115,6 +1127,56 @@ err_out_fd:
     free(new_hash_table);
     close(new_fd);
     return -1;
+}
+
+/* Run when timer triggers compaction timer */
+static void *a_db_compact_routine(void *arg) {
+    AURA_DB *db;
+    struct timespec ts;
+
+    db = arg;
+    pthread_mutex_lock(&db->db_lock);
+
+    aura_now_ts(&ts);
+    while (!db->shutdown) {
+        /* Fire in 30 minutes */
+        ts.tv_sec += 30 * 60;
+        pthread_cond_timedwait(&db->db_cond, &db->db_lock, &ts);
+        if (db->shutdown)
+            break;
+
+        pthread_mutex_unlock(&db->db_lock);
+        /* Compact on wasted bytes for now */
+        if (db->db_hdr.file_size / db->db_hdr.wasted_bytes > 0.5)
+            a_db_compact(db);
+        pthread_mutex_lock(&db->db_lock);
+    }
+
+    pthread_mutex_unlock(&db->db_lock);
+    return NULL;
+}
+
+/* Create the timer and thread handles compaction */
+int aura_db_start_bg_tasks(AURA_DBHANDLE _db) {
+    AURA_DB *db;
+    pthread_t compact_thread_id;
+    pthread_attr_t thread_attr;
+    int err;
+
+    db = (AURA_DB *)_db;
+    err = pthread_attr_init(&thread_attr);
+    if (err != 0)
+        sys_exit(true, 0, "aura_db_start_bg_tasks: pthread_attr_init error: %d", err);
+
+    err = pthread_attr_setdetachstate(&thread_attr, PTHREAD_CREATE_DETACHED);
+    if (err != 0)
+        sys_exit(true, 0, "aura_db_start_bg_tasks: pthread_attr_setdetachstate error: %d", err);
+
+    err = pthread_create(&compact_thread_id, &thread_attr, a_db_compact_routine, (void *)db);
+    if (err != 0)
+        sys_exit(true, 0, "aura_db_start_bg_tasks: pthread_create error: %d", err);
+
+    return 0;
 }
 
 /* used in testing to manually trigger replay */
