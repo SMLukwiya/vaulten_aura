@@ -16,12 +16,12 @@ struct fn_deploy_config {
 };
 
 /* Allocator fn */
-void *fn_deploy_opt_allocator(void) {
+static void *a_fn_deploy_opt_allocator(void) {
     return malloc(sizeof(struct fn_deploy_config));
 }
 
 /* Deallocator fn */
-void fn_deploy_opt_deallocator(void *opts_ptr) {
+static void a_fn_deploy_opt_deallocator(void *opts_ptr) {
     struct fn_deploy_config *opts = (struct fn_deploy_config *)opts_ptr;
     if (!opts_ptr)
         return;
@@ -40,12 +40,12 @@ struct aura_cli_flag fn_deploy_flag = {
   .deprecated = NULL,
   .is_required = true,
   .is_set = false,
-  .type = CLI_FLAG_STRING,
+  .type = A_CLI_FLAG_STRING,
   .offset_in_option = OPT_OFFSET(struct fn_deploy_config, fn_dir_path),
   .description = "path to function function dir",
 };
 
-void run_fn_deploy(void *opts_ptr, int argc, char *argv[], void *glob_opts) {
+int aura_cli_run_fn_deploy(void *opts_ptr, void *glob_opts) {
     char *data, *fn_dir, *conf_file;
     DIR *dp;
     struct dirent *dirp;
@@ -94,8 +94,7 @@ void run_fn_deploy(void *opts_ptr, int argc, char *argv[], void *glob_opts) {
     a_init_msg_hdr(hdr, 0, A_MSG_CMD_EXECUTE, A_CMD_FN_DEPLOY);
 
     /* send over the directory file descriptor */
-    res = aura_msg_send(sock_fd, &hdr, NULL, 0, dir_fd);
-    if (res != 0)
+    if (aura_msg_send(sock_fd, &hdr, NULL, 0, dir_fd) != 0)
         sys_exit(false, errno, "Failed to send aura cli command");
 
     data = aura_recv_resp(sock_fd);
@@ -105,10 +104,11 @@ void run_fn_deploy(void *opts_ptr, int argc, char *argv[], void *glob_opts) {
     free(data);
     closedir(dp);
     close(sock_fd);
+    return 0;
 }
 
 /* HELP CMD */
-void fn_deploy_validate_help() {
+static void a_fn_deploy_validate_help() {
     app_info(false, 0, "aura function deploy -p <path to config file>");
 }
 
@@ -124,9 +124,10 @@ struct aura_cli_cmd fn_deploy_cli = {
   .deprecated = NULL,
   .flags = fn_deploy_flags,
   .flag_count = ARRAY_SIZE(fn_deploy_flags),
-  .arguments = NULL,
-  .sub_commands = NULL,
-  .sub_command_count = 0,
+  .args = NULL,
+  .args_cnt = 0,
+  .sub_cmds = NULL,
+  .sub_cmd_cnt = 0,
   .min_args = 1,
   .max_args = 1,
   .is_top_level = false,
@@ -134,8 +135,8 @@ struct aura_cli_cmd fn_deploy_cli = {
   .is_experimental = false,
   .options = NULL,
   .options_size = sizeof(struct fn_deploy_config),
-  .opt_allocator = fn_deploy_opt_allocator,
-  .opt_destructor = fn_deploy_opt_deallocator,
-  .handler = run_fn_deploy,
-  .opt_help = fn_deploy_validate_help,
+  .opt_allocator = a_fn_deploy_opt_allocator,
+  .opt_destructor = a_fn_deploy_opt_deallocator,
+  .handler = aura_cli_run_fn_deploy,
+  .opt_help = a_fn_deploy_validate_help,
 };

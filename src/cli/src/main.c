@@ -8,7 +8,7 @@ int main(int argc, char *argv[]) {
     cmd_argv = argv;
 
     if (argc < 2) {
-        help_command();
+        aura_cli_help_fn();
         return 1;
     }
 

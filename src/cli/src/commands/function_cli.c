@@ -11,11 +11,16 @@ struct aura_cli_cmd *function_subs[] = {
   &fn_config_validate_cli,
 };
 
-void run_help_func() {
+int aura_cli_fn_base_handler() {
+    printf("Manage functions\n");
+    return 0;
+}
+
+static void a_run_help_func() {
     printf("Manage functions\n");
 }
 
-struct aura_cli_cmd function_cmd = {
+struct aura_cli_cmd function_base_cmd = {
   .version = "1.0.0",
   .name = "function",
   .description = "Manage functions, e.g, deploy, delete...etc",
@@ -23,9 +28,9 @@ struct aura_cli_cmd function_cmd = {
   .deprecated = NULL,
   .flags = NULL,
   .flag_count = 0,
-  .arguments = NULL,
-  .sub_commands = function_subs,
-  .sub_command_count = ARRAY_SIZE(function_subs),
+  .args = NULL,
+  .sub_cmds = function_subs,
+  .sub_cmd_cnt = ARRAY_SIZE(function_subs),
   .min_args = 1,
   .max_args = 1,
   .is_top_level = false,
@@ -35,6 +40,6 @@ struct aura_cli_cmd function_cmd = {
   .options_size = 0,
   .opt_allocator = NULL,
   .opt_destructor = NULL,
-  .handler = NULL,
-  .opt_help = run_help_func,
+  .handler = aura_cli_fn_base_handler,
+  .opt_help = a_run_help_func,
 };

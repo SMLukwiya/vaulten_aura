@@ -12,12 +12,12 @@ struct srv_conf_validate_opt {
 };
 
 /* Allocator fn */
-void *server_conf_validate_opt_allocator(void) {
+static void *a_server_conf_validate_opt_allocator(void) {
     return malloc(sizeof(struct srv_conf_validate_opt));
 }
 
 /* Deallocator fn */
-void server_conf_validate_opt_deallocator(void *opts_ptr) {
+static void a_server_conf_validate_opt_deallocator(void *opts_ptr) {
     struct srv_conf_validate_opt *opts = (struct srv_conf_validate_opt *)opts_ptr;
     if (!opts_ptr)
         return;
@@ -29,7 +29,7 @@ void server_conf_validate_opt_deallocator(void *opts_ptr) {
 }
 
 /* Handler fn */
-void run_server_validate_conf_cli(void *opts_ptr, int argc, char *argv[], void *glob_opts) {
+int aura_cli_run_server_validate_conf_cli(void *opts_ptr, void *glob_opts) {
     char resolved_conf_file_path[1024];
     int sock_fd, file_fd, res;
     struct aura_msg_hdr hdr;
@@ -44,8 +44,7 @@ void run_server_validate_conf_cli(void *opts_ptr, int argc, char *argv[], void *
     if (res != 0)
         sys_exit(false, errno, "Failed to resolve file path: %s", opts->server_conf_path);
 
-    res = access(resolved_conf_file_path, R_OK);
-    if (res < 0)
+    if (access(resolved_conf_file_path, R_OK) < 0)
         sys_exit(false, 0, "Failed to get read access file: %s", resolved_conf_file_path);
 
     file_fd = open(resolved_conf_file_path, O_RDONLY);
@@ -68,10 +67,11 @@ void run_server_validate_conf_cli(void *opts_ptr, int argc, char *argv[], void *
         app_info(false, 0, "%s", data);
 
     close(sock_fd);
+    return 0;
 }
 
 /* HELP CMD */
-void server_conf_validate_help() {
+static void a_server_conf_validate_help() {
     app_info(false, 0, "aura function validate -p <path to config file>");
 }
 
@@ -83,7 +83,7 @@ struct aura_cli_flag server_conf_validate_flag = {
   .deprecated = NULL,
   .is_required = true,
   .is_set = false,
-  .type = CLI_FLAG_STRING,
+  .type = A_CLI_FLAG_STRING,
   .offset_in_option = OPT_OFFSET(struct srv_conf_validate_opt, server_conf_path),
   .description = "path to config file location",
 };
@@ -100,9 +100,10 @@ struct aura_cli_cmd server_config_validate_cli = {
   .deprecated = NULL,
   .flags = svr_validate_conf_flags,
   .flag_count = ARRAY_SIZE(svr_validate_conf_flags),
-  .arguments = NULL,
-  .sub_commands = NULL,
-  .sub_command_count = 0,
+  .args = NULL,
+  .args_cnt = 0,
+  .sub_cmds = NULL,
+  .sub_cmd_cnt = 0,
   .min_args = 1,
   .max_args = 1,
   .is_top_level = false,
@@ -110,8 +111,8 @@ struct aura_cli_cmd server_config_validate_cli = {
   .is_experimental = false,
   .options = NULL,
   .options_size = sizeof(struct srv_conf_validate_opt),
-  .opt_allocator = server_conf_validate_opt_allocator,
-  .opt_destructor = server_conf_validate_opt_deallocator,
-  .handler = run_server_validate_conf_cli,
-  .opt_help = server_conf_validate_help,
+  .opt_allocator = a_server_conf_validate_opt_allocator,
+  .opt_destructor = a_server_conf_validate_opt_deallocator,
+  .handler = aura_cli_run_server_validate_conf_cli,
+  .opt_help = a_server_conf_validate_help,
 };

@@ -3,22 +3,24 @@
 #include "file_lib.h"
 #include "flag_cli.h"
 #include "unix_socket_lib.h"
+#include "utils_lib.h"
+
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <sys/types.h>
 
-struct start_options {
+struct aura_cli_sys_start_opts {
     char *system_config_path;
 };
 
-void *start_option_allocator(void) {
-    return malloc(sizeof(struct start_options));
+static void *a_system_start_option_allocator(void) {
+    return malloc(sizeof(struct aura_cli_sys_start_opts));
 }
 
-void start_option_destructor(void *opts_ptr) {
-    struct start_options *opts = (struct start_options *)opts_ptr;
+static void a_system_start_option_destructor(void *opts_ptr) {
+    struct aura_cli_sys_start_opts *opts = (struct aura_cli_sys_start_opts *)opts_ptr;
     if (!opts_ptr)
         return;
 
@@ -36,29 +38,29 @@ struct aura_cli_flag path_flag = {
   .deprecated = NULL,
   .is_required = true,
   .is_set = false,
-  .type = CLI_FLAG_STRING,
-  .offset_in_option = OPT_OFFSET(struct start_options, system_config_path),
-  .description = "path flag description",
+  .type = A_CLI_FLAG_STRING,
+  .offset_in_option = OPT_OFFSET(struct aura_cli_sys_start_opts, system_config_path),
+  .description = "Path flag description",
 };
 
 struct aura_cli_flag *system_start_flags[] = {
   &path_flag,
 };
 
-void run_system_start(void *opts_ptr, int argc, char *argv[], void *glob_opts) {
+/* Start aura system up */
+int aura_cli_system_start(void *opts_ptr, void *glob_opts) {
     pid_t pid;
     int pipe_fd[2], n;
     char startup_report[1024];
-    struct start_options *opts = (struct start_options *)opts_ptr;
+    struct aura_cli_sys_start_opts *opts = (struct aura_cli_sys_start_opts *)opts_ptr;
 
     if (pipe(pipe_fd) < 0) {
-        fprintf(stderr, "failed to create system pipe: %s\n", strerror(errno));
-        exit(1);
+        sys_exit(false, errno, "aura_cli_system_start: pipe error:");
     }
 
-    if ((pid = fork()) < 0) {
-        fprintf(stderr, "error starting daemon: %s\n", strerror(errno));
-        exit(1);
+    pid = fork();
+    if (pid < 0) {
+        sys_exit(false, errno, "aura_cli_system_start: fork error:");
     }
 
     if (pid == 0) {
@@ -68,13 +70,13 @@ void run_system_start(void *opts_ptr, int argc, char *argv[], void *glob_opts) {
         if (pipe_fd[1] != STDOUT_FILENO) {
             if (dup2(pipe_fd[1], STDOUT_FILENO) != STDOUT_FILENO)
                 // report
-                exit(1);
+                return 1;
         }
 
         if (pipe_fd[1] != STDERR_FILENO) {
             if (dup2(pipe_fd[1], STDERR_FILENO) != STDERR_FILENO)
                 // report
-                exit(1);
+                return 1;
         }
 
         if (execlp("aura_daemon", "aura_daemon", (char *)0) < 0)
@@ -84,6 +86,7 @@ void run_system_start(void *opts_ptr, int argc, char *argv[], void *glob_opts) {
         close(pipe_fd[1]);
         n = read(pipe_fd[0], startup_report, sizeof(startup_report));
         write(STDOUT_FILENO, startup_report, n);
+        return 0;
     }
 }
 
@@ -95,10 +98,11 @@ struct aura_cli_cmd system_start = {
   .usage = "start (describe usage)",
   .deprecated = NULL,
   .flags = system_start_flags,
-  .flag_count = 1,
-  .arguments = NULL,
-  .sub_commands = NULL,
-  .sub_command_count = 0,
+  .flag_count = ARRAY_SIZE(system_start_flags),
+  .args = NULL,
+  .args_cnt = 0,
+  .sub_cmds = NULL,
+  .sub_cmd_cnt = 0,
   .min_args = 1,
   .max_args = 1,
   .is_top_level = false,
@@ -106,12 +110,13 @@ struct aura_cli_cmd system_start = {
   .is_experimental = false,
   .options = NULL,
   .options_size = 1,
-  .handler = run_system_start,
-  .opt_allocator = start_option_allocator,
-  .opt_destructor = start_option_destructor,
+  .handler = aura_cli_system_start,
+  .opt_allocator = a_system_start_option_allocator,
+  .opt_destructor = a_system_start_option_destructor,
 };
 
-void run_system_stop(void *opts_ptr, int argc, char *argv[], void *glob_opts) {
+/* Stop aura system */
+int aura_cli_system_stop(void *opts_ptr, void *glob_opts) {
     struct aura_msg_hdr hdr;
     FILE *pid_file;
     char buf[64];
@@ -125,13 +130,13 @@ void run_system_stop(void *opts_ptr, int argc, char *argv[], void *glob_opts) {
     pid_file = fopen(AURA_PID, "r");
     if (!pid_file) {
         fprintf(stderr, "failed to open pid file: %s\n", strerror(errno));
-        exit(1);
+        return 1;
     }
 
     fread(buf, sizeof(buf), 1, pid_file);
     if (ferror(pid_file)) {
         fprintf(stderr, "could not read pid file: %s\n", strerror(errno));
-        exit(1);
+        return 1;
     }
 
     errno = 0;
@@ -139,18 +144,19 @@ void run_system_stop(void *opts_ptr, int argc, char *argv[], void *glob_opts) {
 
     if (errno != 0) {
         fprintf(stderr, "invalid pid: %s\n", strerror(errno));
-        exit(1);
+        return 1;
     }
 
     a_init_msg_hdr(hdr, 0, A_MSG_CMD_EXECUTE, A_CMD_SYSTEM_STOP);
 
-    res = aura_msg_send(sock_fd, &hdr, NULL, 0, -1);
-    if (res < 0) {
+    if (aura_msg_send(sock_fd, &hdr, NULL, 0, -1) < 0) {
         app_debug(false, errno, "system stop, failed");
+        return 1;
     }
 
     printf("PID: %lu\n", (long unsigned)pid);
-    kill(pid, SIGTERM);
+    res = unlink(AURA_PID);
+    return kill(pid, SIGTERM);
 }
 
 struct aura_cli_cmd system_stop = {
@@ -161,9 +167,10 @@ struct aura_cli_cmd system_stop = {
   .deprecated = NULL,
   .flags = NULL,
   .flag_count = 0,
-  .arguments = NULL,
-  .sub_commands = NULL,
-  .sub_command_count = 0,
+  .args = NULL,
+  .args_cnt = 0,
+  .sub_cmds = NULL,
+  .sub_cmd_cnt = 0,
   .min_args = 1,
   .max_args = 1,
   .is_top_level = false,
@@ -171,43 +178,39 @@ struct aura_cli_cmd system_stop = {
   .is_experimental = false,
   .options = NULL,
   .options_size = 0,
-  .handler = run_system_stop,
-  //   .opt_allocator = start_option_allocator,
-  //   .opt_destructor = start_option_destructor,
+  .handler = aura_cli_system_stop,
 };
 
-void run_system_status() {
-    int sock_fd;
-    struct msghdr msg;
-    struct iovec data[1];
-    struct aura_unix_socket cli_socket;
-    int res;
-    struct aura_msg_hdr header = {
-      .type = A_MSG_PING,
-      .len = 0,
-      .version = "1.0.0",
-    };
+/* Check if system is alive */
+int aura_cli_system_status(void *opts, void *glob_opts) {
+    int res, sock_fd;
+    struct aura_msg_hdr hdr;
+    struct aura_msg msg;
 
-    res = aura_unix_cli_connect(&cli_socket, AURA_SOCKET, AURA_SOCKET_CLI, CLI_FILE_PERM);
-    if (res != 0) {
-        fprintf(stderr, "status: down\n");
-        exit(1);
+    aura_try_connect_or_error(&sock_fd);
+    if (sock_fd == -1) {
+        app_exit(false, 0, "Server down");
+        return 0;
     }
 
-    data[0].iov_base = &header;
-    data[0].iov_len = sizeof(struct aura_msg_hdr);
-
-    memset(&msg, 0, sizeof(struct msghdr));
-    msg.msg_iov = data;
-    msg.msg_iovlen = 1;
-
-    if (sendmsg(cli_socket.sock_fd, &msg, 0) < 0) {
-        fprintf(stderr, "Error sending ping: %s\n", strerror(errno));
+    a_init_msg_hdr(hdr, 0, A_MSG_PING, 0);
+    if (aura_msg_send(sock_fd, &hdr, NULL, 0, -1) < 0) {
+        app_debug(false, errno, "system status, failed");
+        return 1;
     }
+
+    res = aura_recv_msg(sock_fd, &msg);
+    if (msg.hdr.type == A_MSG_RESPONSE) {
+        printf("System up");
+    } else {
+        printf("System down!");
+    }
+
+    return 0;
 }
 
-void run_help_system() {
-    printf("Manage system\n");
+static void a_system_status_help() {
+    printf("Server status help\n");
 }
 
 struct aura_cli_cmd system_status = {
@@ -218,15 +221,17 @@ struct aura_cli_cmd system_status = {
   .deprecated = NULL,
   .flags = NULL,
   .flag_count = 0,
-  .arguments = NULL,
-  .sub_commands = NULL,
-  .sub_command_count = 0,
+  .args = NULL,
+  .args_cnt = 0,
+  .sub_cmds = NULL,
+  .sub_cmd_cnt = 0,
   .min_args = 0,
   .max_args = 0,
   .is_top_level = false,
   .is_hidden = false,
   .is_experimental = false,
-  .handler = run_system_status,
+  .handler = aura_cli_system_status,
+  .opt_help = a_system_status_help,
 };
 
 struct aura_cli_cmd *system_subs[] = {
@@ -235,7 +240,16 @@ struct aura_cli_cmd *system_subs[] = {
   &system_status,
 };
 
-struct aura_cli_cmd system_cmd = {
+static int a_run_system_base_handle() {
+    printf("Manage system\n");
+    return 0;
+}
+
+static void a_run_help_system() {
+    printf("Manage system\n");
+}
+
+struct aura_cli_cmd system_base_cmd = {
   .version = "to be filled later",
   .name = "system",
   .description = "Manage systems",
@@ -243,13 +257,15 @@ struct aura_cli_cmd system_cmd = {
   .deprecated = NULL,
   .flags = NULL,
   .flag_count = 0,
-  .arguments = NULL,
-  .sub_commands = system_subs,
-  .sub_command_count = 3,
+  .args = NULL,
+  .args_cnt = 0,
+  .sub_cmds = system_subs,
+  .sub_cmd_cnt = 3,
   .min_args = 1,
   .max_args = 1,
   .is_top_level = false,
   .is_hidden = false,
   .is_experimental = false,
-  .handler = run_help_system // aura_cli_cmd show_help function
+  .handler = a_run_system_base_handle,
+  .opt_help = a_run_help_system,
 };

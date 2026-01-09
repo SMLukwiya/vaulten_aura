@@ -36,6 +36,7 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
         aura_send_resp(cli_fd, NULL, 0);
         close(cli_fd);
         return 0;
+
     case A_MSG_CMD_EXECUTE:
         switch (msg->hdr.cmd_type) {
         case A_CMD_SYSTEM_STOP:
@@ -81,13 +82,11 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
     return 1;
 }
 
-/**
- *
- */
+/** */
 static void a_sig_ch_handler(int signo) {
     /* kill the registered socket pair */
-    if (waitpid(server_pid, NULL, 0) < 0) {
-        sys_debug(true, errno, "a_sig_ch_handler: waitpid server: %d", server_pid);
+    if (waitpid(server_pid, NULL, 0) != server_pid) {
+        sys_exit(true, errno, "a_sig_ch_handler: waitpid error: %d", server_pid);
     }
     server_pid = 0;
     if (poll_fds[A_SOCKET_PAIR_FD_INDEX].fd == -1)

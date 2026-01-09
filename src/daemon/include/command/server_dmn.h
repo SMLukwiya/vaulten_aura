@@ -67,8 +67,8 @@ struct srv_start_arg {
     cmd_cb cb;
 };
 
-void aura_dmn_start_server(struct aura_msg *msg, int cli_fd, struct srv_start_arg *p);
-void aura_dmn_stop_server(struct aura_msg *msg, int srv_fd, int cli_fd, pid_t srv_pid);
-void aura_dmn_server_status(int srv_fd, int cli_fd);
+int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, struct srv_start_arg *p);
+int aura_dmn_stop_server(struct aura_msg *msg, int srv_fd, int cli_fd, pid_t srv_pid);
+int aura_dmn_server_status(int srv_fd, int cli_fd);
 
 #endif

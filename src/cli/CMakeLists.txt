@@ -14,7 +14,6 @@ set(lib_sources
 add_executable(aura 
     src/main.c
     src/cmdline_cli.c
-    src/commands/help_cli.c
     src/commands/function_cli.c
     src/commands/fn_delete_cli.c
     src/commands/fn_deploy_cli.c
@@ -25,6 +24,7 @@ add_executable(aura
     src/commands/srv_status_cli.c
     src/commands/system_cli.c
     src/commands/server_cli.c
+    src/commands/root_cli.c
     src/flag_cli.c
     ${lib_sources}
 )

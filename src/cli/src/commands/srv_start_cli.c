@@ -12,12 +12,12 @@ struct svr_start_opts {
 };
 
 /* Allocator fn */
-void *server_start_opt_allocator(void) {
+static void *a_server_start_opt_allocator(void) {
     return malloc(sizeof(struct svr_start_opts));
 }
 
 /* Deallocator fn */
-void server_start_opt_deallocator(void *opts_ptr) {
+static void a_server_start_opt_deallocator(void *opts_ptr) {
     struct svr_start_opts *opts = (struct svr_start_opts *)opts_ptr;
     if (!opts)
         return;
@@ -37,7 +37,7 @@ struct aura_cli_flag server_start_path_flag = {
   .deprecated = NULL,
   .is_required = true,
   .is_set = false,
-  .type = CLI_FLAG_STRING,
+  .type = A_CLI_FLAG_STRING,
   .offset_in_option = OPT_OFFSET(struct svr_start_opts, server_config_path),
   .description = "path to server config file to use",
 };
@@ -46,7 +46,7 @@ struct aura_cli_flag *svr_start_flags[] = {
   &server_start_path_flag,
 };
 
-void run_server_start(void *opts_ptr, int argc, char *argv[], void *glob_opt) {
+int aura_cli_run_server_start(void *opts_ptr, void *glob_opt) {
     char resolved_svr_conf_file_path[1024];
     int sock_fd, file_fd, res;
     struct aura_msg_hdr hdr;
@@ -62,8 +62,7 @@ void run_server_start(void *opts_ptr, int argc, char *argv[], void *glob_opt) {
     if (res != 0)
         sys_exit(false, errno, "Failed to resolve file path: %s", opts->server_config_path);
 
-    res = access(resolved_svr_conf_file_path, R_OK);
-    if (res < 0)
+    if (access(resolved_svr_conf_file_path, R_OK) < 0)
         sys_exit(false, errno, "Failed to get read access file: %s", resolved_svr_conf_file_path);
 
     file_fd = open(resolved_svr_conf_file_path, O_RDONLY);
@@ -71,8 +70,7 @@ void run_server_start(void *opts_ptr, int argc, char *argv[], void *glob_opt) {
         sys_exit(false, errno, "Failed to open file: %s", resolved_svr_conf_file_path);
 
     a_init_msg_hdr(hdr, 0, A_MSG_CMD_EXECUTE, A_CMD_SERVER_START);
-    res = aura_msg_send(sock_fd, &hdr, NULL, 0, file_fd);
-    if (res != 0) {
+    if (aura_msg_send(sock_fd, &hdr, NULL, 0, file_fd) != 0) {
         close(sock_fd);
         sys_exit(false, errno, "Failed to send aura server start cli cmd");
     }
@@ -83,10 +81,11 @@ void run_server_start(void *opts_ptr, int argc, char *argv[], void *glob_opt) {
         app_info(false, 0, "%s", data);
 
     close(sock_fd);
+    return 0;
 }
 
 /**/
-void server_help_fn() {
+static void a_server_help_fn() {
     app_info(false, 0, "aura server start -p <path to config file>");
 }
 
@@ -99,9 +98,10 @@ struct aura_cli_cmd server_start_cli = {
   .deprecated = NULL,
   .flags = svr_start_flags,
   .flag_count = ARRAY_SIZE(svr_start_flags),
-  .arguments = NULL,
-  .sub_commands = NULL,
-  .sub_command_count = 0,
+  .args = NULL,
+  .args_cnt = 0,
+  .sub_cmds = NULL,
+  .sub_cmd_cnt = 0,
   .min_args = 1,
   .max_args = 1,
   .is_top_level = false,
@@ -109,8 +109,8 @@ struct aura_cli_cmd server_start_cli = {
   .is_experimental = false,
   .options = NULL,
   .options_size = sizeof(struct svr_start_opts),
-  .opt_allocator = server_start_opt_allocator,
-  .opt_destructor = server_start_opt_deallocator,
-  .handler = run_server_start,
-  .opt_help = server_help_fn,
+  .opt_allocator = a_server_start_opt_allocator,
+  .opt_destructor = a_server_start_opt_deallocator,
+  .handler = aura_cli_run_server_start,
+  .opt_help = a_server_help_fn,
 };

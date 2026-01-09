@@ -8,6 +8,7 @@
 /*********************** */
 char server_started[] = "\x1B[1;32mServer started\x1B[0m";
 char server_stopped[] = "\x1B[1;32mServer stopped\x1B[0m";
+char server_stopped_failed[] = "\x1B[1;32mServer stop failed\x1B[0m";
 char server_up[] = "\x1B[1;32mServer up\x1B[0m";
 char server_down[] = "\x1B[1;31mServer down\x1B[0m";
 
@@ -40,7 +41,7 @@ struct aura_builder_stack srv_stack;
 /**
  *
  */
-void aura_dmn_start_server(struct aura_msg *msg, int cli_fd, struct srv_start_arg *p) {
+int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, struct srv_start_arg *p) {
     struct aura_yml_err_ctx *parser_err;
     struct aura_yml_usr_data_ctx usr_data;
     char *first_err = NULL;
@@ -133,7 +134,7 @@ void aura_dmn_start_server(struct aura_msg *msg, int cli_fd, struct srv_start_ar
         }
 
         res = aura_send_resp(cli_fd, (void *)server_started, sizeof(server_started) - 1);
-        return;
+        return 0;
     }
 out:
     close(cli_fd);
@@ -142,44 +143,48 @@ out:
     close(msg->fd);
     aura_free_yml_error_ctx(parser_err);
     a_srv_free_user_data_ctx(&usr_data);
+    return 1;
 }
 
 /**
  *
  */
-void aura_dmn_stop_server(struct aura_msg *msg, int sock_fd, int cli_fd, pid_t srv_pid) {
+int aura_dmn_stop_server(struct aura_msg *msg, int sock_fd, int cli_fd, pid_t srv_pid) {
     struct aura_msg_hdr hdr;
-    int res;
+    int res, status;
+    pid_t pid;
     void *data;
 
     if (srv_pid == 0) {
         /** @todo: create correct message to return */
         res = aura_send_resp(cli_fd, (void *)server_stopped, sizeof(server_stopped) - 1);
         close(cli_fd);
-        return;
+        return 0;
     }
 
     a_init_msg_hdr(hdr, 0, A_MSG_CMD_EXECUTE, A_CMD_SERVER_STOP);
     res = aura_msg_send(sock_fd, &hdr, NULL, 0, -1);
     if (res != 0) {
-        app_debug(true, 0, "Failed to stop server");
-        // send a kill command perhaps;
+        app_debug(true, 0, "aura_dmn_stop_server: aura_msg_send error");
+        res = aura_send_resp(cli_fd, (void *)server_stopped_failed, sizeof(server_stopped_failed) - 1);
+        return 1;
     }
 
-    res = waitpid(srv_pid, NULL, 0);
-    if (res < 0) {
-        sys_debug(true, errno, "server stop wait error");
-    } else {
-        app_debug(true, 0, "ohh nooo!!!, child dead pid: %d", srv_pid);
+    pid = waitpid(srv_pid, &status, 0);
+    if (pid < 0) {
+        sys_debug(true, errno, "aura_dmn_stop_server: waitpid error:");
+        res = aura_send_resp(cli_fd, (void *)server_stopped_failed, sizeof(server_stopped_failed) - 1);
+        return 1;
     }
 
     res = aura_send_resp(cli_fd, (void *)server_stopped, sizeof(server_stopped) - 1);
+    return 0;
 }
 
 /**
  *
  */
-void aura_dmn_server_status(int srv_fd, int cli_fd) {
+int aura_dmn_server_status(int srv_fd, int cli_fd) {
     int res;
     struct aura_msg_hdr hdr;
     struct aura_msg res_msg;
@@ -205,8 +210,9 @@ void aura_dmn_server_status(int srv_fd, int cli_fd) {
 
     aura_send_resp(cli_fd, server_up, sizeof(server_up) - 1);
     close(cli_fd);
-    return;
+    return 0;
 out:
     aura_send_resp(cli_fd, server_down, sizeof(server_down) - 1);
     close(cli_fd);
+    return 1;
 }

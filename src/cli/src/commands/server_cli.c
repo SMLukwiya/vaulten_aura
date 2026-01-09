@@ -11,7 +11,12 @@ extern struct aura_cli_cmd server_config_validate_cli;
 extern struct aura_cli_cmd server_stop_cli;
 extern struct aura_cli_cmd server_status_cli;
 
-void server_help() {
+int aura_cli_server_handler() {
+    app_info(false, 0, "Manage server, lists command");
+    return 0;
+}
+
+static void a_server_help() {
     app_info(false, 0, "Manage server, lists command");
 }
 
@@ -25,7 +30,7 @@ struct aura_cli_cmd *server_subs[] = {
   &server_status_cli,
 };
 
-struct aura_cli_cmd server_cmd = {
+struct aura_cli_cmd server_base_cmd = {
   .version = "1.0.0",
   .name = "server",
   .description = "Manage server, e.g, deploy, delete...etc",
@@ -33,9 +38,10 @@ struct aura_cli_cmd server_cmd = {
   .deprecated = NULL,
   .flags = NULL,
   .flag_count = 0,
-  .arguments = NULL,
-  .sub_commands = server_subs,
-  .sub_command_count = ARRAY_SIZE(server_subs),
+  .args = NULL,
+  .args_cnt = 0,
+  .sub_cmds = server_subs,
+  .sub_cmd_cnt = ARRAY_SIZE(server_subs),
   .min_args = 1,
   .max_args = 1,
   .is_top_level = false,
@@ -45,6 +51,6 @@ struct aura_cli_cmd server_cmd = {
   .options_size = 0,
   .opt_allocator = NULL,
   .opt_destructor = NULL,
-  .handler = NULL,
-  .opt_help = server_help,
+  .handler = aura_cli_server_handler,
+  .opt_help = a_server_help,
 };

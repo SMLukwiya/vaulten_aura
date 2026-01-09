@@ -5,10 +5,11 @@
 #include <stddef.h>
 
 typedef enum {
-    CLI_FLAG_STRING,
-    CLI_FLAG_BOOL,
-    CLI_FLAG_INT,
-    CLI_FLAG_FLOAT
+    A_CLI_FLAG_NONE,
+    A_CLI_FLAG_STRING,
+    A_CLI_FLAG_BOOL,
+    A_CLI_FLAG_INT,
+    A_CLI_FLAG_FLOAT
 } aura_flag_type_t;
 
 struct aura_cli_flag {
