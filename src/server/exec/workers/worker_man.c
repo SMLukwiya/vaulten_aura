@@ -46,7 +46,7 @@ void *aura_qjs_thread_routine(void *arg) {
 
     for (;;) {
         timedout = false;
-        aura_now_ts(&timeout);
+        aura_now_ts(&timeout, CLOCK_REALTIME);
         timeout.tv_sec += 5;
 
         while (a_list_is_empty(&wq->tasks) && !wq->quit) {

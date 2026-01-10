@@ -50,7 +50,7 @@ add_test(
     CONFIGURATIONS Debug RelWithDebInfo ""
 )
 
-set_tests_properties(db_test PROPERTIES
+set_tests_properties(slab_test PROPERTIES
     LABELS "slab"
 )
 

@@ -737,7 +737,10 @@ exception:
  */
 void a_server_shutdown(int signo) {
     app_info(true, 0, "Shutdown signal(->server)!");
-    // unlink and cleanup
+
+    aura_db_close(glob_conf->db_handle);
+    // glob_conf->shutdown_requested = true;
+    exit(0);
 }
 
 /**
@@ -1257,6 +1260,7 @@ int a_parse_function_config(struct iovec data) {
     strtab = aura_blob_get_strtab(config);
     fn_tab = aura_blob_get_tab(config);
     fn_code_len = aura_blob_get_opaque_data_len(config);
+    aura_dump_blob(config);
 
     memset(&fn, 0, sizeof(fn));
 
@@ -1342,9 +1346,15 @@ int a_parse_function_config(struct iovec data) {
     const char *instances;
     if (fn_tab[A_IDX_FN_MIN_INSTANCES] != 0) {
         concurrency_node = &nodes[fn_tab[A_IDX_FN_MIN_INSTANCES]];
-        instances = strtab + concurrency_node->str_offset;
-        aura_scan_str(instances, "%d" SCNu32, &fn.fn_concurrency.min_instances);
+
+        app_debug(true, 0, "STRTAB: %p: offset: %d", strtab, fn_tab[A_IDX_FN_MIN_INSTANCES]);
+        // instances = strtab + concurrency_node->str_offset;
+        // aura_scan_str(instances, "%d" SCNu32, &fn.fn_concurrency.min_instances);
     }
+
+    app_debug(true, 0, "a_parse_function_config: data: base %p, len: %lu", data.iov_base, data.iov_len);
+    app_debug(true, 0, "Function name %s", fn.name);
+    return 0;
 
     if (fn_tab[A_IDX_FN_MAX_INSTANCES] != 0) {
         concurrency_node = &nodes[fn_tab[A_IDX_FN_MAX_INSTANCES]];
@@ -1362,11 +1372,28 @@ int a_parse_function_config(struct iovec data) {
     res = aura_route_add(&host->router, 1, &fn);
     if (!res) {
         /* free fn allocated stuff */
-        sys_debug(true, errno, "Failed to add route to host: %s", host->authority.hostname);
+        sys_debug(true, errno, "a_parse_function_config: aura_route_add error %s:", host->authority.hostname);
         return -1;
     }
+    app_debug(true, 0, ">> PARSE FUNCTION CONFIG");
 
     return 0;
+}
+
+/**
+ * Load busy functions
+ */
+static void a_preload_functions() {
+    struct aura_iovec data;
+    int res;
+
+    res = aura_db_record_for_each(
+      glob_conf->db_handle, A_MAX_PRELOAD_FN_CNT, A_DB_NS_FN,
+      A_DB_SCHEMA_FN_META_V1, a_parse_function_config);
+
+    if (res != 0) {
+        /**/
+    }
 }
 
 /**
@@ -1545,7 +1572,7 @@ static inline int a_glob_conf_init() {
     int res;
 
     memset(glob_conf, 0, sizeof(struct aura_srv_global_conf));
-    glob_conf->boot_time = aura_now_ms();
+    glob_conf->boot_time = aura_now_ms(CLOCK_REALTIME);
     glob_conf->shutdown_requested = false;
     glob_conf->user.base = NULL;
     glob_conf->user.len = 0;
@@ -1582,19 +1609,6 @@ static inline int a_listener_conf_init(struct aura_srv_listener_conf *lc) {
     lc->ptls = NULL;
     lc->bpf_program = NULL;
     return 0;
-}
-
-/**
- * Load busy functions
- */
-static void a_load_functions() {
-    struct aura_iovec data;
-    int res;
-
-    res = aura_db_record_for_each(glob_conf->db_handle, A_MAX_PRELOAD_FN_CNT, a_parse_function_config);
-    if (res != 0) {
-        /**/
-    }
 }
 
 /**
@@ -1668,8 +1682,11 @@ int main(int argc, char *argv[]) {
     /* register fds to poll */
     loop->ops->add(loop, sock_fd, AURA_EVENT_READ);
     for (int i = 0; i < listener_conf->fd_pool.cnt; ++i) {
-        loop->ops->add(loop, listener_conf->fd_pool.fds[i], AURA_EVENT_READ);
+        // loop->ops->add(loop, listener_conf->fd_pool.fds[i], AURA_EVENT_READ);
+        aura_evt_loop_add(loop, listener_conf->fd_pool.fds[i], AURA_EVENT_READ);
     }
+
+    a_preload_functions();
 
     res = a_run_loop(ctx);
 

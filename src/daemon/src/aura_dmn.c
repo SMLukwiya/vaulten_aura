@@ -5,6 +5,7 @@
 #include "command/command_dmn.h"
 #include "command/function_dmn.h"
 #include "command/server_dmn.h"
+#include "command/sys_dmn.h"
 #include "daemon_lib.h"
 #include "ipc_lib.h"
 #include "unix_socket_lib.h"
@@ -41,7 +42,7 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
         switch (msg->hdr.cmd_type) {
         case A_CMD_SYSTEM_STOP:
             if (server_pid == 0) {
-                close(cli_fd);
+                aura_dmn_system_stop(cli_fd, server_pid);
                 return 0;
             }
 

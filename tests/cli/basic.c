@@ -9,8 +9,6 @@ static void a_test_system_lifecycle() {
     system_status = "aura system status";
     system_stop = "aura system stop";
     /**/
-
-    return 0;
 }
 
 static void a_test_invalid_commands() {}

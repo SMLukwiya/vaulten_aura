@@ -170,13 +170,6 @@ int aura_dmn_stop_server(struct aura_msg *msg, int sock_fd, int cli_fd, pid_t sr
         return 1;
     }
 
-    pid = waitpid(srv_pid, &status, 0);
-    if (pid < 0) {
-        sys_debug(true, errno, "aura_dmn_stop_server: waitpid error:");
-        res = aura_send_resp(cli_fd, (void *)server_stopped_failed, sizeof(server_stopped_failed) - 1);
-        return 1;
-    }
-
     res = aura_send_resp(cli_fd, (void *)server_stopped, sizeof(server_stopped) - 1);
     return 0;
 }

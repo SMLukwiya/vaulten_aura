@@ -80,7 +80,7 @@ int aura_qjs_execute(st_aura_qjs_runtime *qjs, struct aura_task *task) {
     JSValue js_req;
     struct aura_http_req *req;
 
-    task->started_at = aura_now_ns();
+    task->started_at = aura_now_ns(CLOCK_REALTIME);
 
     js_req = JS_NewObjectClass(qjs->ctx, req_class_id);
     JS_SetOpaque(js_req, task->data);

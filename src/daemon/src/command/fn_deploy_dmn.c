@@ -51,7 +51,7 @@ int fn_conf_tab[] = {
 
 /** */
 static inline void *a_build_fn_config(struct aura_yml_fn_data_ctx *usr_data, void *byte_code, uint64_t bytecode_len) {
-    uint32_t root_off, func_root, triggers_root;
+    uint32_t root_off, func_root, triggers_root, concurrency_root;
     void *fn_config;
 
     /** Build function config */
@@ -62,6 +62,10 @@ static inline void *a_build_fn_config(struct aura_yml_fn_data_ctx *usr_data, voi
     /* Triggers */
     triggers_root = aura_build_blob_from_rax(usr_data->parse_tree, &usr_data->builder, usr_data->node_arr, "triggers", sizeof("triggers") - 1, &fn_stack, fn_conf_tab);
     aura_blob_b_map_add_kv(&usr_data->builder, root_off, "triggers", triggers_root);
+
+    /* Concurrency */
+    concurrency_root = aura_build_blob_from_rax(usr_data->parse_tree, &usr_data->builder, usr_data->node_arr, "concurrency", sizeof("concurrency") - 1, &fn_stack, fn_conf_tab);
+    aura_blob_b_map_add_kv(&usr_data->builder, root_off, "concurrency", concurrency_root);
 
     fn_config = aura_serialize_blob(&usr_data->builder, fn_conf_tab, ARRAY_SIZE(fn_conf_tab), (void *)byte_code, bytecode_len);
     return fn_config;

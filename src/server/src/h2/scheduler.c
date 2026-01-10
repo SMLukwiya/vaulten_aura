@@ -17,7 +17,7 @@ struct aura_h2_out_frame *aura_schedule_next_frame(struct aura_h2_sender_engine 
 
     /* control, things can can create new streams */
     if (!a_list_is_empty(&engine->queues.control.head)) {
-        now = aura_now_ms();
+        now = aura_now_ms(CLOCK_REALTIME);
         if (now - engine->last_tick_time > MILLISECOND) {
             a_list_dequeue(f, &engine->queues.control.head, f_list);
             return f;
@@ -43,7 +43,7 @@ void edge_send_loop(struct aura_h2_conn *conn) {
     while (true) {
         /* Apply rate limiting for edge fairness */
         if (engine->bytes_sent_this_tick >= engine->max_bytes_per_tick) {
-            now = aura_now_ms();
+            now = aura_now_ms(CLOCK_REALTIME);
             /* 1us*/
             if (now - engine->last_tick_time < 1000) {
                 /* Throttle for fairness */
@@ -59,7 +59,7 @@ void edge_send_loop(struct aura_h2_conn *conn) {
         if (!out_frame)
             break;
 
-        now = aura_now_ms();
+        now = aura_now_ms(CLOCK_REALTIME);
         // if (now > frame->deadline) {
         //     /* */
         // }

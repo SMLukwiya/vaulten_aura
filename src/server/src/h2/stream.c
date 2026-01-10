@@ -42,7 +42,7 @@ struct aura_h2_stream *aura_h2_stream_open(struct aura_h2_conn *conn, uint32_t s
         stream->outbound_queue.blocked_by_flow_control = false;
         stream->outbound_queue.pending_bytes = 0;
         a_list_head_init(&stream->outbound_queue.f_list);
-        res = aura_now_ts(&stream->start_ts);
+        res = aura_now_ts(&stream->start_ts, CLOCK_REALTIME);
         a_list_head_init(&stream->s_list);
         aura_sliding_buffer_create(conn->mc, &stream->sync, 0);
         aura_sliding_buffer_create(conn->mc, &stream->data, 0);

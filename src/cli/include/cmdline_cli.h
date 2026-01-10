@@ -79,11 +79,16 @@ static inline void aura_cli_command_unknown(struct aura_cli_ctx *ctx) {
         cmd_len += strlen(ctx->argv_vec[i]) + 1; /* space */
     }
 
-    char str_buf[cmd_len];
+    char str_buf[cmd_len + 2];
+    size_t offset;
 
     str_buf[0] = '\0';
+    offset = 0;
     for (i = 0; i < ctx->args_count; ++i) {
-        snprintf(str_buf + strlen(str_buf), len + 1, "%s ", ctx->argv_vec[i]);
+        len = strlen(ctx->argv_vec[i]);
+        strncat(str_buf + offset, ctx->argv_vec[i], len);
+        strcat(str_buf + offset + len, " ");
+        offset += len + 1;
     }
 
     app_info(false, 0, "unknown aura cli command: aura %s\n\nRun 'aura --help' for more information\n", str_buf);

@@ -29,6 +29,7 @@ add_executable(aura_daemon
     src/command/srv_config_validate_dmn.c
     src/command/fn_config_validate_dmn.c
     src/command/fn_deploy_dmn.c
+    src/command/sys_dmn.c
     ${lib_sources}
 )
 

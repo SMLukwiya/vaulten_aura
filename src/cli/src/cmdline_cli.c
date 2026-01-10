@@ -358,7 +358,6 @@ int a_execute(struct aura_cli_cmd *cmd) {
     cmd->handler(cmd->options, NULL);
     if (cmd->options && cmd->opt_destructor)
         cmd->opt_destructor(cmd->options);
-    app_debug(false, 0, "EXECUTED <<");
     return 0;
 }
 

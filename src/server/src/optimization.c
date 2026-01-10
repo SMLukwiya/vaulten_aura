@@ -98,7 +98,7 @@ struct aura_tls_record *a_tls_record_create(struct aura_memory_ctx *mc, struct a
         return NULL;
     }
 
-    record->enqueued_at = aura_now_ms();
+    record->enqueued_at = aura_now_ms(CLOCK_REALTIME);
     // record->needs_immediate_ack
     // record->priority
     return record;
