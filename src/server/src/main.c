@@ -5,6 +5,7 @@
 #endif
 
 #include "blobber_lib.h"
+#include "db/db.h"
 #include "error_lib.h"
 #include "evt_loop_srv.h"
 #include "function_lib.h"
@@ -37,7 +38,7 @@
 #include <sys/timerfd.h>
 #include <time.h>
 
-#define AURA_DEBUG 1
+#define A_MAX_PRELOAD_FN_CNT 5
 
 /* global server configs */
 struct aura_srv_global_conf *glob_conf;
@@ -1471,8 +1472,8 @@ int a_run_loop(struct aura_srv_ctx *ctx) {
     aura_evt_loop_start(loop);
     while (loop->running) {
         a_close_idle_connections(ctx);
-        loop->ops->poll(loop, timeout_ms, max_accept);
-        // aura_evt_loop_poll(loop, timeout_ms, max_accept);
+        // loop->ops->poll(loop, timeout_ms, max_accept);
+        aura_evt_loop_poll(loop, timeout_ms, max_accept);
 
         if (loop->srv_ctx->batches.internal == true) {
             a_handle_internal_request(loop);
@@ -1480,8 +1481,8 @@ int a_run_loop(struct aura_srv_ctx *ctx) {
 
         /* process handshakes */
         a_list_for_each(s, &loop->srv_ctx->batches.queues.handshake_queue, s_list) {
-            loop->ops->remove(loop, s->sock_fd);
-            // aura_evt_loop_remove(loop, s->sock_fd);
+            // loop->ops->remove(loop, s->sock_fd);
+            aura_evt_loop_remove(loop, s->sock_fd);
             aura_handle_handshake(s, ctx);
         }
 
@@ -1499,8 +1500,8 @@ int a_run_loop(struct aura_srv_ctx *ctx) {
 
         /* process folks who are ready! */
         a_list_for_each(s, &loop->srv_ctx->batches.queues.fast_lane_queue, s_list) {
-            loop->ops->remove(loop, s->sock_fd);
-            // aura_evt_loop_remove(loop, s->sock_fd);
+            // loop->ops->remove(loop, s->sock_fd);
+            aura_evt_loop_remove(loop, s->sock_fd);
             aura_conn_proceed(s, ctx);
         }
 
@@ -1519,14 +1520,14 @@ int a_run_loop(struct aura_srv_ctx *ctx) {
 
         /* rearm hopeful clients! */
         a_list_for_each(s, &loop->srv_ctx->batches.queues.handshake_queue, s_list) {
-            loop->ops->add(loop, s->sock_fd, AURA_EVENT_READ);
-            // aura_evt_loop_add(loop, s->sock_fd, AURA_EVENT_READ);
+            // loop->ops->add(loop, s->sock_fd, AURA_EVENT_READ);
+            aura_evt_loop_add(loop, s->sock_fd, AURA_EVENT_READ);
         }
 
         /* rearm clients who mean business! */
         a_list_for_each(s, &loop->srv_ctx->batches.queues.fast_lane_queue, s_list) {
-            loop->ops->add(loop, s->sock_fd, AURA_EVENT_READ);
-            // aura_evt_loop_add(loop, s->sock_fd, AURA_EVENT_READ);
+            // loop->ops->add(loop, s->sock_fd, AURA_EVENT_READ);
+            aura_evt_loop_add(loop, s->sock_fd, AURA_EVENT_READ);
         }
 
         /* handle others */
@@ -1589,6 +1590,11 @@ static inline int a_listener_conf_init(struct aura_srv_listener_conf *lc) {
 static void a_load_functions() {
     struct aura_iovec data;
     int res;
+
+    res = aura_db_record_for_each(glob_conf->db_handle, A_MAX_PRELOAD_FN_CNT, a_parse_function_config);
+    if (res != 0) {
+        /**/
+    }
 }
 
 /**

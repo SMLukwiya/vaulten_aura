@@ -9,6 +9,7 @@
 #include "types_lib.h"
 
 #include <stdint.h>
+#include <sys/uio.h> /* struct iovec */
 
 /* Inspired by APUE key-value db */
 
@@ -78,6 +79,9 @@ int aura_db_delete_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema
 /* Get database true size */
 size_t aura_db_get_size(AURA_DBHANDLE db);
 
+/* Get database record count */
+uint64_t aura_db_get_record_cnt(AURA_DBHANDLE _db);
+
 /* Scan database file and print all records */
 void aura_db_scan(AURA_DBHANDLE db);
 
@@ -86,5 +90,8 @@ void aura_db_wal_scan(AURA_DBHANDLE _db);
 
 /* Launch database background tasks */
 int aura_db_start_bg_tasks(AURA_DBHANDLE db);
+
+/** Run the provided function on each record upto record_cnt */
+int aura_db_record_for_each(AURA_DBHANDLE _db, uint64_t record_cnt, int (*fn)(struct iovec));
 
 #endif /* AURA_DB_H */

@@ -11,7 +11,6 @@
 #include <stdarg.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/uio.h> /* struct iovec */
 #include <unistd.h>
 
 /* DB header structure */
@@ -26,6 +25,7 @@ struct aura_db_hdr {
     off_t bucket_off;
     off_t record_off;
     uint64_t file_size;
+    uint64_t record_cnt;
     uint64_t wasted_bytes; /* total deleted records in the db */
 };
 
@@ -40,6 +40,7 @@ struct aura_db_hdr {
 /**
  * @todo: can I mmap the entire db file?
  * Point to it from DB_HANDLE perhaps!
+ * @todo: A dedicated write thread with writer queue might be better
  */
 
 /* Record len structure */
@@ -89,6 +90,7 @@ typedef struct {
     size_t curr_file_size;                /* Current main db file size (updated on every wal replay) */
     pthread_mutex_t db_lock;              /* Memory lock for in memory structure */
     pthread_cond_t db_cond;               /* DB conditional variable */
+    bool is_busy;                         /* DB is busy with replay or compaction */
     bool shutdown;                        /* Signal for db to shutdown */
     uint32_t cnt_del_ok;                  /* delete OK */
     uint32_t cnt_del_err;                 /* delete error */
@@ -180,6 +182,8 @@ static AURA_DB *a_db_alloc(int namelen) {
     if (!db->buckets)
         goto exception;
     memset(db->buckets, 0, bucket_arr_size);
+    db->shutdown = false;
+    db->is_busy = false;
 
     return db;
 exception:
@@ -193,15 +197,33 @@ static inline ssize_t a_db_meta_write(AURA_DB *db) {
     if (lseek(db->db_fd, 0, SEEK_SET) < 0)
         return -1;
 
-    iov[0].iov_base = &db->db_hdr;
-    iov[0].iov_len = sizeof(struct aura_db_hdr);
-    iov[1].iov_base = db->buckets;
-    iov[1].iov_len = db->db_hdr.bucket_cnt * sizeof(struct aura_db_bucket_entry);
+    /* Make snapshot of meta to make it immutable(hack for now) */
+    struct aura_db_hdr hdr;
+    size_t bucket_size;
+    void *buckets;
+
+    bucket_size = db->db_hdr.bucket_cnt * sizeof(struct aura_db_bucket_entry);
+    buckets = calloc(1, bucket_size);
+    if (!buckets)
+        sys_exit(true, errno, "a_db_write_meta: memory error:");
+
+    pthread_mutex_lock(&db->db_lock);
+    memcpy(&hdr, &db->db_hdr, sizeof(db->db_hdr));
+    memcpy(buckets, db->buckets, bucket_size);
+    pthread_mutex_unlock(&db->db_lock);
+    iov[0].iov_base = &hdr;
+    iov[0].iov_len = sizeof(db->db_hdr);
+    iov[1].iov_base = buckets;
+    iov[1].iov_len = bucket_size;
 
     return writev(db->db_fd, iov, 2);
 }
 
-/* Read db meta data */
+/**
+ * Read db meta data
+ * This is called only on startup for now
+ * So there may not be need to lock!
+ */
 static inline ssize_t a_db_meta_read(AURA_DB *db) {
     struct iovec iov[2];
 
@@ -287,8 +309,6 @@ AURA_DBHANDLE aura_db_open(const char *app_path, const char *db_pathname, int of
     if (db->wal_fd < 0)
         goto exception;
 
-    db->shutdown = false;
-
     if ((oflag & (O_CREAT | O_TRUNC)) == (O_CREAT | O_TRUNC)) {
         /*
          * If the database was created, we have to initialize
@@ -315,6 +335,7 @@ AURA_DBHANDLE aura_db_open(const char *app_path, const char *db_pathname, int of
             db->db_hdr.bucket_off = A_BUCKET_TAB_OFFSET;
             db->db_hdr.record_off = A_BUCKET_TAB_OFFSET + (A_DB_BUCKET_CNT * sizeof(void *));
             db->db_hdr.file_size = sizeof(struct aura_db_hdr) + bucket_arr_size;
+            db->db_hdr.record_cnt = 0;
             /* Store current file size */
             db->curr_file_size = db->db_hdr.file_size;
 
@@ -372,6 +393,9 @@ static void a_db_free(AURA_DB *db) {
         free(db->buckets);
     if (db->record_buf)
         free(db->record_buf);
+
+    pthread_mutex_destroy(&db->db_lock);
+    pthread_cond_destroy(&db->db_cond);
     free(db);
 }
 
@@ -545,6 +569,10 @@ int aura_db_put_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id
     /* update in memory */
     if (a_db_record_cache_append(db, rec_hdr, key, data, hash) < 0)
         return -1;
+    /* Hmmm! */
+    pthread_mutex_lock(&db->db_lock);
+    db->db_hdr.record_cnt++;
+    pthread_mutex_unlock(&db->db_lock);
 
     return 0;
 }
@@ -569,14 +597,20 @@ bool aura_db_record_exists(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schem
     offset = db->buckets[hash].head_off;
 
     /* check in cache */
+    pthread_mutex_lock(&db->db_lock);
     if (offset - db->curr_file_size < db->append_off) {
         hdr = a_db_record_cache_fetch(db, namespace, key, offset, hash);
         if (hdr) {
-            if (hdr->flags & A_DB_REC_TOMBSTONE)
+            if (hdr->flags & A_DB_REC_TOMBSTONE) {
+                pthread_mutex_unlock(&db->db_lock);
                 return false;
+            }
+            pthread_mutex_unlock(&db->db_lock);
             return true;
         }
     }
+    pthread_mutex_unlock(&db->db_lock);
+
     while (offset != 0) {
         res = pread(db->db_fd, &rec_hdr, sizeof(rec_hdr), offset);
         if (res < 0)
@@ -622,22 +656,30 @@ int aura_db_fetch_record(AURA_DBHANDLE _db, uint16_t namespace, struct aura_iove
     record = NULL;
     data_out->base = NULL;
     data_out->len = 0;
+
     /* Value possible in cache */
+    pthread_mutex_lock(&db->db_lock);
     if (offset >= db->curr_file_size) {
         hdr = a_db_record_cache_fetch(db, namespace, key, offset, hash);
         if (hdr) {
-            if (hdr->flags & A_DB_REC_TOMBSTONE)
+            if (hdr->flags & A_DB_REC_TOMBSTONE) {
+                pthread_mutex_unlock(&db->db_lock);
                 return A_DB_REC_NOT_FOUND;
+            }
 
             record = calloc(1, hdr->data_len);
-            if (!record)
+            if (!record) {
+                pthread_mutex_unlock(&db->db_lock);
                 goto exception;
+            }
             memcpy(record, (char *)hdr + sizeof(*hdr) + hdr->key_len, hdr->data_len);
             data_out->base = record;
             data_out->len = hdr->data_len;
+            pthread_mutex_unlock(&db->db_lock);
             return 0;
         }
     }
+    pthread_mutex_unlock(&db->db_lock);
 
     if (a_readw_lock(db->db_fd, 0, SEEK_SET, 0) < 0)
         sys_exit(true, errno, "aura_db_fetch_record: a_readw_lock error:");
@@ -729,6 +771,7 @@ int aura_db_delete_record(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema
 
     pthread_mutex_lock(&db->db_lock);
     db->db_hdr.wasted_bytes += rec_hdr.rec_len.aligned_len;
+    db->db_hdr.record_cnt--;
     pthread_mutex_unlock(&db->db_lock);
 
     return 0;
@@ -861,6 +904,13 @@ static int a_db_wal_replay(AURA_DB *db) {
         return 0;
     }
 
+    /* Check we are busy compacting */
+    pthread_mutex_lock(&db->db_lock);
+    while (db->is_busy)
+        pthread_cond_wait(&db->db_cond, &db->db_lock);
+    db->is_busy;
+    pthread_mutex_unlock(&db->db_lock);
+
     read_offset = 0;
     while (true) {
         res = pread(db->wal_fd, &wal_hdr, sizeof(wal_hdr), read_offset);
@@ -906,6 +956,11 @@ static int a_db_wal_replay(AURA_DB *db) {
             return -1;
         read_offset += wal_hdr.rec_len;
     }
+
+    pthread_mutex_lock(&db->db_lock);
+    db->is_busy = false;
+    /* No need to signal, we just wait then try compacting again later */
+    pthread_mutex_unlock(&db->db_lock);
 
     if (a_db_meta_write(db) < 0)
         return -1;
@@ -997,6 +1052,8 @@ static int a_db_compact(AURA_DB *db) {
     if (a_readw_lock(db->db_fd, 0, SEEK_SET, 0) < 0)
         sys_exit(true, errno, "a_db_compact: a_readw_lock:");
 
+    uint64_t new_record_cnt;
+    new_record_cnt = 0;
     /* Loop for each hash table bucket */
     for (int i = 0; i < db->db_hdr.bucket_cnt; ++i) {
         read_off = db->buckets[i].head_off;
@@ -1067,6 +1124,7 @@ static int a_db_compact(AURA_DB *db) {
                 rec_hdr.prev_off = old_off;
                 old_off = write_off;
                 new_file_size += rec_hdr.rec_len.aligned_len;
+                new_record_cnt++;
             }
         }
     }
@@ -1074,6 +1132,7 @@ static int a_db_compact(AURA_DB *db) {
     memcpy(&new_hdr, &db->db_hdr, sizeof(new_hdr));
     new_hdr.file_size = new_file_size;
     new_hdr.last_compact_ts = aura_now_ms();
+    new_hdr.record_cnt = new_record_cnt;
 
     struct iovec iov[2];
     struct aura_db_bucket_entry *old_hash_table;
@@ -1101,6 +1160,7 @@ static int a_db_compact(AURA_DB *db) {
     db->db_fd = new_fd;
     db->db_hdr.file_size = new_file_size;
     db->db_hdr.last_compact_ts = aura_now_ms();
+    db->db_hdr.record_cnt = new_record_cnt;
     db->buckets = new_hash_table;
     /* Reset the cache for now */
     memset(db->record_buf, 0, db->record_buf_size);
@@ -1133,23 +1193,41 @@ err_out_fd:
 static void *a_db_compact_routine(void *arg) {
     AURA_DB *db;
     struct timespec ts;
+    uint64_t time_to_wait;
 
     db = arg;
+    /* Thirty minutes */
+    time_to_wait = 30 * 60;
     pthread_mutex_lock(&db->db_lock);
 
     aura_now_ts(&ts);
     while (!db->shutdown) {
         /* Fire in 30 minutes */
-        ts.tv_sec += 30 * 60;
+        ts.tv_sec += time_to_wait;
         pthread_cond_timedwait(&db->db_cond, &db->db_lock, &ts);
         if (db->shutdown)
             break;
+
+        if (db->is_busy) {
+            /* Reduce time and try again in fifteen minutes */
+            time_to_wait = 15 * 60;
+            continue;
+        }
+        /* Set we are busy to block replay */
+        db->is_busy = true;
 
         pthread_mutex_unlock(&db->db_lock);
         /* Compact on wasted bytes for now */
         if (db->db_hdr.file_size / db->db_hdr.wasted_bytes > 0.5)
             a_db_compact(db);
+
         pthread_mutex_lock(&db->db_lock);
+        /* We are done with db */
+        db->is_busy = false;
+        /* Signal replay if stack */
+        pthread_cond_signal(&db->db_cond);
+        /* We could have successfully compacted, set time back to 30 */
+        time_to_wait = 30 * 60;
     }
 
     pthread_mutex_unlock(&db->db_lock);
@@ -1175,6 +1253,50 @@ int aura_db_start_bg_tasks(AURA_DBHANDLE _db) {
     err = pthread_create(&compact_thread_id, &thread_attr, a_db_compact_routine, (void *)db);
     if (err != 0)
         sys_exit(true, 0, "aura_db_start_bg_tasks: pthread_create error: %d", err);
+
+    return 0;
+}
+
+int aura_db_record_for_each(AURA_DBHANDLE _db, uint64_t record_cnt, int (*fn)(struct iovec)) {
+    AURA_DB *db;
+    struct aura_db_rec_hdr rec_hdr;
+    uint64_t cnt, curr_record_cnt, file_size;
+    off_t offset;
+    ssize_t res;
+    int rv;
+
+    db = (AURA_DB *)_db;
+    pthread_mutex_lock(&db->db_lock);
+    curr_record_cnt = db->db_hdr.record_cnt;
+    file_size = db->curr_file_size;
+    offset = db->db_hdr.record_off;
+    pthread_mutex_unlock(&db->db_lock);
+    cnt = a_min(record_cnt, curr_record_cnt);
+
+    while (offset < file_size && cnt-- > 0) {
+        res = pread(db->db_fd, &rec_hdr, sizeof(rec_hdr), offset);
+        if (res != sizeof(rec_hdr))
+            sys_exit(true, errno, "aura_db_loop_record: pread error:");
+
+        if (rec_hdr.data_len == 0)
+            rv = fn((struct iovec){.iov_base = NULL, .iov_len = 0});
+        else {
+            void *data;
+            data = calloc(1, rec_hdr.data_len);
+            if (!data)
+                sys_exit(true, errno, "aura_db_loop_record: memory error:");
+
+            res = pread(db->db_fd, data, rec_hdr.data_len, offset + sizeof(rec_hdr) + rec_hdr.key_len);
+            if (res != rec_hdr.data_len)
+                sys_exit(true, errno, "aura_db_loop_record: pread error:");
+
+            rv = fn((struct iovec){.iov_base = data, .iov_len = rec_hdr.data_len});
+        }
+
+        if (rv != 0)
+            return rv;
+        offset += rec_hdr.rec_len.aligned_len;
+    }
 
     return 0;
 }
@@ -1210,7 +1332,17 @@ size_t aura_db_get_size(AURA_DBHANDLE _db) {
     AURA_DB *db;
 
     db = (AURA_DB *)_db;
-    return db->db_hdr.file_size;
+    return __atomic_load_n(&db->db_hdr.file_size, __ATOMIC_ACQUIRE);
+}
+
+uint64_t aura_db_get_record_cnt(AURA_DBHANDLE _db) {
+    AURA_DB *db;
+
+    db = (AURA_DB *)_db;
+    uint64_t record_cnt;
+    record_cnt = __atomic_load_n(&db->db_hdr.record_cnt, __ATOMIC_ACQUIRE);
+    app_debug(true, 0, "RECORD CNT: %d", record_cnt);
+    return record_cnt;
 }
 
 void aura_db_dump_db_header(struct aura_db_hdr *hdr) {

@@ -16,9 +16,11 @@ add_executable(test_aura_db
     ${vaulten_aura_SOURCE_DIR}/lib/encrypt_lib.c
     ${common_sources}
 )
-
 target_link_libraries(test_aura_db PUBLIC openssl::openssl)
-target_include_directories(test_aura_db PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include PRIVATE ${PROJECT_INCLUDE_DIR})
+target_include_directories(test_aura_db 
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include 
+    PRIVATE ${PROJECT_INCLUDE_DIR}
+)
 
 add_test(
     NAME db_test
@@ -37,7 +39,10 @@ add_executable(test_aura_slab
     ${common_sources}
 )
 
-target_include_directories(test_aura_slab PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include PRIVATE ${PROJECT_INCLUDE_DIR})
+target_include_directories(test_aura_slab 
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${PROJECT_INCLUDE_DIR}
+)
 
 add_test(
     NAME slab_test
@@ -50,6 +55,7 @@ set_tests_properties(db_test PROPERTIES
 )
 
 # -------------------- DAEMON TESTS -------------------- #
+# System lifecycle
 add_executable(test_aura_daemon
     daemon/basic.c
     ${vaulten_aura_SOURCE_DIR}/src/cli/src/commands/system_cli.c
@@ -74,15 +80,43 @@ set_tests_properties(daemon_test PROPERTIES
     TIMEOUT 10
 )
 
+# Bytecode generation
+add_executable(test_bytecode_gen
+    daemon/codegen.c
+    ${vaulten_aura_SOURCE_DIR}/lib/runtime_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
+    ${common_sources}
+)
+
+target_include_directories(test_bytecode_gen 
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/src/cli/include
+    PRIVATE ${PROJECT_INCLUDE_DIR}
+)
+
+target_link_libraries(test_bytecode_gen PRIVATE quickjs::quickjs)
+
+add_test(
+    NAME codegen_test
+    COMMAND test_bytecode_gen
+    CONFIGURATIONS Debug RelWithDebInfo ""
+)
+
+set_tests_properties(codegen_test PROPERTIES
+    LABELS "daemon;codegen"
+    TIMEOUT 10
+)
+
 # -------------------- CLI TESTS -------------------- #
 add_executable(test_aura_cli
     cli/basic.c
     ${common_sources}
 )
 
-target_include_directories(test_aura_cli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include PRIVATE ${PROJECT_INCLUDE_DIR})
+target_include_directories(test_aura_cli 
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include 
+    PRIVATE ${PROJECT_INCLUDE_DIR}
+)
 
-message(STATUS ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 add_test(
     NAME cli_test
     COMMAND test_aura_cli

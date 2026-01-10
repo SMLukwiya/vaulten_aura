@@ -121,6 +121,10 @@ static void a_setup_database(struct aura_daemon_glob_conf *glob_conf) {
       A_DB_FILE_MODE);
     if (!glob_conf->db_handle)
         sys_exit(true, errno, "a_setup_database: aura_db_open error");
+
+    res = aura_db_start_bg_tasks(glob_conf->db_handle);
+    if (res != 0)
+        sys_exit(true, errno, "a_setup_database: aura_db_start_bg_tasks");
 }
 
 int aura_daemon() {

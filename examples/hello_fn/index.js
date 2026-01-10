@@ -1,6 +1,6 @@
 // Testing js
-function hello() {
-    console.log("Hello Wizzy!!")
-}
 
-hello()
+async function hello(req, res) {
+
+    return res.status(200).send("Hello World");
+}

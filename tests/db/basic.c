@@ -127,6 +127,7 @@ static void a_test_db_compaction(void) {
     int res;
     struct stat statbuf;
     size_t old_file_size, new_file_size;
+    uint64_t record_cnt, new_record_cnt;
 
     snprintf(db_path, sizeof(db_path), "%s/aura.db", test_dir);
 
@@ -134,6 +135,7 @@ static void a_test_db_compaction(void) {
     assert(db != NULL);
 
     old_file_size = aura_db_get_size(db);
+    record_cnt = aura_db_get_record_cnt(db);
 
     /* PUT */
     key.base = "fn:hello_4",
@@ -161,6 +163,8 @@ static void a_test_db_compaction(void) {
 
     new_file_size = aura_db_get_size(db);
     assert(old_file_size == new_file_size);
+    new_record_cnt = aura_db_get_record_cnt(db);
+    assert(record_cnt == new_record_cnt);
 
     /* FETCH */
     res = aura_db_fetch_record(db, 1, &key, &data);

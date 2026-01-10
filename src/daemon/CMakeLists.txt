@@ -35,7 +35,10 @@ add_executable(aura_daemon
 target_link_libraries(aura_daemon PUBLIC openssl::openssl PRIVATE picotls::picotls PRIVATE)
 target_link_libraries(aura_daemon PRIVATE quickjs::quickjs PRIVATE wasmtime::wasmtime PRIVATE yaml::yaml)
 
-target_include_directories(aura_daemon PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include PRIVATE ${PROJECT_INCLUDE_DIR})
+target_include_directories(aura_daemon
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${PROJECT_INCLUDE_DIR}
+)
 
 target_compile_definitions(aura_daemon 
     PRIVATE AURA_DATA_DIR="${DEFAULT_DATA_DIR}" # defined in global CMakeLists.txt
