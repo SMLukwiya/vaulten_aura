@@ -10,6 +10,7 @@
     (type *)((char *)_mptr - offsetof(type, member)); \
 })
 
+/* List link structure */
 struct aura_list_head {
     struct aura_list_head *next, *prev;
 };

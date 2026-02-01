@@ -3,7 +3,6 @@
 #endif
 #include "aura_dmn.h"
 #include "command/command_dmn.h"
-#include "command/function_dmn.h"
 #include "command/server_dmn.h"
 #include "command/sys_dmn.h"
 #include "daemon_lib.h"
@@ -11,16 +10,15 @@
 #include "unix_socket_lib.h"
 #include "utils_lib.h"
 
-#include <poll.h>
 #include <signal.h>
 #include <sys/wait.h>
 
-#define MAX_CONN 100
-#define A_SOCKET_PAIR_FD_INDEX 1
+// #define MAX_CONN 100
+// #define A_SOCKET_PAIR_FD_INDEX 1
 
 struct aura_daemon_glob_conf glob_conf;
-struct pollfd poll_fds[MAX_CONN];
-int server_pid = 0;
+// struct pollfd poll_fds[MAX_CONN];
+// int server_pid = 0;
 
 /**
  * Handle requests from server and cli
@@ -30,7 +28,6 @@ int server_pid = 0;
  * to whatever contexts
  */
 static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) {
-    aura_dump_msg(msg, true);
 
     switch (msg->hdr.type) {
     case A_MSG_PING:
@@ -41,30 +38,32 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
     case A_MSG_CMD_EXECUTE:
         switch (msg->hdr.cmd_type) {
         case A_CMD_SYSTEM_STOP:
-            if (server_pid == 0) {
-                aura_dmn_system_stop(cli_fd, server_pid);
-                return 0;
-            }
+            aura_dmn_system_stop(cli_fd, &glob_conf);
+            return 0;
 
         case A_CMD_SERVER_START:
             aura_dmn_start_server(msg, cli_fd, (struct srv_start_arg *)arg);
             return 0;
 
         case A_CMD_SERVER_STOP:
-            aura_dmn_stop_server(msg, poll_fds[A_SOCKET_PAIR_FD_INDEX].fd, cli_fd, server_pid);
-            server_pid = 0;
+            aura_dmn_stop_server(msg, glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd, cli_fd, glob_conf.server_pid);
+            glob_conf.server_pid = 0;
             return 0;
 
         case A_CMD_SERVER_STATUS:
-            aura_dmn_server_status(poll_fds[A_SOCKET_PAIR_FD_INDEX].fd, cli_fd);
+            aura_dmn_server_status(glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd, cli_fd);
             return 0;
 
         case A_CMD_FN_DEPLOY:
-            aura_dmn_function_deploy(msg->fd, poll_fds[A_SOCKET_PAIR_FD_INDEX].fd, cli_fd);
+            aura_dmn_function_deploy(msg->fd, glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd, cli_fd);
             return 0;
 
         case A_CMD_FN_VALIDATE_CONF:
             aura_dmn_function_config_validate(msg->fd, cli_fd);
+            return 0;
+
+        case A_CMD_FN_DELETE:
+            aura_dmn_function_delete(glob_conf.db_handle, &msg->data, cli_fd);
             return 0;
 
         case A_CMD_SERVER_VALIDATE_CONF:
@@ -86,14 +85,14 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
 /** */
 static void a_sig_ch_handler(int signo) {
     /* kill the registered socket pair */
-    if (waitpid(server_pid, NULL, 0) != server_pid) {
-        sys_exit(true, errno, "a_sig_ch_handler: waitpid error: %d", server_pid);
+    if (waitpid(glob_conf.server_pid, NULL, 0) != glob_conf.server_pid) {
+        sys_exit(true, errno, "a_sig_ch_handler: waitpid error: %d", glob_conf.server_pid);
     }
-    server_pid = 0;
-    if (poll_fds[A_SOCKET_PAIR_FD_INDEX].fd == -1)
+    glob_conf.server_pid = 0;
+    if (glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd == -1)
         return;
-    close(poll_fds[A_SOCKET_PAIR_FD_INDEX].fd);
-    poll_fds[A_SOCKET_PAIR_FD_INDEX].fd = -1;
+    close(glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd);
+    glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd = -1;
 }
 
 /**
@@ -102,10 +101,10 @@ static void a_sig_ch_handler(int signo) {
  * created socket pair for polling
  */
 static inline void a_setup_sockfd(int fd, pid_t srv_pid) {
-    poll_fds[A_SOCKET_PAIR_FD_INDEX].fd = fd;
-    poll_fds[A_SOCKET_PAIR_FD_INDEX].events = POLLIN;
-    poll_fds[A_SOCKET_PAIR_FD_INDEX].revents = 0;
-    server_pid = srv_pid;
+    glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd = fd;
+    glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].events = POLLIN;
+    glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].revents = 0;
+    glob_conf.server_pid = srv_pid;
 }
 
 static void a_setup_database(struct aura_daemon_glob_conf *glob_conf) {
@@ -116,6 +115,7 @@ static void a_setup_database(struct aura_daemon_glob_conf *glob_conf) {
         sys_exit(true, errno, "a_setup_database: aura_setup_database_file_path error");
 
     glob_conf->db_handle = aura_db_open(
+      &glob_conf->mc,
       glob_conf->aura_app_path.base,
       glob_conf->aura_db_path.base,
       O_RDWR | O_CREAT | O_EXCL | O_TRUNC,
@@ -161,12 +161,12 @@ int aura_daemon() {
         sys_exit(false, 0, "aura_daemon: aura_unix_server_listen error");
 
     for (i = 0; i < MAX_CONN; ++i) {
-        poll_fds[i].fd = -1;
-        poll_fds[i].events = POLLIN;
-        poll_fds[i].revents = 0;
+        glob_conf.poll_fds[i].fd = -1;
+        glob_conf.poll_fds[i].events = POLLIN;
+        glob_conf.poll_fds[i].revents = 0;
     }
 
-    poll_fds[0].fd = d_sock.sock_fd;
+    glob_conf.poll_fds[0].fd = d_sock.sock_fd;
 
     int keep_fd[] = {
       d_sock.sock_fd,
@@ -184,51 +184,56 @@ int aura_daemon() {
     if (res < 0)
         sys_exit(true, errno, "aura_daemon: set_pid_lock error");
 
+    /* set up memory context */
+    aura_memory_ctx_init(&glob_conf.mc);
+    if (aura_create_dynamic_slab_alloc_caches(&glob_conf.mc) == false)
+        sys_exit(true, errno, "aura_daemon: aura_create_dynamic_slab_alloc_caches error:");
+
     /* check app paths */
     res = aura_setup_app_paths(&glob_conf.aura_app_path);
     if (res == -1)
-        sys_exit(true, errno, "aura_daemon: a_setup_app_paths");
+        sys_exit(true, errno, "aura_daemon: a_setup_app_paths error:");
     /* Setup database */
     a_setup_database(&glob_conf);
 
     for (;;) {
-        if (poll(poll_fds, num_fd, -1) < 0 && errno != EINTR)
-            sys_exit(true, errno, "aura_daemon: poll error");
+        if (poll(glob_conf.poll_fds, num_fd, -1) < 0 && errno != EINTR)
+            sys_exit(true, errno, "aura_daemon: poll error:");
 
-        if (poll_fds[0].revents & POLLIN) {
+        if (glob_conf.poll_fds[0].revents & POLLIN) {
             cli_fd = aura_unix_server_accept(d_sock.sock_fd, &uid);
             if (cli_fd < 0)
-                sys_exit(true, errno, "aura_daemon: aura_unix_server_accept");
+                sys_exit(true, errno, "aura_daemon: aura_unix_server_accept error:");
 
-            poll_fds[num_fd].fd = cli_fd;
-            poll_fds[num_fd].events = POLLIN;
-            poll_fds[num_fd].revents = 0;
+            glob_conf.poll_fds[num_fd].fd = cli_fd;
+            glob_conf.poll_fds[num_fd].events = POLLIN;
+            glob_conf.poll_fds[num_fd].revents = 0;
             num_fd++;
         }
 
         for (i = 1; i < num_fd; ++i) {
-            if (poll_fds[i].revents & POLLIN) {
+            if (glob_conf.poll_fds[i].revents & POLLIN) {
                 switch (i) {
                 case A_SOCKET_PAIR_FD_INDEX:
                 // fallthrough
                 default:
-                    res = aura_recv_msg(poll_fds[i].fd, &aura_msg);
+                    res = aura_recv_msg(glob_conf.poll_fds[i].fd, &aura_msg);
                     if (res > 0) {
                         if (i == A_SOCKET_PAIR_FD_INDEX) {
                             /* aura_server request */
                             aura_dump_msg(&aura_msg, true);
                         } else {
                             /* aura_cli request */
-                            a_handle_client_request(&aura_msg, poll_fds[i].fd, (void *)&srv_arg);
+                            a_handle_client_request(&aura_msg, glob_conf.poll_fds[i].fd, (void *)&srv_arg);
                             break;
                         }
                     } else
                         goto err_out;
                 }
-            } else if (poll_fds[i].revents & (POLLHUP | POLLERR | POLLNVAL | POLLOUT)) {
+            } else if (glob_conf.poll_fds[i].revents & (POLLHUP | POLLERR | POLLNVAL | POLLOUT)) {
             err_out:
-                close(poll_fds[i].fd);
-                poll_fds[i].fd = -1;
+                close(glob_conf.poll_fds[i].fd);
+                glob_conf.poll_fds[i].fd = -1;
             }
         }
     }

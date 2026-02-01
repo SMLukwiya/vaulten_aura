@@ -53,12 +53,14 @@ typedef enum {
 
 typedef enum {
     A_CMD_SYSTEM_STOP = 1,
+    A_CMD_SYSTEM_STATUS,
+    A_CMD_SERVER_VALIDATE_CONF,
     A_CMD_SERVER_START,
     A_CMD_SERVER_STOP,
     A_CMD_SERVER_STATUS,
-    A_CMD_SERVER_VALIDATE_CONF,
-    A_CMD_FN_DEPLOY,
     A_CMD_FN_VALIDATE_CONF,
+    A_CMD_FN_DEPLOY,
+    A_CMD_FN_DELETE,
 } aura_cmd_t;
 
 struct aura_msg_hdr {

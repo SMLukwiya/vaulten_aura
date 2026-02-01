@@ -78,10 +78,17 @@ int aura_write_n(int fd, char *buf, size_t size) {
  */
 int aura_scan_str(const char *value, const char *fmt, ...) {
     va_list vp;
-    int res;
+    int res, err;
+
+    err = errno;
+    errno = 0;
     va_start(vp, fmt);
     res = vsscanf(value, fmt, vp);
     va_end(vp);
+
+    if (errno != 0)
+        return 0;
+    errno = err;
     return res;
 }
 

@@ -256,7 +256,7 @@ static struct aura_iovec *hpack_decode_string(struct aura_memory_ctx *mc, const 
         if (len > src_end - *src)
             return NULL;
 
-        str = aura_iovec_init(mc, len * 2); /* huffman max compression ratio is >= 0.5 */
+        str = aura_iovec_init(mc, len * 2, NULL); /* huffman max compression ratio is >= 0.5 */
         if (str == NULL)
             return NULL;
 
@@ -276,7 +276,7 @@ static struct aura_iovec *hpack_decode_string(struct aura_memory_ctx *mc, const 
         } else
             hpack_validate_header_value((char *)*src, len, err);
 
-        str = aura_iovec_init(mc, len + 1);
+        str = aura_iovec_init(mc, len + 1, NULL);
         if (str == NULL)
             return NULL;
 
@@ -932,11 +932,11 @@ static size_t hpack_encode_new_entry(struct aura_memory_ctx *mc, struct aura_hpa
         if (is_token)
             new_tb_entry->name = nv->name;
         else {
-            new_tb_entry->name = aura_iovec_init(mc, nv->name->len + 1);
+            new_tb_entry->name = aura_iovec_init(mc, nv->name->len + 1, NULL);
             new_tb_entry->name->base[nv->name->len] = '\0';
             memcpy(new_tb_entry->name->base, nv->name->base, nv->name->len);
         }
-        new_tb_entry->value = aura_iovec_init(mc, nv->value->len + 1);
+        new_tb_entry->value = aura_iovec_init(mc, nv->value->len + 1, NULL);
         new_tb_entry->value->base[nv->value->len] = '\0';
         memcpy(new_tb_entry->value->base, nv->value->base, nv->value->len);
     }

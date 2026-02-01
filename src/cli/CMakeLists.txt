@@ -9,6 +9,7 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/error_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/utils_lib.c
 )
 
 add_executable(aura 

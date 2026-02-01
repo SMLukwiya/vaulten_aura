@@ -4,12 +4,13 @@ function:
   name: aura_hello_api
   description: Aura Hello function deploy configs JS
   version: 1
-  host: vaultenaura.local # @todo: get a better way to tie function to host
+  host: vaultenaura.local
   # runtime: "js"
   entrypoint: index.js
-  env:
-    - name: DB_URL
-      value: postgresql://localhost:5432/mydb
+
+env:
+  - name: DB_URL
+    value: postgresql://localhost:5432/mydb
 
 triggers:
   http:
@@ -20,7 +21,7 @@ triggers:
   cron:
     schedule: 0 0 * * *
     jitter_seconds: 0
-    misfire_policy: run_once
+    misfire_policy: ignore
     retries:
       retry_on:
         - "5xx"

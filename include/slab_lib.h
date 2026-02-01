@@ -184,6 +184,7 @@ static inline void a_verify_poison_pattern(void *ptr, uint64_t size, uint64_t ex
     } while (0)
 #endif
 
+/* our dynamic memory is in 64 byte multiples */
 static inline int aura_get_dynamic_slab_index(size_t size) {
     if ((size % 64) == 0)
         return (size / 64) - 1;

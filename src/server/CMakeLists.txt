@@ -18,6 +18,7 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/encrypt_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/runtime_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/ipc_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/function_v1_lib.c
 )
 
 add_executable(aura_server 

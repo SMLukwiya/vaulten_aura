@@ -203,6 +203,9 @@ struct aura_iovec aura_calculate_digest(struct aura_iovec *bytes) {
     if (!md.base)
         return md;
 
+    if (!bytes)
+        return md;
+
     if (bytes->base == NULL || bytes->len == 0)
         return md;
 

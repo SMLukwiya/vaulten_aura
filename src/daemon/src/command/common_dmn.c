@@ -7,7 +7,8 @@
 /**
  * This is as crude as it gets over here!!
  */
-uint32_t a_rax_to_stack_builder(aura_rax_tree_t *t, st_aura_b_builder *b, struct aura_yml_node *node_arr, uint32_t node_idx, uint32_t parent_off, struct aura_builder_stack *stack, int *conf_tab) {
+uint32_t a_rax_to_stack_builder(aura_rax_tree_t *t, st_aura_b_builder *b, struct aura_yml_node *node_arr,
+                                uint32_t node_idx, uint32_t parent_off, struct aura_builder_stack *stack, int *conf_tab) {
     aura_rax_node_t *node;
     struct aura_yml_node *yn;
     uint32_t container_off, ch_idx, node_off = 0;
@@ -73,7 +74,8 @@ uint32_t a_rax_to_stack_builder(aura_rax_tree_t *t, st_aura_b_builder *b, struct
 /**
  *
  */
-uint32_t aura_build_blob_from_rax(aura_rax_tree_t *t, st_aura_b_builder *b, struct aura_yml_node *node_arr, const char *prefix, size_t len, struct aura_builder_stack *stack, int *conf_tab) {
+uint32_t aura_build_blob_from_rax(aura_rax_tree_t *t, st_aura_b_builder *b, struct aura_yml_node *node_arr,
+                                  const char *prefix, size_t len, struct aura_builder_stack *stack, int *conf_tab) {
     uint32_t root_off, start_off, node_off, parent_off;
     struct aura_yml_node *yn, *par_yn;
     int res;
@@ -116,7 +118,7 @@ uint32_t aura_build_blob_from_rax(aura_rax_tree_t *t, st_aura_b_builder *b, stru
             /**
              * These scalars seen so far would be the children of a mapping or a
              * sequence. So when we encounter the first non scalar, we know we
-             * can insert those!
+             * can insert the already seen scalars as children!
              */
             for (int j = i + 1; j < stack->ns.cnt; ++j) {
                 scalar_cnt++;
@@ -125,6 +127,8 @@ uint32_t aura_build_blob_from_rax(aura_rax_tree_t *t, st_aura_b_builder *b, stru
                 if (yn->type == A_YAML_SCALAR) {
                     if (yn->val_type == A_YAML_NUM)
                         val_off = aura_blob_b_add_num(b, yn->uint_val, A_BLOB_NODE_INT);
+                    else if (yn->val_type == A_YAML_BOOL)
+                        val_off = aura_blob_b_add_num(b, yn->bool_val, A_BLOB_NODE_BOOL);
                     else if (yn->val_type == A_YAML_STRING)
                         val_off = aura_blob_b_add_str(b, yn->str_val);
 

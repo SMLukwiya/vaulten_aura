@@ -2,9 +2,11 @@
 #define AURA_FUNCTION_LIB_H
 
 #include "blobber_lib.h"
+#include "error_lib.h"
 #include "radix_lib.h"
 #include "time_lib.h"
 #include "types_lib.h"
+#include "utils_lib.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -13,8 +15,25 @@
 
 #define MAX_CIRCUIT_BREAKER_TRIGGERS 3
 
+#define aura_fn_async_op_wait(done) \
+    while (!done)                   \
+        ;
+
+struct aura_fn_cb_data {
+    uint64_t job_id;
+    off_t rec_off;
+    const char *fn_name;
+    uint32_t fn_version;
+};
+
+typedef enum {
+    A_FN_DEPLOY = 1U < 1,
+    A_FN_DELETE = 1U < 2,
+} aura_fn_job_type;
+
 enum a_fn_node_idx {
     A_IDX_FN_NONE,
+    A_IDX_FN_FUNCTION,
     A_IDX_FN_NAME,
     A_IDX_FN_DESCRIPTION,
     A_IDX_FN_VERSION,
@@ -23,9 +42,20 @@ enum a_fn_node_idx {
     A_IDX_FN_ENV,
     A_IDX_FN_TRIGGERS,
     A_IDX_FN_HTTP_TRIGGER,
+    A_IDX_FN_CRON_TRIGGER,
+    A_IDX_FN_QUEUE_TRIGGER,
+    A_IDX_FN_CONCURRENCY,
     A_IDX_FN_MIN_INSTANCES,
     A_IDX_FN_MAX_INSTANCES,
-
+    A_IDX_FN_PREWARM,
+    A_IDX_FN_CRON_RETRIES,
+    A_IDX_FN_RESOURCES,
+    A_IDX_FN_MEMORY,
+    A_IDX_FN_SOFT_MEM,
+    A_IDX_FN_HARD_MEM,
+    A_IDX_FN_OOM_POLICY,
+    A_IDX_FN_NETWORKING,
+    A_IDX_FN_RUNTIME,
 };
 
 /*--------------*/
@@ -33,6 +63,7 @@ struct aura_yml_fn_data_ctx {
     int dir_fd; /* function directory fd */
     bool seen_aura_version;
     bool extract;
+    uint32_t trigger_type;
     aura_rax_tree_t *parse_tree;
     st_aura_b_builder builder;
     struct aura_yml_node *node_arr;
@@ -41,29 +72,48 @@ struct aura_yml_fn_data_ctx {
     uint32_t node_len;
 };
 
+/* Runtime */
 typedef enum {
-    JIT,
+    JIT = 1,
     NATIVE,
     WASM
 } aura_runtime_t;
 
+struct aura_fn_runtime {
+    const char *str;
+    aura_runtime_t value;
+};
+
+// const struct aura_fn_runtime runtimes[] = {
+//   {"js", JIT},
+//   {"native", NATIVE},
+//   {"wasm", WASM},
+// };
+extern const struct aura_fn_runtime runtimes[];
+
+/* Triggers */
 typedef enum {
-    A_TRIGGER_HTTP,
+    A_TRIGGER_HTTP = 1,
     A_TRIGGER_CRON,
     A_TRIGGER_QUEUE
 } aura_trigger_t;
 
-typedef enum {
-    TCP,
-    UDP
-} aura_protocol_t;
+struct aura_fn_trigger {
+    const char *str;
+    aura_trigger_t value;
+};
 
-typedef enum {
-    TLS_1_3
-} aura_tls_version_t;
+// const struct aura_fn_trigger trigger_types[] = {
+//   {"http", A_TRIGGER_HTTP},
+//   {"cron", A_TRIGGER_CRON},
+//   {"queue", A_TRIGGER_QUEUE},
+// };
 
+extern const struct aura_fn_trigger trigger_types[];
+
+/* HTTP */
 typedef enum {
-    GET,
+    GET = 1,
     POST,
     PUT,
     PATCH,
@@ -71,19 +121,157 @@ typedef enum {
     HEAD
 } aura_fn_http_method_t;
 
-typedef enum {
-    ALLOW_ALL,
-    DENY_ALL,
-    WHITELIST
-} aura_network_policy_t;
+struct aura_fn_http_method {
+    const char *str;
+    aura_fn_http_method_t value;
+};
 
+extern const struct aura_fn_http_method http_methods[];
+
+/* Cron */
+/* Cron misfire policy */
 typedef enum {
-    TRACE,
+    FIRE_NOW = 1, /* Execute missed jobs immediately when possible */
+    IGNORE,       /* Drop missed execution and wait for next schedule */
+    RESCHEDULE    /* Run the job at the next possible time while maintaining original schedule */
+} aura_fn_cron_misfire_policy_t;
+
+struct aura_fn_cron_misfire_policy {
+    const char *str;
+    aura_fn_cron_misfire_policy_t value;
+};
+
+extern const struct aura_fn_cron_misfire_policy misfire_policies[];
+
+/* Cron backoff */
+typedef enum {
+    BACKOFF_NONE,
+    BACKOFF_FIXED,
+    BACKOFF_EXPONENTIAL
+} aura_fn_backoff_strategy_t;
+
+struct aura_fn_backoff {
+    const char *str;
+    aura_fn_backoff_strategy_t value;
+};
+
+// const struct aura_fn_backoff backoff_opt[] = {
+//   {"none", BACKOFF_NONE},
+//   {"fixed", BACKOFF_FIXED},
+//   {"exponential", BACKOFF_EXPONENTIAL},
+// };
+
+extern const struct aura_fn_backoff backoff_opt[];
+
+/* Log level */
+typedef enum {
+    TRACE = 1,
     INFO,
     DEBUG,
     WARN,
     ERROR
 } aura_fn_log_level_t;
+
+struct aura_fn_log_level {
+    const char *str;
+    aura_fn_log_level_t value;
+};
+
+extern const struct aura_fn_log_level log_levels[];
+
+/* Resources OOM policy */
+typedef enum {
+    KILL = 1,
+    SNAPSHOT_THEN_KILL,
+    THROTTLE
+} aura_fn_oom_policy_t;
+
+struct aura_fn_oom_policy {
+    const char *str;
+    aura_fn_oom_policy_t value;
+};
+
+extern const struct aura_fn_oom_policy oom_policies[];
+
+/**
+ * Controls for logging, tracing, and custom metrics.
+ */
+typedef enum {
+    PII_DEFAULT = 1,
+    REDACT_STRICT,
+    REDACT_NONE
+} aura_fn_log_redact_level_t;
+
+struct aura_fn_log_redact_level {
+    const char *str;
+    aura_fn_log_redact_level_t value;
+};
+
+extern const struct aura_fn_log_redact_level log_redact_levels[];
+
+/** Deployment strategy */
+typedef enum {
+    CANARY = 1,
+    BLUE_GREEN,
+    ROLLING
+} aura_fn_deployment_strategy_t;
+
+struct aura_fn_deployment_strategy {
+    const char *str;
+    aura_fn_deployment_strategy_t value;
+};
+
+extern const struct aura_fn_deployment_strategy deploy_strategies[];
+
+typedef enum {
+    BLUE = 1,
+    GREEN
+} aura_fn_blue_green_strategy_t;
+
+struct aura_fn_blue_green {
+    const char *str;
+    aura_fn_blue_green_strategy_t value;
+};
+
+// const struct aura_fn_blue_green blue_green_opt[] = {
+//   {"blue", BLUE},
+//   {"green", GREEN},
+// };
+
+/** Network policy */
+typedef enum {
+    ALLOW_ALL = 1,
+    DENY_ALL,
+    WHITELIST
+} aura_network_policy_t;
+
+struct aura_fn_network_policy {
+    const char *str;
+    aura_network_policy_t value;
+};
+
+// const struct aura_fn_network_policy network_policies[] = {
+//   {"allow_all", ALLOW_ALL},
+//   {"deny_all", DENY_ALL},
+//   {"whitelist", WHITELIST},
+// };
+
+extern const struct aura_fn_network_policy network_policies[];
+
+/** Network protocol */
+typedef enum {
+    TCP = 1,
+    UDP
+} aura_protocol_t;
+
+struct aura_fn_protocol {
+    const char *str;
+    aura_protocol_t value;
+};
+
+typedef enum {
+    TLS_1_3
+} aura_tls_version_t;
 
 typedef enum {
     NONE,
@@ -92,35 +280,24 @@ typedef enum {
     CUSTOM
 } aura_auth_t;
 
-typedef enum {
-    FIRE_NOW,  /* Execute missed jobs immediately when possible */
-    IGNORE,    /* Drop missed execution and wait for next schedule */
-    RESCHEDULE /* Run the job at the next possible time while maintaining original schedule */
-} aura_fn_cron_misfire_policy_t;
-
-struct aura_concurrency {
+/* Fn concurrency structure */
+struct aura_fn_concurrency {
     uint32_t min_instances;  /* Min concurrent instances to be alive at all time */
     uint32_t max_instances;  /* The max number of concurrent instances for this function. */
-    u_int32_t delay;         /* Time between new instance spin up until max instances */
+    uint32_t delay;          /* Time between new instance spin up until max instances */
     bool pre_warm_on_deploy; /* create function ready instance(s) on deploy */
     bool background_tasks;   /* Enables the API for this function to submit background tasks. */
 };
 
-typedef enum {
-    KILL,
-    SNAPSHOT_THEN_KILL,
-    THROTTLE
-} aura_fn_oom_policy_t;
-
 struct aura_fn_resources {
-    u_int32_t memory_limit_mb_soft;        /* Soft memory limit MBs */
-    u_int32_t memory_limit_mb_hard;        /* Hard memory limit MBs */
-    u_int32_t cpu_shares;                  /* Relative CPU share compared to other functions. */
-    u_int32_t timeout;                     /* The max execution time for a single invocation of the function in ms. */
-    u_int32_t cpu_burst_credit;            /* Internal: function can exceed their cpu limits based on good behaviour */
-    u_int32_t io_net_egress_bytes_per_sec; /* Internal: Amount of data leaving the network because of this function */
-    u_int32_t socket_max;                  /* Internal: */
-    aura_fn_oom_policy_t oom_pol;
+    uint32_t memory_limit_mb_soft;        /* Soft memory limit MBs */
+    uint32_t memory_limit_mb_hard;        /* Hard memory limit MBs */
+    uint32_t cpu_shares;                  /* Relative CPU share compared to other functions. */
+    uint32_t timeout;                     /* The max execution time for a single invocation of the function in ms. */
+    uint32_t cpu_burst_credit;            /* Internal: function can exceed their cpu limits based on good behaviour */
+    uint32_t io_net_egress_bytes_per_sec; /* Internal: Amount of data leaving the network because of this function */
+    uint32_t socket_max;                  /* Internal: */
+    const struct aura_fn_oom_policy *oom_policy;
 };
 
 /**
@@ -134,12 +311,12 @@ struct aura_fn_ingress {
 
 struct aura_fn_egress_connection {
     const char *host;
-    u_int16_t port;
+    uint16_t port;
     aura_protocol_t protocol;
     aura_tls_version_t prot_version;
     bool secure;
-    u_int32_t idle_ttl;
-    u_int32_t max_per_origin;
+    uint32_t idle_ttl;
+    uint32_t max_per_origin;
 };
 
 struct aura_fn_egress {
@@ -147,16 +324,6 @@ struct aura_fn_egress {
     size_t whitelist_len;
     aura_network_policy_t policy; /* The default outbound network policy. */
 };
-
-/* ---------- OBSERVABILITY ---------- */
-/**
- * Controls for logging, tracing, and custom metrics.
- */
-typedef enum {
-    PII_DEFAULT,
-    REDACT_STRICT,
-    REDACT_NONE
-} aura_fn_log_redact_level_t;
 
 struct aura_fn_logging {
     char *destination;         /* The URL or identifier of the external logging service. */
@@ -172,7 +339,7 @@ struct aura_fn_tracing {
      * We should trace all requests that exceed this latency,
      * while only sampling the 'sample_rate' requests below it.
      */
-    u_int32_t tail_sampling_target_ms;
+    uint32_t tail_sampling_target_ms;
 };
 
 struct aura_fn_observability {
@@ -181,47 +348,31 @@ struct aura_fn_observability {
     bool custom_metrics;
 };
 
-typedef enum {
-    CANARY,
-    BLUE_GREEN,
-    ROLLING
-} aura_fn_deployment_strategy_t;
-
-typedef enum {
-    BLUE,
-    GREEN
-} aura_fn_blue_green_strategy_t;
-
 struct aura_fn_deployment {
     aura_fn_deployment_strategy_t strategy;
     union {
-        u_int8_t percentage;
-        u_int32_t batch;
+        uint8_t percentage;
+        uint32_t batch;
         aura_fn_blue_green_strategy_t primary;
     };
 };
 
 struct aura_fn_success_rules {
-    u_int32_t min_availability;
-    u_int32_t p95_latency_lt;
-    u_int8_t error_rate;
+    uint32_t min_availability;
+    uint32_t p95_latency_lt;
+    uint8_t error_rate;
 };
 
 struct aura_fn_success_ctx {
-    const char *health_check; /** @todo: = */
+    const char *health_check;
     struct aura_fn_success_rules rules;
-    u_int32_t rollback_after;
+    uint32_t rollback_after;
 };
 
 /* ---------- RELIABILITY ---------- */
-typedef enum {
-    BACKOFF_NONE,
-    BACKOFF_FIXED,
-    BACKOFF_EXPONENTIAL
-} aura_fn_backoff_strategy_t;
-
+/* Fn retry structure */
 struct aura_fn_retry {
-    u_int32_t attempts;
+    uint32_t attempts;
     aura_fn_backoff_strategy_t poilcy;
     char **retry_on;   /* condition to re-run job, e.g, 5xx error */
     char *dead_letter; /* Internal: Seperate queue for failed messages */
@@ -233,17 +384,18 @@ struct aura_fn_retry {
 };
 
 /* ---------- TRIGGERS ---------- */
+/* Http trigger structure */
 struct aura_fn_http_trigger {
-    aura_fn_http_method_t http_method;
+    const struct aura_fn_http_method *http_method;
     struct aura_iovec path;
     const char *auth;
 };
 
+/* Crons trigger structure */
 struct aura_fn_cron_trigger {
     const char *cron_schedule;
-    u_int32_t jitter_seconds; /* A random delay in seconds to add to the cron schedule to prevent stampeding */
-    u_int32_t max_concurrent; /* Internal: Run 1 or multiple instances of job in parallel */
-    aura_fn_cron_misfire_policy_t misfire_policy;
+    uint32_t jitter_seconds; /* A random delay in seconds to add to the cron schedule to prevent stampeding */
+    const struct aura_fn_cron_misfire_policy *misfire_policy;
     struct aura_fn_retry retry;
 };
 
@@ -291,109 +443,131 @@ reliability:
   retries: { policy: exponential, attempts: 2, base: 300ms, jitter: half, retry_on: ["5xx"] }
 */
 
-struct aura_fn {
-    u_int64_t fn_id;
+/* Function meta structure */
+struct aura_fn_meta {
     const char *name;
     const char *description;
-    const char *version;
-    const char *prev_version;
-    // aura_runtime_t runtime;
+    uint32_t version;
+    uint32_t prev_version;
+    const char *host;
     const char *entry_point;
-    struct aura_iovec *envs;
     struct aura_fn_http_trigger http_trigger;
     struct aura_fn_cron_trigger cron_trigger;
-    u_int64_t last_execution; /* time since last execution */
     struct aura_fn_resources fn_resources;
-    struct aura_concurrency fn_concurrency;
     struct {
         struct aura_fn_ingress inbound;
         struct aura_fn_egress outbound;
     } networking;
+    // storage
+    // success_criteria
+};
+
+/* Function config structure */
+struct aura_fn_config {
+    struct aura_iovec *envs;
+    struct aura_fn_concurrency fn_concurrency;
     struct aura_fn_observability fn_observability;
+    // placement
+    // deploy
+    // timeout
     /**
      * In the case that a function processes event streams,
      * we can decide to wait for this maximum number of milliseconds
      * and collect a batch of events before passing it over to a function.
      */
     unsigned publish_batch_ms;
-    void *fn_code;
+    bool is_active; /* function can be invoked */
+};
+
+/** Function stat structure */
+struct aura_fn_stat {
+    uint64_t invocations;
+    uint64_t failures;
+    uint64_t latency_ns;
+    uint64_t exec_ns;
+    uint64_t cold_starts;
+    uint64_t last_execution;
+};
+
+/* Function Huge structure (contains everything about a fn) */
+struct aura_fn {
+    uint64_t fn_id;
+    struct aura_fn_meta meta;
+    struct aura_fn_config config;
+    struct aura_fn_stat stats;
     uint64_t fn_code_len;
-}; /* packed aligned 64 perhaps */
-
-/** @todo: not used */
-struct generic_map {
-    const char *str;
-    int value;
+    void *fn_code;
 };
 
-struct aura_http_method_t_map {
-    const char *str;
-    aura_fn_http_method_t value;
+/**
+ * Function smallest structure.
+ * I would imagine being able to locate in a reliable way
+ * the latest version of a function given only the function name.
+ * Given how keys are currently generated, a structure
+ * like this would help since the key is simply the fn name
+ * This is very tiny as compared to the real function meta
+ */
+struct aura_fn_petite {
+    char fn_name[1024];
+    uint32_t fn_version;
+    uint64_t job_id; /* Job on which this function was created */
 };
 
-struct aura_trigger_t_map {
-    const char *str;
-    aura_trigger_t value;
-};
-
-struct aura_network_policy_t_map {
-    const char *str;
-    aura_network_policy_t value;
-};
-
-struct aura_runtime_t_map {
-    const char *str;
-    aura_runtime_t value;
-};
-
-struct aura_protocol_t_map {
-    const char *str;
-    aura_protocol_t value;
-};
-
-struct aura_tls_version_t_map {
+struct aura_fn_tls_version {
     const char *str;
     aura_tls_version_t value;
 };
 
-struct aura_log_level_t_map {
-    const char *str;
-    aura_fn_log_level_t value;
+/* Fn event structure */
+struct aura_fn_evt {
+    uint32_t state;
+    int error_code;
+    size_t msg_len;
+    char msg[4096];
 };
 
-struct aura_oom_policy_t_map {
-    const char *str;
-    aura_fn_oom_policy_t value;
-};
+/* Fn Deployment */
+typedef enum {
+    A_FN_DEPLOY_STATE_START = 1,
+    A_FN_DEPLOY_STATE_RUNNING,
+    A_FN_DEPLOY_STATE_CONFIG_VALIDATE,
+    A_FN_DEPLOY_STATE_PETITE_SAVE, /* A small representation for a fn containing only name and version */
+    A_FN_DEPLOY_STATE_META_SAVE,
+    A_FN_DEPLOY_STATE_CONFIG_SAVE,
+    A_FN_DEPLOY_STATE_CODE_SAVE,
+    A_FN_DEPLOY_STATE_STAT_SAVE,
+    A_FN_DEPLOY_STATE_DONE,
+    A_FN_DEPLOY_STATE_FAILED
+} aura_fn_deploy_state;
 
-struct aura_log_redact_level_t_map {
-    const char *str;
-    aura_fn_log_redact_level_t value;
-};
+/**/
+typedef enum {
+    A_FN_DEPLOY_ERROR_NONE,
+    A_FN_DEPLOY_ERROR_GENERIC,
+    A_FN_DEPLOY_ERROR_CONFIG,
+    A_FN_DEPLOY_ERROR_DUPLICATE
+} aura_fn_deploy_errors;
 
-struct aura_deployment_strategy_t_map {
-    const char *str;
-    aura_fn_deployment_strategy_t value;
-};
+/* Fn Deletion */
+typedef enum {
+    A_FN_DELETE_STATE_START = 1,
+    A_FN_DELETE_STATE_RUNNING,
+    A_FN_DELETE_STATE_PETITE,
+    A_FN_DELETE_STATE_META,
+    A_FN_DELETE_STATE_CONFIG,
+    A_FN_DELETE_STATE_CODE,
+    A_FN_DELETE_STATE_STAT,
+    A_FN_DELETE_STATE_DONE,
+    A_FN_DELETE_STATE_FAILED,
+} aura_fn_delete_state;
 
-struct aura_blue_green_t_map {
-    const char *str;
-    aura_fn_blue_green_strategy_t value;
-};
+typedef enum {
+    A_FN_DELETE_ERROR_NONE,
+    A_FN_DELETE_ERROR_GENERIC,
+    A_FN_DELETE_ERROR_NOT_EXIST
+} aura_fn_delete_error;
 
-struct aura_backoff_t_map {
-    const char *str;
-    aura_fn_backoff_strategy_t value;
-};
-
-struct aura_cron_misfire_policy_t_map {
-    const char *str;
-    aura_fn_cron_misfire_policy_t value;
-};
-
-/*************************************************************/
 /** DEPLOY STUFF */
-
 typedef enum {
     DEPLOYMENT_STABLE,
     DEPLOYMENT_CANARY,
@@ -401,20 +575,11 @@ typedef enum {
     DEPLOYMENT_ROLLED_BACK
 } deployment_state_t;
 
-/** @todo: this may be part of the upper function structure */
-/** @todo: I could be watching several functions for success deployment */
 struct aura_fn_deployment_stat {
-    char *function_name;
-    char *version;
     uint64_t deployment_time;
-
     double error_rate_threshold;
     double latency_increase_threshold;
     double throughput_drop_threshold;
-
-    // struct aura_sliding_metrics current_window;
-    // struct aura_sliding_metrics baseline_window;
-
     double current_error_rate;
     double baseline_error_rate;
     double current_p95_latency;
@@ -436,6 +601,109 @@ struct aura_rollback_detector {
     uint64_t medium_window_ms; // trend analysis (maybe 5 mins)
     uint64_t long_window_ms;   // 1 hour for baseline comparison
 };
+
+/** Get the numeric value of the method str */
+static inline const struct aura_fn_http_method *aura_fn_http_method_get(const char *str) {
+    int val;
+
+    if (aura_scan_str(str, "%u" SCNu32, &val) == 0)
+        return NULL;
+
+    switch (val) {
+    case GET:
+        return &http_methods[GET - 1];
+    case POST:
+        return &http_methods[POST - 1];
+    case PUT:
+        return &http_methods[PUT - 1];
+    case PATCH:
+        return &http_methods[PATCH - 1];
+    case DELETE:
+        return &http_methods[DELETE - 1];
+    case HEAD:
+        return &http_methods[HEAD - 1];
+    default:
+        return NULL;
+    }
+}
+
+/** Get the numeric value of the policy str */
+static inline const struct aura_fn_cron_misfire_policy *aura_fn_cron_misfire_policy_get(const char *str) {
+    int val;
+
+    if (aura_scan_str(str, "%u" SCNu32, &val) == 0)
+        return NULL;
+
+    switch (val) {
+    case FIRE_NOW:
+        return &misfire_policies[FIRE_NOW - 1];
+    case IGNORE:
+        return &misfire_policies[IGNORE - 1];
+    case RESCHEDULE:
+        return &misfire_policies[RESCHEDULE - 1];
+    default:
+        return NULL;
+    }
+}
+
+static inline const struct aura_fn_oom_policy *aura_fn_oom_policy_get(const char *str) {
+    int val;
+
+    if (aura_scan_str(str, "%u" SCNu32, &val) == 0)
+        return NULL;
+
+    switch (val) {
+    case KILL:
+        return &oom_policies[KILL - 1];
+    case SNAPSHOT_THEN_KILL:
+        return &oom_policies[SNAPSHOT_THEN_KILL - 1];
+    case THROTTLE:
+        return &oom_policies[THROTTLE - 1];
+    default:
+        return NULL;
+    }
+}
+
+static void aura_fn_evt_cli_response_dump(struct aura_fn_evt *evt) {
+    app_debug(true, 0, "AURA FN EVT RESPONSE");
+    app_debug(true, 0, "    State: %u", evt->state);
+    app_debug(true, 0, "    Error: %d", evt->error_code);
+    app_debug(true, 0, "    Msg Len: %d", evt->msg_len);
+    app_debug(true, 0, "    Message: %s", evt->msg);
+}
+
+/**/
+int aura_fn_meta_parse(void *meta, struct aura_fn_meta *fn_meta);
+
+/**/
+int aura_fn_config_parse(void *config, struct aura_fn_config *fn_config);
+
+/**/
+void aura_fn_meta_destroy(const struct aura_fn_meta *fn_meta);
+
+/**/
+void aura_fn_config_destroy(struct aura_fn_config *fn_config);
+
+/**/
+void aura_fn_resources_destroy(const struct aura_fn_resources *resources);
+
+/**/
+void aura_fn_http_trigger_destroy(const struct aura_fn_http_trigger *http_trigger);
+
+/**/
+void aura_fn_cron_trigger_destroy(const struct aura_fn_cron_trigger *cron_trigger);
+
+/**/
+void aura_fn_networking_destroy(const void *networking);
+
+/**/
+void aura_fn_meta_dump(struct aura_fn_meta *fn_meta);
+
+/**/
+void aura_fn_config_dump(struct aura_fn_config *fn_conf);
+
+/**/
+void aura_fn_evt_response_dump(struct aura_fn_evt *evt);
 
 struct aura_rollback_detector *rollback_detector_create(aura_rollback_cb cb);
 void rollback_detector_add_deployment(struct aura_rollback_detector *rbd, uint64_t fn_id, const char *version /* create a struct to pass error threshold stuff */);

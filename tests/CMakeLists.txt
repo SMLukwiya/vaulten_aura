@@ -14,6 +14,7 @@ add_executable(test_aura_db
     ${vaulten_aura_SOURCE_DIR}/lib/hash_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/encrypt_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/slab_lib_v1.c
     ${common_sources}
 )
 target_link_libraries(test_aura_db PUBLIC openssl::openssl)
@@ -106,7 +107,7 @@ set_tests_properties(codegen_test PROPERTIES
     TIMEOUT 10
 )
 
-# -------------------- CLI TESTS -------------------- #
+# # -------------------- CLI TESTS -------------------- #
 add_executable(test_aura_cli
     cli/basic.c
     ${common_sources}

@@ -1,5 +1,4 @@
 #include "blobber_lib.h"
-// #include "command/function_dmn.h"
 #include "error_lib.h"
 #include "function_lib.h"
 #include "radix_lib.h"
@@ -9,166 +8,7 @@
 
 #include <regex.h>
 #include <stdio.h>
-
-const struct aura_http_method_t_map http_methods[] = {
-  {"get", GET},
-  {"post", POST},
-  {"put", PATCH},
-  {"patch", PATCH},
-  {"delete", DELETE},
-  {"head", HEAD},
-};
-
-const struct aura_trigger_t_map trigger_types[] = {
-  {"http", A_TRIGGER_HTTP},
-  {"cron", A_TRIGGER_CRON},
-  {"queue", A_TRIGGER_QUEUE},
-};
-
-const struct aura_runtime_t_map runtimes[] = {
-  {"js", JIT},
-  {"native", NATIVE},
-  {"wasm", WASM},
-};
-
-const struct aura_protocol_t_map protocols[] = {
-  {"tcp", TCP},
-  {"udp", UDP},
-};
-
-const struct aura_log_level_t_map log_levels[] = {
-  {"trace", TRACE},
-  {"info", INFO},
-  {"debug", DEBUG},
-  {"warn", WARN},
-  {"error", ERROR},
-};
-
-const struct aura_oom_policy_t_map oom_policies[] = {
-  {"kill", KILL},
-  {"snapshot_then_kill", SNAPSHOT_THEN_KILL},
-  {"throttle", THROTTLE},
-};
-
-const struct aura_log_redact_level_t_map log_redact_levels[] = {
-  {"pii", PII_DEFAULT},
-  {"strict", REDACT_STRICT},
-  {"none", REDACT_NONE},
-};
-
-const struct aura_deployment_strategy_t_map deploy_strategies[] = {
-  {"canary", CANARY},
-  {"blue_green", BLUE_GREEN},
-  {"rolling", ROLLING},
-};
-
-const struct aura_blue_green_t_map blue_green_opt[] = {
-  {"blue", BLUE},
-  {"green", GREEN},
-};
-
-const struct aura_backoff_t_map backoff_opt[] = {
-  {"none", BACKOFF_NONE},
-  {"fixed", BACKOFF_FIXED},
-  {"exponential", BACKOFF_EXPONENTIAL},
-};
-
-const struct aura_cron_misfire_policy_t_map misfire_policies[] = {
-  {"fire_now", FIRE_NOW},
-  {"ignore", IGNORE},
-  {"reschedule", RESCHEDULE},
-};
-
-const struct aura_network_policy_t_map network_policies[] = {
-  {"allow_all", ALLOW_ALL},
-  {"deny_all", DENY_ALL},
-  {"whitelist", WHITELIST},
-};
-
-void aura_function_dump(struct aura_fn *fn) {
-    app_debug(true, 0, "Aura function:");
-    app_debug(true, 0, "   fn id => %ld", fn->fn_id);
-    app_debug(true, 0, "   fn name => %p", fn->name);
-    app_debug(true, 0, "   fn desc => %p", fn->description);
-    app_debug(true, 0, "   fn version => %p", fn->version);
-    // app_debug(true, 0, "   fn runtime => %d", fn->runtime);
-    app_debug(true, 0, "   fn entry point => %p", fn->entry_point);
-
-    app_debug(true, 0, "   Fn Triggers HTTP:");
-    app_debug(true, 0, "       fn trigger http path => %p", fn->http_trigger.path.base);
-    app_debug(true, 0, "       fn trigger http method => %p", fn->http_trigger.http_method);
-    app_debug(true, 0, "       fn trigger http auth => %p", fn->http_trigger.auth);
-
-    app_debug(true, 0, "   Fn Trigger CRON:");
-    app_debug(true, 0, "       fn trigger cron schedule => %p", fn->cron_trigger.cron_schedule);
-    app_debug(true, 0, "       fn trigger cron jitter_seconds => %d", fn->cron_trigger.jitter_seconds);
-    app_debug(true, 0, "       fn trigger cron misfire policy => %d", fn->cron_trigger.misfire_policy);
-    app_debug(true, 0, "       fn trigger cron max concurrency => %p", fn->cron_trigger.max_concurrent);
-    app_debug(true, 0, "       Retry:");
-    app_debug(true, 0, "           retry attempts => %d", fn->cron_trigger.retry.attempts);
-    app_debug(true, 0, "           retry policy => %d", fn->cron_trigger.retry.poilcy);
-    app_debug(true, 0, "           retry on => %d", fn->cron_trigger.retry.retry_on);
-    app_debug(true, 0, "           retry dead letter => %d", fn->cron_trigger.retry.dead_letter);
-    app_debug(true, 0, "           retry window exec count => %d", fn->cron_trigger.retry.wind_exec.count);
-    app_debug(true, 0, "           retry window exec start => %ld", fn->cron_trigger.retry.wind_exec.window.start);
-    app_debug(true, 0, "           retry window exec end => %ld", fn->cron_trigger.retry.wind_exec.window.end);
-
-    app_debug(true, 0, "   Fn Trigger Queue:");
-    // app_debug(true, 0, "       fn trigger queue topic => %p", fn->queue_trigger.topic);
-    // app_debug(true, 0, "       fn trigger queue topic => %d", fn->queue_trigger.per_key_concurrency);
-    app_debug(true, 0, "   fn last execution time => %ld", fn->last_execution);
-
-    app_debug(true, 0, "   Fn Resources:");
-    app_debug(true, 0, "       fn cpu share => %d", fn->fn_resources.cpu_shares);
-    app_debug(true, 0, "       fn cpu burst credit => %d", fn->fn_resources.cpu_burst_credit);
-    app_debug(true, 0, "       fn cpu mem limit hard => %d", fn->fn_resources.memory_limit_mb_hard);
-    app_debug(true, 0, "       fn cpu mem limit soft => %d", fn->fn_resources.memory_limit_mb_soft);
-    app_debug(true, 0, "       fn out of memory => %d", fn->fn_resources.oom_pol);
-    app_debug(true, 0, "       fn timeout => %d", fn->fn_resources.timeout);
-    app_debug(true, 0, "       fn io_net_egress_bytes_per_sec => %d", fn->fn_resources.io_net_egress_bytes_per_sec);
-    app_debug(true, 0, "       fn socket max => %d", fn->fn_resources.socket_max);
-
-    app_debug(true, 0, "   Fn Concurrency:");
-    app_debug(true, 0, "       fn max instances => %d", fn->fn_concurrency.max_instances);
-    app_debug(true, 0, "       fn pre warn on deploy => %p", fn->fn_concurrency.pre_warm_on_deploy);
-    app_debug(true, 0, "       fn delay => %d", fn->fn_concurrency.delay);
-    app_debug(true, 0, "       fn background task => %p", fn->fn_concurrency.background_tasks);
-
-    app_debug(true, 0, "   Fn Networking:");
-    app_debug(true, 0, "       Ingress:");
-    app_debug(true, 0, "           fn ingress policy => %d", fn->networking.inbound.policy);
-    for (int i = 0; i < fn->networking.inbound.whitelsit_len; ++i)
-        app_debug(true, 0, "           fn ingress whitelist[%i] => %p", fn->networking.inbound.ip_whitelist[i]);
-
-    app_debug(true, 0, "       Egress:");
-    app_debug(true, 0, "           fn egress policy => %d", fn->networking.outbound.policy);
-    for (int i = 0; i < fn->networking.outbound.whitelist_len; ++i) {
-        app_debug(true, 0, "           fn ingress whitelist[%i] host => %p", fn->networking.outbound.hosts[i]->host);
-        app_debug(true, 0, "           fn ingress whitelist[%i] port => %d", fn->networking.outbound.hosts[i]->port);
-        app_debug(true, 0, "           fn ingress whitelist[%i] protocol => %d", fn->networking.outbound.hosts[i]->protocol);
-        app_debug(true, 0, "           fn ingress whitelist[%i] protocol version => %d", fn->networking.outbound.hosts[i]->prot_version);
-        app_debug(true, 0, "           fn ingress whitelist[%i] secure(https) => %d", fn->networking.outbound.hosts[i]->secure);
-        app_debug(true, 0, "           fn ingress whitelist[%i] max per origin => %d", fn->networking.outbound.hosts[i]->max_per_origin);
-        app_debug(true, 0, "           fn ingress whitelist[%i] idle_ttl => %d", fn->networking.outbound.hosts[i]->idle_ttl);
-        app_debug(true, 0, "           ");
-    }
-
-    app_debug(true, 0, "   Observability:");
-    app_debug(true, 0, "       custom metrics => %d", fn->fn_observability.custom_metrics);
-    app_debug(true, 0, "       Logging:");
-    app_debug(true, 0, "           Destination => %p", fn->fn_observability.fn_logging.destination);
-    app_debug(true, 0, "           Log level => %d", fn->fn_observability.fn_logging.level);
-    app_debug(true, 0, "           Log redact => %d", fn->fn_observability.fn_logging.log_redact);
-    app_debug(true, 0, "       Tracing:");
-    app_debug(true, 0, "           Enabled => %d", fn->fn_observability.fn_tracing.enabled);
-    app_debug(true, 0, "           Sample rate => %d", fn->fn_observability.fn_tracing.sample_rate);
-    app_debug(true, 0, "           Tail sampling rate => %d", fn->fn_observability.fn_tracing.tail_sampling_target_ms);
-
-    app_debug(true, 0, "   Environment:");
-
-    app_debug(true, 0, "   Batch processing:");
-    app_debug(true, 0, "       ms => %d", fn->publish_batch_ms);
-}
+#include <strings.h>
 
 /**
  * Expects field name, value expected and value parsed in that order
@@ -233,8 +73,9 @@ static inline void a_ensure_node_is_sequence(struct aura_yml_conf_parser *p, yam
         YAML_ADD_ERROR(p, evt, "Invalid %s, Expected a valid sequence", yn->full_path);
 }
 
-/* ------------------------------------------ */
-/*----------- AURA YAML VERSION -----------*/
+/**
+ * AURA YAML VERSION
+ */
 void a_fn_validate_yaml_version(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct aura_yml_node *yn) {
     struct aura_yml_fn_data_ctx *usr_data;
     const char *value = evt->data.scalar.value;
@@ -253,7 +94,9 @@ void a_fn_validate_yaml_version(struct aura_yml_conf_parser *p, yaml_event_t *ev
     usr_data->seen_aura_version = true;
 }
 
-/*----------- FUNCTION ---------- */
+/**
+ * FUNCTION
+ */
 void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct aura_yml_node *yn) {
     struct aura_yml_fn_data_ctx *usr_data;
     aura_rax_tree_t *rax;
@@ -279,8 +122,7 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            usr_data->node_arr[node_off].type = yn->type;
-            usr_data->node_arr[node_off].key = strdup(yn->key);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_FN_FUNCTION);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -318,7 +160,7 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
         a_ensure_node_is_scalar(p, evt, yn);
 
         res = aura_scan_str(yn->str_val, "%" SCNu32, &version);
-        if (res != 1 || version > UINT32_MAX)
+        if (res == 0 || version > UINT32_MAX)
             YAML_ADD_ERROR(p, evt, "Invalid %s, Expected a valid version number", yn->full_path);
 
         if (usr_data->extract && !p->in_panic) {
@@ -348,7 +190,7 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
             }
             close(entry_fd);
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_FN_VERSION);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_FN_ENTRY_POINT);
             usr_data->node_arr[node_off].str_val = strdup(yn->str_val);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
@@ -367,6 +209,27 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
         }
         return;
     }
+}
+
+/* ENV */
+void a_fn_validate_env(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct aura_yml_node *yn) {
+    struct aura_yml_fn_data_ctx *usr_data;
+    aura_rax_tree_t *rax;
+    uint32_t node_off;
+    int res;
+
+    usr_data = (struct aura_yml_fn_data_ctx *)p->usr_data_ctx;
+    rax = usr_data->parse_tree;
+
+    if (!yn) {
+        app_alert(true, 0, "Validation node not passed: fix asap");
+        return;
+    }
+
+    if (usr_data->extract && !rax) {
+        app_alert(true, 0, "Trying to extract data without parser tree!: fix asap");
+        return;
+    }
 
     /* FN env vars */
     if (strcmp(yn->key, "env") == 0) {
@@ -380,7 +243,6 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
         return;
     }
 
-    /* FN env[*] */
     if (strcmp(yn->key, "env[*]") == 0) {
         a_ensure_node_is_mapping(p, evt, yn);
 
@@ -398,7 +260,7 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_FN_VERSION);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_FN_NONE);
             usr_data->node_arr[node_off].str_val = strdup(yn->str_val);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
@@ -411,12 +273,64 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_FN_VERSION);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_FN_NONE);
             usr_data->node_arr[node_off].str_val = strdup(yn->str_val);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
     }
+}
+
+bool aura_fn_validate_http_method(const char *method, aura_fn_http_method_t *value) {
+    *value = 0;
+
+    if (strcasecmp(method, "GET") == 0) {
+        *value = GET;
+        return true;
+    }
+
+    if (strcasecmp(method, "POST") == 0) {
+        *value = POST;
+        return true;
+    }
+
+    if (strcasecmp(method, "PUT") == 0) {
+        *value = PUT;
+        return true;
+    }
+
+    if (strcasecmp(method, "DELETE") == 0) {
+        *value = DELETE;
+        return true;
+    }
+
+    if (strcasecmp(method, "HEAD") == 0) {
+        *value = HEAD;
+        return true;
+    }
+
+    return false;
+}
+
+bool aura_fn_validate_misfire_policy(const char *policy, aura_fn_cron_misfire_policy_t *value) {
+    *value = 0;
+
+    if (strcmp(policy, "ignore") == 0) {
+        *value = IGNORE;
+        return true;
+    }
+
+    if (strcmp(policy, "fire_now") == 0) {
+        *value = FIRE_NOW;
+        return true;
+    }
+
+    if (strcmp(policy, "reschedule") == 0) {
+        *value = RESCHEDULE;
+        return true;
+    }
+
+    return false;
 }
 
 /* Triggers */
@@ -451,23 +365,27 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
         return;
     }
 
-    /* trigger http */
+    /* HTTP trigger */
     if (strcmp(yn->key, "http") == 0) {
         a_ensure_node_is_mapping(p, evt, yn);
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_FN_HTTP_TRIGGER);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_FN_HTTP_TRIGGER);
             a_parse_tree_insert(p, evt, yn, node_off);
+            usr_data->trigger_type = A_TRIGGER_HTTP;
         }
         return;
     }
 
-    /* trigger type (http) path */
+    /* http path */
     if (strcmp(yn->key, "path") == 0) {
         a_ensure_node_is_scalar(p, evt, yn);
-        // ensure http is the trigger type
-        // maybe use regex for a stronger check
+
+        if (usr_data->trigger_type != A_TRIGGER_HTTP) {
+            YAML_ADD_ERROR(p, evt, "Invalid %p, path must be under HTTP trigger type.", yn->full_path);
+            return;
+        }
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
@@ -478,14 +396,50 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
         return;
     }
 
-    /* trigger type(http) method */
+    /* http method */
     if (strcmp(yn->key, "method") == 0) {
+        aura_fn_http_method_t method;
         a_ensure_node_is_scalar(p, evt, yn);
-        // ensure http is the trigger type
 
-        /* add other method comparisons */
-        if (strcasecmp(yn->str_val, "GET") != 0 && strcasecmp(yn->str_val, "POST") != 0) {
-            YAML_ADD_ERROR(p, evt, "Unexpected method %s, expected one of GET/get, POST/post + others", yn->str_val);
+        if (usr_data->trigger_type != A_TRIGGER_HTTP) {
+            YAML_ADD_ERROR(p, evt, "Invalid %p, method must be under HTTP trigger type.", yn->full_path);
+            return;
+        }
+
+        if (!aura_fn_validate_http_method(yn->str_val, &method)) {
+            YAML_ADD_ERROR(p, evt, "Invalid HTTP method %s", yn->str_val);
+            return;
+        }
+
+        if (usr_data->extract && !p->in_panic) {
+            node_off = a_get_node_off(p, evt);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NUM, A_IDX_FN_NONE);
+            usr_data->node_arr[node_off].int_val = method;
+            a_parse_tree_insert(p, evt, yn, node_off);
+        }
+        return;
+    }
+
+    /* CRON Trigger */
+    if (strcmp(yn->key, "cron") == 0) {
+        a_ensure_node_is_mapping(p, evt, yn);
+
+        if (usr_data->extract && !p->in_panic) {
+            node_off = a_get_node_off(p, evt);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_FN_CRON_TRIGGER);
+            a_parse_tree_insert(p, evt, yn, node_off);
+            usr_data->trigger_type = A_TRIGGER_CRON;
+        }
+        return;
+    }
+
+    /* schedule */
+    if (strcmp(yn->key, "schedule") == 0) {
+        a_ensure_node_is_scalar(p, evt, yn);
+
+        if (usr_data->trigger_type != A_TRIGGER_CRON) {
+            YAML_ADD_ERROR(p, evt, "Invalid %s", yn->full_path);
+            return;
         }
 
         if (usr_data->extract && !p->in_panic) {
@@ -495,6 +449,77 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
+    }
+
+    /* jitter seconds */
+    if (strcmp(yn->key, "jitter_seconds") == 0) {
+        int32_t seconds;
+        a_ensure_node_is_scalar(p, evt, yn);
+
+        if (usr_data->trigger_type != A_TRIGGER_CRON) {
+            YAML_ADD_ERROR(p, evt, "Invalid %s", yn->full_path);
+            return;
+        }
+
+        if (aura_scan_str(yn->str_val, "%d" SCNd32, &seconds) == 0 || seconds < 0) {
+            YAML_ADD_ERROR(p, evt, "Invalid %s, %d", yn->full_path, seconds);
+            return;
+        }
+
+        if (usr_data->extract && !p->in_panic) {
+            node_off = a_get_node_off(p, evt);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NUM, A_IDX_FN_NONE);
+            usr_data->node_arr[node_off].int_val = seconds;
+            a_parse_tree_insert(p, evt, yn, node_off);
+        }
+        return;
+    }
+
+    /* misfire policy */
+    if (strcmp(yn->key, "misfire_policy") == 0) {
+        aura_fn_cron_misfire_policy_t policy;
+
+        a_ensure_node_is_scalar(p, evt, yn);
+
+        if (usr_data->trigger_type != A_TRIGGER_CRON) {
+            YAML_ADD_ERROR(p, evt, "Invalid %s", yn->full_path);
+            return;
+        }
+
+        if (!aura_fn_validate_misfire_policy(yn->str_val, &policy)) {
+            YAML_ADD_ERROR(p, evt, "Invalid %s", yn->full_path);
+            return;
+        }
+
+        if (usr_data->extract && !p->in_panic) {
+            node_off = a_get_node_off(p, evt);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NUM, A_IDX_FN_NONE);
+            usr_data->node_arr[node_off].int_val = policy;
+            a_parse_tree_insert(p, evt, yn, node_off);
+        }
+        return;
+    }
+
+    /* Retry */
+    if (strcmp(yn->key, "retries") == 0) {
+        a_ensure_node_is_mapping(p, evt, yn);
+
+        if (usr_data->trigger_type != A_TRIGGER_CRON) {
+            YAML_ADD_ERROR(p, evt, "Invalid %s", yn->full_path);
+            return;
+        }
+
+        if (usr_data->extract && !p->in_panic) {
+            node_off = a_get_node_off(p, evt);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_FN_CRON_RETRIES);
+            a_parse_tree_insert(p, evt, yn, node_off);
+        }
+        return;
+    }
+
+    /* retry on */
+    if (strcmp(yn->key, "retry_on") == 0) {
+        /**/
     }
 }
 
@@ -518,7 +543,18 @@ void a_fn_validate_concurrency(struct aura_yml_conf_parser *p, yaml_event_t *evt
         return;
     }
 
-    /* Min instances */
+    if (strcmp(yn->key, "concurrency") == 0) {
+        a_ensure_node_is_mapping(p, evt, yn);
+
+        if (usr_data->extract && !p->in_panic) {
+            node_off = a_get_node_off(p, evt);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_FN_CONCURRENCY);
+            a_parse_tree_insert(p, evt, yn, node_off);
+        }
+        return;
+    }
+
+    /* Min/Max instances */
     if (strcmp(yn->key, "min_instances") == 0 || strcmp(yn->key, "max_instances") == 0) {
         int instances;
         bool is_max;
@@ -531,7 +567,7 @@ void a_fn_validate_concurrency(struct aura_yml_conf_parser *p, yaml_event_t *evt
         a_ensure_node_is_scalar(p, evt, yn);
         res = aura_scan_str(yn->str_val, "%d" SCNi32, &instances);
         if (is_max) {
-            if (res != 1 || res > INT32_MAX) {
+            if (res == 0 || res > INT32_MAX) {
                 /** @todo: define max instances */
                 YAML_ADD_ERROR(p, evt, "Invalid %s, Maximum value is %d", yn->full_path, INT32_MAX);
             }
@@ -541,10 +577,144 @@ void a_fn_validate_concurrency(struct aura_yml_conf_parser *p, yaml_event_t *evt
             }
         }
 
-        if (usr_data->extract && !!p->in_panic) {
+        if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
             a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NUM, is_max ? A_IDX_FN_MAX_INSTANCES : A_IDX_FN_MIN_INSTANCES);
             usr_data->node_arr[node_off].int_val = instances;
+            a_parse_tree_insert(p, evt, yn, node_off);
+        }
+        return;
+    }
+
+    if (strcmp(yn->key, "pre_warm_on_deploy") == 0) {
+        int pre_warm;
+
+        a_ensure_node_is_scalar(p, evt, yn);
+
+        if (strcmp(yn->str_val, "true") == 0) {
+            pre_warm = true;
+        } else if (strcmp(yn->str_val, "false") == 0) {
+            pre_warm = false;
+        } else {
+            YAML_ADD_ERROR(p, evt, "Invalid %s", yn->full_path);
+            return;
+        }
+
+        if (usr_data->extract && !p->in_panic) {
+            node_off = a_get_node_off(p, evt);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_BOOL, A_IDX_FN_PREWARM);
+            usr_data->node_arr[node_off].bool_val = pre_warm;
+            a_parse_tree_insert(p, evt, yn, node_off);
+        }
+        return;
+    }
+}
+
+bool aura_fn_validate_oom_policy(const char *policy, int *value) {
+    if (strcmp(policy, "throttle") == 0) {
+        *value = THROTTLE;
+        return true;
+    }
+
+    if (strcmp(policy, "kill") == 0) {
+        *value = KILL;
+        return true;
+    }
+
+    if (strcmp(policy, "snaphost_then_kill") == 0) {
+        *value = SNAPSHOT_THEN_KILL;
+        return true;
+    }
+
+    return false;
+}
+
+/** Resources */
+void a_fn_validate_resource(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct aura_yml_node *yn) {
+    struct aura_yml_fn_data_ctx *usr_data;
+    aura_rax_tree_t *rax;
+    uint32_t node_off;
+    int res;
+
+    usr_data = (struct aura_yml_fn_data_ctx *)p->usr_data_ctx;
+    rax = usr_data->parse_tree;
+
+    if (!yn) {
+        app_alert(true, 0, "Validation node not passed: fix asap");
+        return;
+    }
+
+    if (usr_data->extract && !rax) {
+        app_alert(true, 0, "Trying to extract data without parser tree!: fix asap");
+        return;
+    }
+
+    if (strcmp(yn->key, "resources") == 0) {
+        a_ensure_node_is_mapping(p, evt, yn);
+
+        if (usr_data->extract && !p->in_panic) {
+            node_off = a_get_node_off(p, evt);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_FN_RESOURCES);
+            a_parse_tree_insert(p, evt, yn, node_off);
+        }
+        return;
+    }
+
+    if (strcmp(yn->key, "memory") == 0) {
+        a_ensure_node_is_mapping(p, evt, yn);
+
+        if (usr_data->extract && !p->in_panic) {
+            node_off = a_get_node_off(p, evt);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_FN_MEMORY);
+            a_parse_tree_insert(p, evt, yn, node_off);
+        }
+        return;
+    }
+
+    if (strcmp(yn->key, "soft") == 0 || strcmp(yn->key, "hard") == 0) {
+        bool is_soft;
+        int value;
+
+        a_ensure_node_is_scalar(p, evt, yn);
+
+        if (strcmp(yn->key, "soft") == 0)
+            is_soft = true;
+        else
+            is_soft = false;
+
+        if (aura_scan_str(yn->str_val, "%d" SCNu32, &value) == 0) {
+            YAML_ADD_ERROR(p, evt, "Invalid %s", yn->full_path);
+            return;
+        }
+
+        if (value < 0 || value > 256) {
+            YAML_ADD_ERROR(p, evt, "Invalid %s", yn->full_path);
+            return;
+        }
+
+        if (usr_data->extract && !p->in_panic) {
+            node_off = a_get_node_off(p, evt);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NUM, is_soft ? A_IDX_FN_SOFT_MEM : A_IDX_FN_HARD_MEM);
+            usr_data->node_arr[node_off].int_val = value;
+            a_parse_tree_insert(p, evt, yn, node_off);
+        }
+        return;
+    }
+
+    if (strcmp(yn->key, "oom_policy") == 0) {
+        int policy;
+
+        a_ensure_node_is_scalar(p, evt, yn);
+
+        if (!aura_fn_validate_oom_policy(yn->str_val, &policy)) {
+            YAML_ADD_ERROR(p, evt, "Invalid %s", yn->str_val);
+            return;
+        }
+
+        if (usr_data->extract && !p->in_panic) {
+            node_off = a_get_node_off(p, evt);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NUM, A_IDX_FN_OOM_POLICY);
+            usr_data->node_arr[node_off].int_val = policy;
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -557,8 +727,10 @@ void a_fn_validate_concurrency(struct aura_yml_conf_parser *p, yaml_event_t *evt
 struct aura_yml_validator aura_function_validator[] = {
   {"version", .cb = a_fn_validate_yaml_version},
   {"function", .cb = a_fn_validate_function},
+  {"env", .cb = a_fn_validate_env},
   {"triggers", .cb = a_fn_validate_triggers},
   {"concurrency", .cb = a_fn_validate_concurrency},
+  {"resources", .cb = a_fn_validate_resource},
   //   {"no_path_validator", .cb = run_parent_validator},
 };
 

@@ -11,6 +11,9 @@
 #include <stdlib.h>
 #include <sys/types.h>
 
+char system_up[] = "\x1B[1;32mSystem up\x1B[0m";
+char system_down[] = "\x1B[1;31mSystem down\x1B[0m";
+
 struct aura_cli_sys_start_opts {
     char *system_config_path;
 };
@@ -122,6 +125,7 @@ int aura_cli_system_stop(void *opts_ptr, void *glob_opts) {
     char buf[64];
     pid_t pid;
     int res, sock_fd;
+    void *data;
 
     aura_try_connect_or_error(&sock_fd);
     if (sock_fd == -1)
@@ -152,6 +156,12 @@ int aura_cli_system_stop(void *opts_ptr, void *glob_opts) {
     if (aura_msg_send(sock_fd, &hdr, NULL, 0, -1) < 0) {
         app_debug(false, errno, "system stop, failed");
         return 1;
+    }
+
+    while (true) {
+        data = aura_recv_resp(sock_fd);
+        if (data == NULL)
+            break;
     }
 
     printf("PID: %lu\n", (long unsigned)pid);
@@ -188,22 +198,20 @@ int aura_cli_system_status(void *opts, void *glob_opts) {
     struct aura_msg msg;
 
     aura_try_connect_or_error(&sock_fd);
-    if (sock_fd == -1) {
-        app_exit(false, 0, "Server down");
-        return 0;
-    }
+    if (sock_fd == -1)
+        app_exit(false, 0, "Failed to connect to daemon, use 'aura system start' to start aura daemon");
 
     a_init_msg_hdr(hdr, 0, A_MSG_PING, 0);
     if (aura_msg_send(sock_fd, &hdr, NULL, 0, -1) < 0) {
-        app_debug(false, errno, "system status, failed");
+        app_debug(false, errno, "aura_cli_system_status: aura_msg_send error:");
         return 1;
     }
 
     res = aura_recv_msg(sock_fd, &msg);
     if (msg.hdr.type == A_MSG_RESPONSE) {
-        printf("System up");
+        app_info(false, 0, "%s", system_up);
     } else {
-        printf("System down!");
+        app_info(false, 0, "%s", system_down);
     }
 
     return 0;

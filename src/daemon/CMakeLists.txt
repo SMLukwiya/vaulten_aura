@@ -19,6 +19,9 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/db/db.c
     ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/runtime_lib.c # remove this once I have a good place to put quickjs and other runtime stuff
+    ${vaulten_aura_SOURCE_DIR}/lib/function_v1_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/slab_lib_v1.c
 )
 
 add_executable(aura_daemon
@@ -29,6 +32,7 @@ add_executable(aura_daemon
     src/command/srv_config_validate_dmn.c
     src/command/fn_config_validate_dmn.c
     src/command/fn_deploy_dmn.c
+    src/command/fn_delete_dmn.c
     src/command/sys_dmn.c
     ${lib_sources}
 )

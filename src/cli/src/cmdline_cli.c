@@ -14,6 +14,8 @@ struct aura_cli_ctx cli_ctx;
 
 extern struct aura_cli_cmd root_cmd;
 
+void aura_cli_cmd_flag_dump(struct aura_cli_flag *flag);
+
 /** Long flag of --flag format */
 static inline bool a_is_long_flag(char *flag) {
     return strlen(flag) > 2 && *flag == '-' && (flag + 1) && *(flag + 1) == '-';
@@ -96,14 +98,17 @@ int a_parse_long_arg(struct aura_cli_flag *cmd_flags[], int flag_count,
 
     flag = find_flag(cmd_flags, flag_count, name, false);
 
-    if (!flag)
+    if (!flag) {
         if (strcmp(name, "help") == 0) {
             return A_CLI_CMD_HELP;
         } else {
             app_info(false, 0, "unknown flag\n");
             return A_CLI_CMD_HELP;
         }
+    }
 
+    /* Account for flag */
+    argc--;
     /**
      * Always end early when help or version,
      * this works even for invalid commands as long we end with help or version
@@ -155,6 +160,9 @@ static int a_parse_short_arg(struct aura_cli_flag *cmd_flags[], int flag_count,
             return A_CLI_CMD_HELP;
         }
     }
+
+    /* Account for flag */
+    argc--;
 
     /**
      * Always end early when help or version,

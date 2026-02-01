@@ -42,7 +42,7 @@ static inline bool a_route_destroy(struct aura_route *route) {
     }
 
     /* remove from tree */
-    aura_rax_remove(route->router->r_tree, route->fn_image.http_trigger.path.base, route->fn_image.http_trigger.path.len, NULL);
+    aura_rax_remove(route->router->r_tree, route->fn_image.meta.http_trigger.path.base, route->fn_image.meta.http_trigger.path.len, NULL);
 
     memset(route, 0, sizeof(*route));
     /** @todo: a new slot is free on the vector, either keep a free offset for later use or compact memory */
@@ -57,8 +57,8 @@ bool aura_route_add(struct aura_router *router, uint32_t version, struct aura_fn
     uint64_t pattern_len;
     bool res;
 
-    pattern = fn->http_trigger.path.base;
-    pattern_len = fn->http_trigger.path.len;
+    pattern = fn->meta.http_trigger.path.base;
+    pattern_len = fn->meta.http_trigger.path.len;
     /* check for existent route */
     n = aura_rax_lookup(router->r_tree, pattern, pattern_len);
     if (n) {
@@ -76,7 +76,7 @@ bool aura_route_add(struct aura_router *router, uint32_t version, struct aura_fn
     }
 
     new_route = &router->route_pool.routes[router->route_pool.cnt];
-    res = aura_work_queue_init(&new_route->wq, fn->fn_concurrency.min_instances, fn->fn_concurrency.max_instances, A_WQ_JS);
+    res = aura_work_queue_init(&new_route->wq, fn->config.fn_concurrency.min_instances, fn->config.fn_concurrency.max_instances, A_WQ_JS);
     if (res) {
         sys_debug(true, errno, "Failed to initialize workqueue: %d", res);
         return false;

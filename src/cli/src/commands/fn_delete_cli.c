@@ -3,8 +3,13 @@
 #include "error_lib.h"
 #include "file_lib.h"
 #include "flag_cli.h"
+#include "function_lib.h"
 #include "unix_socket_lib.h"
 #include "utils_lib.h"
+
+const char fn_deleted[] = "\x1B[1;32mFunction Delete\x1B[0m";
+const char fn_delete_failed_error[] = "\x1B[1;31mFunction Deletion Failed\x1B[0m";
+const char fn_delete_failed_not_exist[] = "\x1B[1;31mFunction Deletion Failed: Provided function does not exist!\x1B[0m";
 
 struct fn_delete_config {
     char *fn_name;
@@ -37,11 +42,83 @@ struct aura_cli_flag fn_delete_flag = {
   .is_set = false,
   .type = A_CLI_FLAG_STRING,
   .offset_in_option = OPT_OFFSET(struct fn_delete_config, fn_name),
-  .description = "name of the function to delete",
+  .description = "Name of the function to delete",
 };
 
 int aura_cli_run_fn_delete(void *opts_ptr, void *glob_opts) {
-    printf("Function Delete\n");
+    char *data;
+    struct aura_msg_hdr hdr;
+    struct aura_msg msg;
+    struct fn_delete_config *opts;
+    int sock_fd, res;
+    char *fn_name, *sep;
+    uint32_t fn_verion;
+    struct aura_fn_evt *evt;
+    bool ret;
+
+    aura_try_connect_or_error(&sock_fd);
+    if (sock_fd == -1)
+        app_exit(false, 0, "Failed to connect to daemon, use 'aura system start' to start aura daemon");
+
+    opts = (struct fn_delete_config *)opts_ptr;
+    fn_name = opts->fn_name;
+    sep = strchr(fn_name, ':');
+    if (sep) {
+        /* Try and parse fn version */
+        if (*(sep + 1) == '\0') {
+            app_exit(false, 0, "Missing function version, Expected a valid integer");
+        }
+        res = aura_scan_str(sep + 1, "%d" SCNu32, &fn_verion);
+        if (res == 0) {
+            app_exit(false, 0, "Invalid function version: %s, Expected a valid integer", sep + 1);
+        }
+    }
+
+    a_init_msg_hdr(hdr, strlen(fn_name), A_MSG_CMD_EXECUTE, A_CMD_FN_DELETE);
+
+    /* send over the directory file descriptor */
+    if (aura_msg_send(sock_fd, &hdr, opts->fn_name, strlen(opts->fn_name), -1) != 0)
+        sys_exit(false, errno, "aura_cli_run_fn_delete: aura_msg_send error:");
+
+    bool should_terminate;
+
+    while (true) {
+        should_terminate = false;
+        evt = aura_recv_resp(sock_fd);
+
+        if (!evt)
+            break;
+
+        if (evt->state == A_FN_DELETE_STATE_DONE || evt->state == A_FN_DELETE_STATE_FAILED) {
+            should_terminate = true;
+        }
+
+        if (evt->msg_len > 0) {
+            app_info(false, 0, "%s", evt->msg);
+        } else {
+            switch (evt->error_code) {
+            case A_FN_DELETE_ERROR_GENERIC:
+                app_info(false, 0, fn_delete_failed_error);
+                break;
+
+            case A_FN_DELETE_ERROR_NOT_EXIST:
+                app_info(false, 0, fn_delete_failed_not_exist);
+                break;
+
+            case A_FN_DELETE_ERROR_NONE:
+                app_info(false, 0, fn_deleted);
+                break;
+
+            default:
+                break;
+            }
+        }
+        free(evt);
+        if (should_terminate)
+            break;
+    }
+
+    close(sock_fd);
     return 0;
 }
 

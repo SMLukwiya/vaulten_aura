@@ -15,14 +15,18 @@ struct aura_iovec {
     size_t len;
 };
 
-static inline struct aura_iovec *aura_iovec_init(struct aura_memory_ctx *mc, size_t len) {
+static inline struct aura_iovec *aura_iovec_init(struct aura_memory_ctx *mc, size_t len, void *base) {
     struct aura_iovec *iov = aura_alloc(mc, sizeof(*iov));
     if (iov == NULL)
         return NULL;
 
-    iov->base = aura_alloc(mc, len);
-    if (iov->base == NULL)
-        return NULL;
+    if (base) {
+        iov->base = base;
+    } else {
+        iov->base = aura_alloc(mc, len);
+        if (iov->base == NULL)
+            return NULL;
+    }
 
     iov->len = len;
     return iov;

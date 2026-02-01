@@ -1,15 +1,20 @@
-// #define _POSIX_C_SOURCE >= 200809L
+#include "bug_lib.h"
 #include "cmdline_cli.h"
 #include "command_cli.h"
 #include "error_lib.h"
 #include "file_lib.h"
 #include "flag_cli.h"
+#include "function_lib.h"
 #include "unix_socket_lib.h"
 #include "utils_lib.h"
 
-#include "bug_lib.h"
-
 #include <dirent.h>
+
+const char fn_deploy_success[] = "\x1B[1;32mDeployment complete\x1B[0m";
+const char fn_deploy_failed_error[] = "\x1B[1;31mDeployment Failed\x1B[0m";
+const char fn_deploy_config_error[] = "\x1B[1;31mDeployment Failed, Could not successfully parse config\x1B[0m";
+const char fn_deploy_entry_file_error[] = "\x1B[1;31mFailed to load entry file\x1B[0m";
+const char fn_deploy_fn_exists_error[] = "\x1B[1;31mDeployment failed. Function with same name and version already exists\x1B[0m";
 
 struct fn_deploy_config {
     char *fn_dir_path;
@@ -52,6 +57,7 @@ int aura_cli_run_fn_deploy(void *opts_ptr, void *glob_opts) {
     struct aura_msg_hdr hdr;
     struct aura_msg msg;
     struct fn_deploy_config *opts;
+    struct aura_fn_evt *evt;
     int sock_fd, file_fd, dir_fd, res;
     bool ret;
 
@@ -85,7 +91,6 @@ int aura_cli_run_fn_deploy(void *opts_ptr, void *glob_opts) {
         app_exit(false, 0, "Failed to locate function configuration, ensure a function.yaml or function.yml exists in the funtion directory");
 
     /* do a simple check on the config file */
-    // ret = aura_open_file(conf_file, &file_fd);
     ret = openat(dir_fd, conf_file, O_RDONLY);
     if (!ret)
         sys_exit(false, errno, "Failed to open configuration file: %s\n", conf_file);
@@ -97,11 +102,47 @@ int aura_cli_run_fn_deploy(void *opts_ptr, void *glob_opts) {
     if (aura_msg_send(sock_fd, &hdr, NULL, 0, dir_fd) != 0)
         sys_exit(false, errno, "Failed to send aura cli command");
 
-    data = aura_recv_resp(sock_fd);
-    if (data)
-        app_info(false, 0, "%s", data);
+    bool terminate;
+    while (true) {
+        terminate = false;
+        evt = aura_recv_resp(sock_fd);
+        if (!evt)
+            break;
 
-    free(data);
+        aura_fn_evt_cli_response_dump(evt);
+        if (evt->state == A_FN_DEPLOY_STATE_DONE || evt->state == A_FN_DEPLOY_STATE_FAILED) {
+            terminate = true;
+        }
+
+        if (evt->msg_len > 0)
+            app_info(false, 0, "%s", evt->msg);
+        else {
+            switch (evt->error_code) {
+            case A_FN_DEPLOY_ERROR_GENERIC:
+                app_info(false, 0, "%s", fn_deploy_failed_error);
+                break;
+
+            case A_FN_DEPLOY_ERROR_CONFIG:
+                app_info(false, 0, "%s", fn_deploy_config_error);
+                break;
+
+            case A_FN_DEPLOY_ERROR_DUPLICATE:
+                app_info(false, 0, "%s", fn_deploy_fn_exists_error);
+                break;
+
+            case A_FN_DEPLOY_ERROR_NONE:
+                app_info(false, 0, "%s", fn_deploy_success);
+                break;
+
+            default:
+                break;
+            }
+        }
+        free(evt);
+        if (terminate)
+            break;
+    }
+
     closedir(dp);
     close(sock_fd);
     return 0;

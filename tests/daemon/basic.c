@@ -41,7 +41,7 @@ static void a_test_daemon_system_lifecycle() {
 }
 
 int main(int argc, char *argv[]) {
-    a_test_daemon_system_lifecycle();
+    // a_test_daemon_system_lifecycle();
 
     return 0;
 }

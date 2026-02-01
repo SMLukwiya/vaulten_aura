@@ -319,7 +319,6 @@ void *aura_slab_alloc(struct aura_slab_cache *sc) {
 
     hdr = (struct aura_object_hdr *)obj;
     user_ptr = (char *)obj + A_OBJECT_HEADER_SIZE + A_REDZONE_SIZE;
-    aura_slab_obj_header_dump(hdr);
 
 #if A_SLAB_DEBUG
     A_RECORD_ALLOC_SITE(hdr);
@@ -453,8 +452,12 @@ void *aura_alloc(struct aura_memory_ctx *mc, size_t size) {
     if (size == 0 || size > INT32_MAX)
         return NULL;
 
-    index = aura_get_dynamic_slab_index(size); /* our dynamic memory is in 64 byte multiples */
-    if (index > 15) {
+    /**
+     * There are some usecase that just require simple malloc
+     * like testing some sections that use memory context
+     */
+    index = aura_get_dynamic_slab_index(size);
+    if (index > 15 || mc == NULL) {
         /* size exceed max dynamic memory cache */
         /** @todo: get from buddy */
         ptr = malloc(size + A_OBJECT_HEADER_SIZE + A_REDZONE_SIZE);

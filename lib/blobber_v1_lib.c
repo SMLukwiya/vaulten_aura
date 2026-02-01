@@ -53,7 +53,7 @@ static inline uint32_t a_blob_b_add_str(st_aura_b_builder *b, const char *str) {
     uint32_t off;
     size_t res;
 
-    len = strlen(str) + 1; /** @todo: check if I need null termination */
+    len = strlen(str) + 1;
     res = a_ensure_str_buf(b, len);
     if (res == SIZE_MAX)
         return UINT32_MAX;

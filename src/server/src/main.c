@@ -1234,148 +1234,8 @@ static inline void a_close_idle_connections(struct aura_srv_ctx *ctx) {
  * to the function list of a route
  */
 int a_parse_function_config(struct iovec data) {
-    const st_aura_blob_node *nodes;
-    const st_aura_blob_arr_entry *arrs;
-    const st_aura_blob_kv_pair *kv_pairs, *kv;
-    const char *strtab;
-    const int *fn_tab;
-    const st_aura_blob_node *fn_name_node, *fn_desc_node, *hostname_node;
-    const st_aura_blob_node *http_trigger_node, *fn_triggers_node, *kv_val_node;
-    const st_aura_blob_node *concurrency_node;
-    uint32_t kv_cnt, kv_idx, arr_cnt, arr_idx;
-    struct aura_fn fn;
-    uint64_t fn_code_len;
-    const void *config, *fn_code;
-    struct aura_srv_host_conf *host;
-    const char *kv_key, *kv_val;
-    struct aura_iovec iov;
-    struct aura_route *new_route;
-    int i;
-    bool res;
 
-    config = data.iov_base;
-    nodes = aura_blob_get_nodes(config);
-    kv_pairs = aura_blob_get_kvs(config);
-    arrs = aura_blob_get_arrs(config);
-    strtab = aura_blob_get_strtab(config);
-    fn_tab = aura_blob_get_tab(config);
-    fn_code_len = aura_blob_get_opaque_data_len(config);
-    aura_dump_blob(config);
-
-    memset(&fn, 0, sizeof(fn));
-
-    /* Fn name */
-    if (fn_tab[A_IDX_FN_NAME] != 0) {
-        fn_name_node = &nodes[fn_tab[A_IDX_FN_NAME]];
-        fn.name = strdup(strtab + fn_name_node->str_offset);
-    }
-
-    /**
-     * Check host early, so we don't do any work
-     * if the function does not belong to any host
-     */
-    host = NULL;
-    if (fn_tab[A_IDX_FN_HOST] != 0) {
-        const char *hostname;
-
-        hostname_node = &nodes[fn_tab[A_IDX_FN_HOST]];
-        hostname = strtab + hostname_node->str_offset;
-        for (int i = 0; i < glob_conf->host_pool.cnt; ++i) {
-            if (strcmp(glob_conf->host_pool.hosts[i].authority.hostname.base, hostname) == 0) {
-                host = &glob_conf->host_pool.hosts[i];
-                break;
-            }
-        }
-    } else {
-        app_debug(true, 0, "Function: %s does not define a valid host name", fn.name);
-        return -1;
-    }
-
-    if (!host) {
-        app_debug(true, 0, "Function: %s does not define a valid host name", fn.name);
-        return -1;
-    }
-
-    /* Fn description */
-    if (fn_tab[A_IDX_FN_DESCRIPTION] != 0) {
-        fn_desc_node = &nodes[fn_tab[A_IDX_FN_DESCRIPTION]];
-        fn.description = strdup(strtab + fn_desc_node->str_offset);
-    }
-
-    /* FN triggers */
-    if (fn_tab[A_IDX_FN_TRIGGERS] != 0) {
-        fn_triggers_node = &nodes[fn_tab[A_IDX_FN_TRIGGERS]];
-        /* http */
-        if (fn_tab[A_IDX_FN_HTTP_TRIGGER] != 0) {
-            http_trigger_node = &nodes[fn_tab[A_IDX_FN_HTTP_TRIGGER]];
-            kv_idx = http_trigger_node->map.kv_idx;
-            kv_cnt = http_trigger_node->map.kv_cnt;
-
-            for (i = 0; i < kv_cnt; ++i) {
-                kv = &kv_pairs[kv_idx + i];
-                kv_val_node = &nodes[kv->node_idx];
-                kv_key = strtab + kv->key_offset;
-
-                if (strcmp(kv_key, "path") == 0) {
-                    kv_val = strtab + kv_val_node->str_offset;
-                    fn.http_trigger.path.base = strdup(kv_val);
-                    fn.http_trigger.path.len = strlen(kv_val);
-                }
-
-                if (strcmp(kv_key, "method") == 0) {
-                    kv_val = strtab + kv_val_node->str_offset;
-                    if (strcmp(kv_val, "GET"))
-                        fn.http_trigger.http_method = GET;
-                    else if (strcmp(kv_val, "POST") == 0)
-                        fn.http_trigger.http_method = POST;
-                    else {
-                        // add others
-                    }
-                }
-
-                if (strcmp(kv_key, "auth")) {
-                    // handle auth
-                }
-            }
-        }
-
-        /* others */
-    }
-
-    /* Concurrency */
-    const char *instances;
-    if (fn_tab[A_IDX_FN_MIN_INSTANCES] != 0) {
-        concurrency_node = &nodes[fn_tab[A_IDX_FN_MIN_INSTANCES]];
-
-        app_debug(true, 0, "STRTAB: %p: offset: %d", strtab, fn_tab[A_IDX_FN_MIN_INSTANCES]);
-        // instances = strtab + concurrency_node->str_offset;
-        // aura_scan_str(instances, "%d" SCNu32, &fn.fn_concurrency.min_instances);
-    }
-
-    app_debug(true, 0, "a_parse_function_config: data: base %p, len: %lu", data.iov_base, data.iov_len);
-    app_debug(true, 0, "Function name %s", fn.name);
-    return 0;
-
-    if (fn_tab[A_IDX_FN_MAX_INSTANCES] != 0) {
-        concurrency_node = &nodes[fn_tab[A_IDX_FN_MAX_INSTANCES]];
-        instances = strtab + concurrency_node->str_offset;
-        aura_scan_str(instances, "%d" SCNu32, &fn.fn_concurrency.max_instances);
-    }
-
-    /* Fn code */
-    fn_code = aura_blob_get_opaque_data(config);
-    fn.fn_code = malloc(fn_code_len);
-    memcpy(fn.fn_code, fn_code, fn_code_len);
-    fn.fn_code_len = fn_code_len;
-
-    /* add a route for this function */
-    res = aura_route_add(&host->router, 1, &fn);
-    if (!res) {
-        /* free fn allocated stuff */
-        sys_debug(true, errno, "a_parse_function_config: aura_route_add error %s:", host->authority.hostname);
-        return -1;
-    }
-    app_debug(true, 0, ">> PARSE FUNCTION CONFIG");
+    // res = aura_route_add(&host->router, 1, &fn);
 
     return 0;
 }
@@ -1589,7 +1449,7 @@ static inline int a_glob_conf_init() {
     if (res == -1)
         sys_exit(true, errno, "a_glob_conf_init: aura_setup_database_file_path error");
 
-    glob_conf->db_handle = aura_db_open(glob_conf->aura_app_path.base, glob_conf->aura_db_path.base, O_RDWR, A_DB_FILE_MODE);
+    glob_conf->db_handle = aura_db_open(&glob_conf->mem_ctx, glob_conf->aura_app_path.base, glob_conf->aura_db_path.base, O_RDWR, A_DB_FILE_MODE);
     if (!glob_conf->db_handle)
         sys_exit(true, errno, "a_glob_conf_init: aura_db_open error");
 
