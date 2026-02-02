@@ -5,12 +5,14 @@ extern struct aura_cli_cmd fn_deploy_cli;
 extern struct aura_cli_cmd fn_delete_cli;
 extern struct aura_cli_cmd fn_config_validate_cli;
 extern struct aura_cli_cmd fn_status_cli;
+extern struct aura_cli_cmd fn_start_cli;
 
 struct aura_cli_cmd *function_subs[] = {
   &fn_config_validate_cli,
   &fn_deploy_cli,
   &fn_delete_cli,
   &fn_status_cli,
+  &fn_start_cli,
 };
 
 int aura_cli_fn_base_handler() {

@@ -65,6 +65,10 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
             aura_dmn_function_status(glob_conf.db_handle, &msg->data, cli_fd);
             return 0;
 
+        case A_CMD_FN_START:
+            aura_dmn_function_start(glob_conf.db_handle, &glob_conf.mc, &msg->data, cli_fd);
+            return 0;
+
         case A_CMD_SERVER_VALIDATE_CONF:
             aura_dmn_server_config_validate(msg->fd, cli_fd);
             return 0;

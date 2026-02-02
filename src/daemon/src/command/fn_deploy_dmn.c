@@ -471,10 +471,8 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
 
         /**
          * Check for existing record using fn meta
-         * We acknowledge a function was successfully deployed
-         * if we have a job was committed for said function
          */
-        if (aura_db_record_exists(glob_conf.db_handle, A_DB_NS_JOB, A_FN_DEPLOY, A_DB_SCHEMA_FN_META_V1, &p_key, true)) {
+        if (aura_db_record_exists(glob_conf.db_handle, A_DB_NS_FN, A_FN_DEPLOY, A_DB_SCHEMA_FN_META_V1, &p_key, true)) {
             evt.state = A_FN_OP_STATE_FAILED;
             evt.error_code = A_FN_ERROR_DUPLICATE;
             evt.msg_len = 0;

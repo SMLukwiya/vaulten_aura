@@ -12,9 +12,12 @@ void aura_dmn_function_config_validate(int fd, int cli_fd);
 void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd);
 
 /** Delete Function */
-void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd);
+void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *fn, int cli_fd);
 
 /* Function status */
-void aura_dmn_function_status(AURA_DBHANDLE db, struct iovec *key, int cli_fd);
+void aura_dmn_function_status(AURA_DBHANDLE db, struct iovec *fn, int cli_fd);
+
+/* Function start */
+void aura_dmn_function_start(AURA_DBHANDLE db, struct aura_memory_ctx *mc, struct iovec *fn, int cli_fd);
 
 #endif
