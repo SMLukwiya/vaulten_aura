@@ -85,11 +85,11 @@ static void *a_build_fn_config(struct aura_yml_fn_data_ctx *usr_data) {
     /* Observability */
 
     /* Manually add Runtime x-tics */
-    uint32_t runtime_off = aura_blob_b_add_map(&b);
-    _fn_conf_tab[A_IDX_FN_RUNTIME] = runtime_off;
-    uint32_t running = aura_blob_b_add_str(&b, "false");
-    aura_blob_b_map_add_kv(&b, runtime_off, "active", running);
-    aura_blob_b_map_add_kv(&b, root_off, "runtime", runtime_off);
+    // uint32_t runtime_off = aura_blob_b_add_map(&b);
+    // _fn_conf_tab[A_IDX_FN_RUNTIME] = runtime_off;
+    // uint32_t running = aura_blob_b_add_str(&b, "false");
+    // aura_blob_b_map_add_kv(&b, runtime_off, "active", running);
+    // aura_blob_b_map_add_kv(&b, root_off, "runtime", runtime_off);
 
     fn_config = aura_serialize_blob(&b, _fn_conf_tab, _fn_conf_tab_size, NULL, 0);
     aura_blob_free(&b);
@@ -241,6 +241,13 @@ void aura_fn_deploy_artifacts_insert_cb(struct aura_db_completion *comp, ssize_t
     case A_FN_DEPLOY_STATE_STAT_SAVE:
         res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DEPLOY,
                                       A_FN_DEPLOY_STATE_STAT_SAVE, &target, A_DB_EXEC_ASYNC, NULL);
+
+        comp->state = A_FN_DEPLOY_STATE_DONE;
+        break;
+
+    case A_FN_DEPLOY_STATE_FN_STATE_SAVE:
+        res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DEPLOY,
+                                      A_FN_DEPLOY_STATE_FN_STATE_SAVE, &target, A_DB_EXEC_ASYNC, NULL);
 
         comp->state = A_FN_DEPLOY_STATE_DONE;
         break;
@@ -664,6 +671,46 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
         if (res != 0) {
             aura_iovec_destroy(stats_key);
             aura_iovec_destroy(stats_data);
+            goto out;
+        }
+
+        aura_fn_async_op_wait(completion.proceed);
+        if (completion.status != 0)
+            goto out;
+        /* Fall through */
+
+    case A_FN_DEPLOY_STATE_FN_STATE_SAVE:
+        struct aura_fn_state fn_state;
+
+        /* state */
+        memset(buf, 0, sizeof(buf));
+        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_NS_SUFFIX_STATE);
+
+        struct aura_iovec *state_key, *state_data;
+
+        state_key = aura_iovec_init(&glob_conf.mc, strlen(buf), NULL);
+        if (!state_key) {
+            goto out;
+        }
+        state_data = aura_iovec_init(&glob_conf.mc, sizeof(fn_state), NULL);
+        if (!state_data) {
+            aura_iovec_destroy(state_key);
+            goto out;
+        }
+
+        fn_state.is_active = false;
+        memcpy(state_key->base, buf, state_key->len);
+        memcpy(state_data->base, &fn_state, state_data->len);
+
+        completion.proceed = false;
+        res = aura_db_record_insert(
+          glob_conf.db_handle, A_DB_NS_FN, A_DB_SCHEMA_FN_STATE_V1,
+          user_data.job_id, user_data.rec_off, A_DB_OP_INSERT,
+          state_key, state_data, A_DB_EXEC_ASYNC, &completion);
+
+        if (res != 0) {
+            aura_iovec_destroy(state_key);
+            aura_iovec_destroy(state_data);
             goto out;
         }
 

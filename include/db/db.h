@@ -27,6 +27,7 @@ typedef void *AURA_DBHANDLE;
 #define A_DB_NS_SUFFIX_CODE "code"
 #define A_DB_NS_SUFFIX_CONFIG "config"
 #define A_DB_NS_SUFFIX_STAT "stat"
+#define A_DB_NS_SUFFIX_STATE "state"
 
 #define A_DB_REC_NOT_FOUND 1
 
@@ -52,6 +53,7 @@ typedef enum {
     A_DB_SCHEMA_JOB_V1,
     A_DB_SCHEMA_JOB_STEP_V1,
     A_DB_SCHEMA_FN_PETITE_V1,
+    A_DB_SCHEMA_FN_STATE_V1,
     A_DB_SCHEMA_CHECK_PNT,
 } aura_db_schema_id;
 

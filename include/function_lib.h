@@ -55,7 +55,6 @@ enum a_fn_node_idx {
     A_IDX_FN_HARD_MEM,
     A_IDX_FN_OOM_POLICY,
     A_IDX_FN_NETWORKING,
-    A_IDX_FN_RUNTIME,
 };
 
 /*--------------*/
@@ -471,12 +470,10 @@ struct aura_fn_config {
     // deploy
     // timeout
     /**
-     * In the case that a function processes event streams,
-     * we can decide to wait for this maximum number of milliseconds
-     * and collect a batch of events before passing it over to a function.
+     * Wait for publish batch milliseconds batching work
+     * before passing it over to a function.
      */
     unsigned publish_batch_ms;
-    bool is_active; /* function can be invoked */
 };
 
 /** Function stat structure */
@@ -489,7 +486,12 @@ struct aura_fn_stat {
     uint64_t last_execution;
 };
 
-/* Function Huge structure (contains everything about a fn) */
+/** Function state */
+struct aura_fn_state {
+    bool is_active; /* Fn can be invoked */
+};
+
+/* Function Complete structure (contains everything about a fn) */
 struct aura_fn {
     uint64_t fn_id;
     struct aura_fn_meta meta;
@@ -536,6 +538,7 @@ typedef enum {
     A_FN_DEPLOY_STATE_CONFIG_SAVE,
     A_FN_DEPLOY_STATE_CODE_SAVE,
     A_FN_DEPLOY_STATE_STAT_SAVE,
+    A_FN_DEPLOY_STATE_FN_STATE_SAVE,
     A_FN_DEPLOY_STATE_DONE,
     A_FN_DEPLOY_STATE_FAILED
 } aura_fn_deploy_state;

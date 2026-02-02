@@ -90,7 +90,6 @@ int _fn_conf_tab[] = {
   [A_IDX_FN_HARD_MEM] = 0,
   [A_IDX_FN_OOM_POLICY] = 0,
   [A_IDX_FN_NETWORKING] = 0,
-  [A_IDX_FN_RUNTIME] = 0,
 };
 
 size_t _fn_conf_tab_size = ARRAY_SIZE(_fn_conf_tab);
@@ -358,23 +357,6 @@ int aura_fn_config_parse(void *config, struct aura_fn_config *fn_config) {
     /* Runtime */
     const st_aura_blob_node *runtime_node;
 
-    if (fn_tab[A_IDX_FN_RUNTIME] != 0) {
-        runtime_node = &nodes[fn_tab[A_IDX_FN_RUNTIME]];
-        kv_cnt = runtime_node->map.kv_cnt;
-        kv_idx = runtime_node->map.kv_idx;
-
-        for (int i = 0; i < kv_cnt; ++i) {
-            kv = &kv_pairs[kv_idx + i];
-            kv_key = strtab + kv->key_offset;
-            kv_val_node = &nodes[kv->node_idx];
-
-            if (strcmp(kv_key, "active") == 0) {
-                kv_val = strtab + kv_val_node->str_offset;
-                fn_config->is_active = strcmp(kv_val, "true") == 0 ? true : false;
-            }
-        }
-    }
-
     return 0;
 exception:
     aura_fn_config_destroy(fn_config);
@@ -446,7 +428,6 @@ void aura_fn_meta_dump(struct aura_fn_meta *fn_conf) {
 
 void aura_fn_config_dump(struct aura_fn_config *fn_conf) {
     app_debug(true, 0, "Aura FN CONFIG");
-    app_debug(true, 0, "    Active: %s", fn_conf->is_active ? "Yes" : "No");
     app_debug(true, 0, "    Concurrency:");
     app_debug(true, 0, "        Mix instances: %d", fn_conf->fn_concurrency.min_instances);
     app_debug(true, 0, "        Max instances: %d", fn_conf->fn_concurrency.max_instances);
