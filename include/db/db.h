@@ -23,11 +23,11 @@ typedef void *AURA_DBHANDLE;
 #define A_DB_KEY_PREFIX_FUNC "fn"
 
 /* Resource type suffixes */
-#define A_DB_NS_SUFFIX_META "meta"
-#define A_DB_NS_SUFFIX_CODE "code"
-#define A_DB_NS_SUFFIX_CONFIG "config"
-#define A_DB_NS_SUFFIX_STAT "stat"
-#define A_DB_NS_SUFFIX_STATE "state"
+#define A_DB_SCHEMA_SUFFIX_META "meta"
+#define A_DB_SCHEMA_SUFFIX_CODE "code"
+#define A_DB_SCHEMA_SUFFIX_CONFIG "config"
+#define A_DB_SCHEMA_SUFFIX_STAT "stat"
+#define A_DB_SCHEMA_SUFFIX_STATE "state"
 
 #define A_DB_REC_NOT_FOUND 1
 
@@ -38,8 +38,8 @@ typedef void *AURA_DBHANDLE;
 
 /* Namespaces */
 typedef enum {
-    A_DB_NS_FN = 1,    /* Function namespace */
-    A_DB_NS_STAT,      /* Stat namespace */
+    A_DB_NS_FN = 1, /* Function namespace */
+    // A_DB_NS_STAT,      /* Stat namespace */
     A_DB_NS_JOB,       /* Job namespace */
     A_DB_NS_CHECK_PNT, /* Check point namespace */
 } aura_db_namespace;

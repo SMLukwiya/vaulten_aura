@@ -528,7 +528,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
     case A_FN_DEPLOY_STATE_META_SAVE:
         /* format: fn:<name>:<version>:<schema> */
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_NS_SUFFIX_META);
+        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_META);
         struct aura_iovec *meta_key, *meta_data;
 
         meta_key = aura_iovec_init(&glob_conf.mc, strlen(buf), NULL);
@@ -566,7 +566,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
 
     case A_FN_DEPLOY_STATE_CONFIG_SAVE:
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_NS_SUFFIX_CONFIG);
+        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_CONFIG);
 
         struct aura_iovec *config_key, *config_data;
 
@@ -603,7 +603,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
 
     case A_FN_DEPLOY_STATE_CODE_SAVE:
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_NS_SUFFIX_CODE);
+        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_CODE);
 
         struct aura_iovec *code_key, *code_data;
 
@@ -643,7 +643,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
 
         /* stats */
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_NS_SUFFIX_STAT);
+        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_STAT);
 
         struct aura_iovec *stats_key, *stats_data;
 
@@ -664,7 +664,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
 
         completion.proceed = false;
         res = aura_db_record_insert(
-          glob_conf.db_handle, A_DB_NS_STAT, A_DB_SCHEMA_FN_STAT_DELTA,
+          glob_conf.db_handle, A_DB_NS_FN, A_DB_SCHEMA_FN_STAT_DELTA,
           user_data.job_id, user_data.rec_off, A_DB_OP_INSERT,
           stats_key, stats_data, A_DB_EXEC_ASYNC, &completion);
 
@@ -684,7 +684,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
 
         /* state */
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_NS_SUFFIX_STATE);
+        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_STATE);
 
         struct aura_iovec *state_key, *state_data;
 

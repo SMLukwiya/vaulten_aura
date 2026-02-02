@@ -2250,8 +2250,6 @@ char *a_db_get_namespace_str(uint16_t ns) {
         return "Function NS";
     case A_DB_NS_JOB:
         return "Job NS";
-    case A_DB_NS_STAT:
-        return "Stats NS";
     case A_DB_NS_CHECK_PNT:
         return "Check point NS";
     default:

@@ -79,6 +79,12 @@ void aura_fn_delete_cb(struct aura_db_completion *comp, ssize_t result) {
         comp->state == A_FN_DELETE_STATE_DONE;
         break;
 
+    case A_FN_DELETE_STATE_FN_STATE:
+        res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DELETE,
+                                      A_FN_DELETE_STATE_FN_STATE, &target, A_DB_EXEC_ASYNC, NULL);
+        comp->state == A_FN_DELETE_STATE_DONE;
+        break;
+
     case A_FN_DELETE_STATE_DONE:
 
     default:
@@ -214,7 +220,7 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
         struct aura_iovec meta_key;
 
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, (uint32_t)fn_version, A_DB_NS_SUFFIX_META);
+        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, (uint32_t)fn_version, A_DB_SCHEMA_SUFFIX_META);
 
         meta_key.base = buf;
         meta_key.len = strlen(buf);
@@ -235,7 +241,7 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
         struct aura_iovec config_key;
 
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, (uint32_t)fn_version, A_DB_NS_SUFFIX_CONFIG);
+        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, (uint32_t)fn_version, A_DB_SCHEMA_SUFFIX_CONFIG);
 
         config_key.base = buf;
         config_key.len = strlen(buf);
@@ -256,7 +262,7 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
         struct aura_iovec code_key;
 
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, (uint32_t)fn_version, A_DB_NS_SUFFIX_CODE);
+        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, (uint32_t)fn_version, A_DB_SCHEMA_SUFFIX_CODE);
 
         code_key.base = buf;
         code_key.len = strlen(buf);
@@ -277,13 +283,34 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
         struct aura_iovec stat_key;
 
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, (uint32_t)fn_version, A_DB_NS_SUFFIX_STAT);
+        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, (uint32_t)fn_version, A_DB_SCHEMA_SUFFIX_STAT);
 
         stat_key.base = buf;
         stat_key.len = strlen(buf);
 
         comp.proceed = false;
         res = aura_db_record_delete(glob_conf.db_handle, A_DB_NS_FN, A_DB_SCHEMA_FN_META_V1, job_id, &stat_key, A_DB_EXEC_ASYNC, &comp);
+        if (res != 0) {
+            goto out;
+        }
+
+        aura_fn_async_op_wait(comp.proceed);
+        if (comp.status != 0) {
+            goto out;
+        }
+        /* Fall through */
+
+    case A_FN_DELETE_STATE_FN_STATE:
+        struct aura_iovec state_key;
+
+        memset(buf, 0, sizeof(buf));
+        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, (uint32_t)fn_version, A_DB_SCHEMA_SUFFIX_STATE);
+
+        state_key.base = buf;
+        state_key.len = strlen(buf);
+
+        comp.proceed = false;
+        res = aura_db_record_delete(glob_conf.db_handle, A_DB_NS_FN, A_DB_SCHEMA_FN_STATE_V1, job_id, &state_key, A_DB_EXEC_ASYNC, &comp);
         if (res != 0) {
             goto out;
         }
