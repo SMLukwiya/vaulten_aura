@@ -4,12 +4,9 @@
 #include "file_lib.h"
 #include "flag_cli.h"
 #include "function_lib.h"
+#include "log_cli.h"
 #include "unix_socket_lib.h"
 #include "utils_lib.h"
-
-const char fn_deleted[] = "\x1B[1;32mFunction Delete\x1B[0m";
-const char fn_delete_failed_error[] = "\x1B[1;31mFunction Deletion Failed\x1B[0m";
-const char fn_delete_failed_not_exist[] = "\x1B[1;31mFunction Deletion Failed: Provided function does not exist!\x1B[0m";
 
 struct fn_delete_config {
     char *fn_name;
@@ -98,15 +95,15 @@ int aura_cli_run_fn_delete(void *opts_ptr, void *glob_opts) {
         } else {
             switch (evt->error_code) {
             case A_FN_ERROR_GENERIC:
-                app_info(false, 0, fn_delete_failed_error);
+                app_info(false, 0, cli_cmd_msg[A_FN_ERROR_GENERIC].base);
                 break;
 
             case A_FN_ERROR_NOT_EXIST:
-                app_info(false, 0, fn_delete_failed_not_exist);
+                app_info(false, 0, cli_cmd_msg[A_FN_ERROR_NOT_EXIST].base);
                 break;
 
             case A_FN_ERROR_NONE:
-                app_info(false, 0, fn_deleted);
+                app_info(false, 0, cli_cmd_msg[A_FN_ERROR_NONE].base);
                 break;
 
             default:

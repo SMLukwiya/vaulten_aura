@@ -20,6 +20,7 @@ add_executable(aura
     src/commands/fn_deploy_cli.c
     src/commands/fn_status_cli.c
     src/commands/fn_start_cli.c
+    src/commands/fn_stop_cli.c
     src/commands/fn_config_validate_cli.c
     src/commands/srv_config_validate_cli.c
     src/commands/srv_start_cli.c

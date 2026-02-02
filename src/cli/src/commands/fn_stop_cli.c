@@ -8,18 +8,18 @@
 #include "unix_socket_lib.h"
 #include "utils_lib.h"
 
-struct fn_start_config {
+struct fn_stop_config {
     char *fn_name;
 };
 
 /* Allocator fn */
-static void *a_fn_start_option_allocator(void) {
-    return malloc(sizeof(struct fn_start_config));
+static void *a_fn_stop_option_allocator(void) {
+    return malloc(sizeof(struct fn_stop_config));
 }
 
 /* Deallocator fn */
-static void a_fn_start_option_deallocator(void *opts_ptr) {
-    struct fn_start_config *opts = (struct fn_start_config *)opts_ptr;
+static void a_fn_stop_option_deallocator(void *opts_ptr) {
+    struct fn_stop_config *opts = (struct fn_stop_config *)opts_ptr;
     if (!opts_ptr)
         return;
 
@@ -29,7 +29,7 @@ static void a_fn_start_option_deallocator(void *opts_ptr) {
     free(opts);
 }
 
-struct aura_cli_flag fn_start_flag = {
+struct aura_cli_flag fn_stop_flag = {
   .name = "function",
   .short_name = 'f',
   .default_value = NULL,
@@ -38,15 +38,15 @@ struct aura_cli_flag fn_start_flag = {
   .is_required = true,
   .is_set = false,
   .type = A_CLI_FLAG_STRING,
-  .offset_in_option = OPT_OFFSET(struct fn_start_config, fn_name),
+  .offset_in_option = OPT_OFFSET(struct fn_stop_config, fn_name),
   .description = "Name of the function",
 };
 
-int aura_cli_fn_start(void *opts_ptr, void *glob_opts) {
+int aura_cli_fn_stop(void *opts_ptr, void *glob_opts) {
     char *data;
     struct aura_msg_hdr hdr;
     struct aura_msg msg;
-    struct fn_start_config *opts;
+    struct fn_stop_config *opts;
     int sock_fd, res;
     char *fn_name, *sep;
     uint32_t fn_verion;
@@ -57,7 +57,7 @@ int aura_cli_fn_start(void *opts_ptr, void *glob_opts) {
     if (sock_fd == -1)
         app_exit(false, 0, "Failed to connect to daemon, use 'aura system start' to start aura daemon");
 
-    opts = (struct fn_start_config *)opts_ptr;
+    opts = (struct fn_stop_config *)opts_ptr;
     fn_name = opts->fn_name;
     sep = strchr(fn_name, ':');
     if (sep) {
@@ -71,11 +71,11 @@ int aura_cli_fn_start(void *opts_ptr, void *glob_opts) {
         }
     }
 
-    a_init_msg_hdr(hdr, strlen(fn_name), A_MSG_CMD_EXECUTE, A_CMD_FN_START);
+    a_init_msg_hdr(hdr, strlen(fn_name), A_MSG_CMD_EXECUTE, A_CMD_FN_STOP);
 
     /* send over the directory file descriptor */
     if (aura_msg_send(sock_fd, &hdr, opts->fn_name, strlen(opts->fn_name), -1) != 0)
-        sys_exit(false, errno, "aura_cli_fn_start: aura_msg_send error:");
+        sys_exit(false, errno, "aura_cli_fn_stop: aura_msg_send error:");
 
     bool should_terminate;
 
@@ -120,22 +120,22 @@ int aura_cli_fn_start(void *opts_ptr, void *glob_opts) {
 }
 
 /* HELP CMD */
-static void a_fn_start_help() {
-    app_info(false, 0, "aura function start -f <function name>");
+static void a_fn_stop_help() {
+    app_info(false, 0, "aura function stop -f <function name>");
 }
 
-struct aura_cli_flag *fn_start_flags[] = {
-  &fn_start_flag,
+struct aura_cli_flag *fn_stop_flags[] = {
+  &fn_stop_flag,
 };
 
-struct aura_cli_cmd fn_start_cli = {
+struct aura_cli_cmd fn_stop_cli = {
   .version = "1.0.0",
-  .name = "start",
-  .description = "Activate the provided function",
-  .usage = "aura function start -f <function name>",
+  .name = "stop",
+  .description = "Deactivate the provided function",
+  .usage = "aura function stop -f <function name>",
   .deprecated = NULL,
-  .flags = fn_start_flags,
-  .flag_count = ARRAY_SIZE(fn_start_flags),
+  .flags = fn_stop_flags,
+  .flag_count = ARRAY_SIZE(fn_stop_flags),
   .args = NULL,
   .args_cnt = 0,
   .sub_cmds = NULL,
@@ -146,9 +146,9 @@ struct aura_cli_cmd fn_start_cli = {
   .is_hidden = false,
   .is_experimental = false,
   .options = NULL,
-  .options_size = sizeof(struct fn_start_config),
-  .opt_allocator = a_fn_start_option_allocator,
-  .opt_destructor = a_fn_start_option_deallocator,
-  .handler = aura_cli_fn_start,
-  .opt_help = a_fn_start_help,
+  .options_size = sizeof(struct fn_stop_config),
+  .opt_allocator = a_fn_stop_option_allocator,
+  .opt_destructor = a_fn_stop_option_deallocator,
+  .handler = aura_cli_fn_stop,
+  .opt_help = a_fn_stop_help,
 };

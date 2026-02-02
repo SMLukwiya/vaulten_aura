@@ -5,16 +5,11 @@
 #include "file_lib.h"
 #include "flag_cli.h"
 #include "function_lib.h"
+#include "log_cli.h"
 #include "unix_socket_lib.h"
 #include "utils_lib.h"
 
 #include <dirent.h>
-
-const char fn_deploy_success[] = "\x1B[1;32mDeployment complete\x1B[0m";
-const char fn_deploy_failed_error[] = "\x1B[1;31mDeployment Failed\x1B[0m";
-const char fn_deploy_config_error[] = "\x1B[1;31mDeployment Failed, Could not successfully parse config\x1B[0m";
-const char fn_deploy_entry_file_error[] = "\x1B[1;31mFailed to load entry file\x1B[0m";
-const char fn_deploy_fn_exists_error[] = "\x1B[1;31mDeployment failed. Function with same name and version already exists\x1B[0m";
 
 struct fn_deploy_config {
     char *fn_dir_path;
@@ -119,19 +114,19 @@ int aura_cli_run_fn_deploy(void *opts_ptr, void *glob_opts) {
         else {
             switch (evt->error_code) {
             case A_FN_ERROR_GENERIC:
-                app_info(false, 0, "%s", fn_deploy_failed_error);
+                app_info(false, 0, "%s", cli_cmd_msg[A_FN_ERROR_GENERIC].base);
                 break;
 
             case A_FN_ERROR_CONFIG:
-                app_info(false, 0, "%s", fn_deploy_config_error);
+                app_info(false, 0, "%s", cli_cmd_msg[A_FN_ERROR_CONFIG].base);
                 break;
 
             case A_FN_ERROR_DUPLICATE:
-                app_info(false, 0, "%s", fn_deploy_fn_exists_error);
+                app_info(false, 0, "%s", cli_cmd_msg[A_FN_ERROR_DUPLICATE].base);
                 break;
 
             case A_FN_ERROR_NONE:
-                app_info(false, 0, "%s", fn_deploy_success);
+                app_info(false, 0, "%s", cli_cmd_msg[A_FN_ERROR_NONE].base);
                 break;
 
             default:

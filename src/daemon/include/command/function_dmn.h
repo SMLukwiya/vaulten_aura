@@ -20,4 +20,7 @@ void aura_dmn_function_status(AURA_DBHANDLE db, struct iovec *fn, int cli_fd);
 /* Function start */
 void aura_dmn_function_start(AURA_DBHANDLE db, struct aura_memory_ctx *mc, struct iovec *fn, int cli_fd);
 
+/* Function stop */
+void aura_dmn_function_stop(AURA_DBHANDLE db, struct aura_memory_ctx *mc, struct iovec *fn, int cli_fd);
+
 #endif
