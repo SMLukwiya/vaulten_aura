@@ -61,6 +61,7 @@ typedef enum {
     A_CMD_FN_VALIDATE_CONF,
     A_CMD_FN_DEPLOY,
     A_CMD_FN_DELETE,
+    A_CMD_FN_STATUS,
 } aura_cmd_t;
 
 struct aura_msg_hdr {

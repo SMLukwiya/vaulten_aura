@@ -2,7 +2,7 @@
 #define _GNU_SOURCE
 #endif
 #include "aura_dmn.h"
-#include "command/command_dmn.h"
+#include "command/function_dmn.h"
 #include "command/server_dmn.h"
 #include "command/sys_dmn.h"
 #include "daemon_lib.h"
@@ -13,12 +13,7 @@
 #include <signal.h>
 #include <sys/wait.h>
 
-// #define MAX_CONN 100
-// #define A_SOCKET_PAIR_FD_INDEX 1
-
 struct aura_daemon_glob_conf glob_conf;
-// struct pollfd poll_fds[MAX_CONN];
-// int server_pid = 0;
 
 /**
  * Handle requests from server and cli
@@ -54,16 +49,20 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
             aura_dmn_server_status(glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd, cli_fd);
             return 0;
 
-        case A_CMD_FN_DEPLOY:
-            aura_dmn_function_deploy(msg->fd, glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd, cli_fd);
-            return 0;
-
         case A_CMD_FN_VALIDATE_CONF:
             aura_dmn_function_config_validate(msg->fd, cli_fd);
             return 0;
 
+        case A_CMD_FN_DEPLOY:
+            aura_dmn_function_deploy(msg->fd, glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd, cli_fd);
+            return 0;
+
         case A_CMD_FN_DELETE:
             aura_dmn_function_delete(glob_conf.db_handle, &msg->data, cli_fd);
+            return 0;
+
+        case A_CMD_FN_STATUS:
+            aura_dmn_function_status(glob_conf.db_handle, &msg->data, cli_fd);
             return 0;
 
         case A_CMD_SERVER_VALIDATE_CONF:

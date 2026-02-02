@@ -422,6 +422,24 @@ void aura_fn_networking_destroy(const void *networking) {
     /**/
 }
 
+struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, const char *fn_name) {
+    struct aura_fn_petite *fn_petite;
+    struct aura_iovec key, data;
+    off_t off;
+    char buf[2000];
+
+    snprintf(buf, sizeof(buf), "%s:%s", A_DB_KEY_PREFIX_FUNC, fn_name);
+    key.base = buf;
+    key.len = strlen(buf);
+
+    off = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_PETITE_V1, &key, &data);
+    if (off < 0 || off == A_DB_REC_NOT_FOUND) {
+        return NULL;
+    }
+
+    return (struct aura_fn_petite *)data.base;
+}
+
 void aura_fn_meta_dump(struct aura_fn_meta *fn_conf) {
     /**/
 }

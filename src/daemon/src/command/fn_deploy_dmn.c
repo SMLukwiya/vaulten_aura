@@ -159,16 +159,16 @@ void aura_fn_deploy_start_cb(struct aura_db_completion *comp, ssize_t result) {
         /* update job as failed, don't wait */
         aura_db_job_update(
           glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, user_data->rec_off,
-          A_FN_DEPLOY_ERROR_GENERIC, A_DB_EXEC_ASYNC, NULL);
-        evt.state = A_FN_DEPLOY_STATE_FAILED;
-        evt.error_code = A_FN_DEPLOY_ERROR_GENERIC;
+          A_FN_ERROR_GENERIC, A_DB_EXEC_ASYNC, NULL);
+        evt.state = A_FN_OP_STATE_FAILED;
+        evt.error_code = A_FN_ERROR_GENERIC;
         evt.msg_len = 0;
         aura_send_resp(comp->client_fd, (void *)&evt, sizeof(evt));
     }
 
     /* Store result and proceed to next step */
     comp->status = 0;
-    comp->state = A_FN_DEPLOY_STATE_RUNNING;
+    comp->state = A_FN_OP_STATE_RUNNING;
     /* Proceed to next step */
     comp->proceed = true;
 }
@@ -187,9 +187,9 @@ void aura_fn_deploy_artifacts_insert_cb(struct aura_db_completion *comp, ssize_t
     if (result < 0) {
         /* Update job failed */
         aura_db_job_update(glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, user_data->rec_off,
-                           A_FN_DEPLOY_ERROR_CONFIG, A_DB_EXEC_ASYNC, NULL);
-        evt.state = A_FN_DEPLOY_STATE_FAILED;
-        evt.error_code = A_FN_DEPLOY_ERROR_CONFIG;
+                           A_FN_ERROR_CONFIG, A_DB_EXEC_ASYNC, NULL);
+        evt.state = A_FN_OP_STATE_FAILED;
+        evt.error_code = A_FN_ERROR_CONFIG;
         evt.msg_len = 0;
         aura_send_resp(comp->client_fd, (void *)&evt, sizeof(evt));
 
@@ -210,51 +210,51 @@ void aura_fn_deploy_artifacts_insert_cb(struct aura_db_completion *comp, ssize_t
     struct aura_iovec target = {.base = buf, .len = strlen(buf)};
 
     switch (comp->state) {
-    case A_FN_DEPLOY_STATE_PETITE_SAVE:
+    case A_FN_OP_STATE_PETITE:
         res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DEPLOY,
-                                      A_FN_DEPLOY_STATE_PETITE_SAVE, &target, A_DB_EXEC_ASYNC, NULL);
+                                      A_FN_OP_STATE_PETITE, &target, A_DB_EXEC_ASYNC, NULL);
         /* We can safely advance the step here since we will halt if we get any error */
-        comp->state = A_FN_DEPLOY_STATE_META_SAVE;
+        comp->state = A_FN_OP_STATE_META;
         break;
 
-    case A_FN_DEPLOY_STATE_META_SAVE:
+    case A_FN_OP_STATE_META:
         res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DEPLOY,
-                                      A_FN_DEPLOY_STATE_META_SAVE, &target, A_DB_EXEC_ASYNC, NULL);
+                                      A_FN_OP_STATE_META, &target, A_DB_EXEC_ASYNC, NULL);
         /* We can safely advance the step here since we will halt if we get any error */
-        comp->state = A_FN_DEPLOY_STATE_CONFIG_SAVE;
+        comp->state = A_FN_OP_STATE_CONFIG;
         break;
 
-    case A_FN_DEPLOY_STATE_CONFIG_SAVE:
+    case A_FN_OP_STATE_CONFIG:
         res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DEPLOY,
-                                      A_FN_DEPLOY_STATE_CONFIG_SAVE, &target, A_DB_EXEC_ASYNC, NULL);
+                                      A_FN_OP_STATE_CONFIG, &target, A_DB_EXEC_ASYNC, NULL);
 
-        comp->state = A_FN_DEPLOY_STATE_CODE_SAVE;
+        comp->state = A_FN_OP_STATE_CODE;
         break;
 
-    case A_FN_DEPLOY_STATE_CODE_SAVE:
+    case A_FN_OP_STATE_CODE:
         res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DEPLOY,
-                                      A_FN_DEPLOY_STATE_CODE_SAVE, &target, A_DB_EXEC_ASYNC, NULL);
+                                      A_FN_OP_STATE_CODE, &target, A_DB_EXEC_ASYNC, NULL);
 
-        comp->state = A_FN_DEPLOY_STATE_STAT_SAVE;
+        comp->state = A_FN_OP_STATE_STAT;
         break;
 
-    case A_FN_DEPLOY_STATE_STAT_SAVE:
+    case A_FN_OP_STATE_STAT:
         res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DEPLOY,
-                                      A_FN_DEPLOY_STATE_STAT_SAVE, &target, A_DB_EXEC_ASYNC, NULL);
+                                      A_FN_OP_STATE_STAT, &target, A_DB_EXEC_ASYNC, NULL);
 
-        comp->state = A_FN_DEPLOY_STATE_DONE;
+        comp->state = A_FN_OP_STATE_FN_STATE;
         break;
 
-    case A_FN_DEPLOY_STATE_FN_STATE_SAVE:
+    case A_FN_OP_STATE_FN_STATE:
         res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DEPLOY,
-                                      A_FN_DEPLOY_STATE_FN_STATE_SAVE, &target, A_DB_EXEC_ASYNC, NULL);
+                                      A_FN_OP_STATE_FN_STATE, &target, A_DB_EXEC_ASYNC, NULL);
 
-        comp->state = A_FN_DEPLOY_STATE_DONE;
+        comp->state = A_FN_OP_STATE_DONE;
         break;
 
-    case A_FN_DEPLOY_STATE_DONE:
+    case A_FN_OP_STATE_DONE:
         res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DEPLOY,
-                                      A_FN_DEPLOY_STATE_DONE, &target, A_DB_EXEC_ASYNC, NULL);
+                                      A_FN_OP_STATE_DONE, &target, A_DB_EXEC_ASYNC, NULL);
         break;
     default:
         break;
@@ -262,9 +262,9 @@ void aura_fn_deploy_artifacts_insert_cb(struct aura_db_completion *comp, ssize_t
 
     if (res != 0) {
         aura_db_job_update(glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, user_data->rec_off,
-                           A_FN_DEPLOY_ERROR_CONFIG, A_DB_EXEC_ASYNC, NULL);
-        evt.state = A_FN_DEPLOY_STATE_FAILED;
-        evt.error_code = A_FN_DEPLOY_ERROR_CONFIG;
+                           A_FN_ERROR_CONFIG, A_DB_EXEC_ASYNC, NULL);
+        evt.state = A_FN_OP_STATE_FAILED;
+        evt.error_code = A_FN_ERROR_CONFIG;
         evt.msg_len = 0;
         aura_send_resp(comp->client_fd, (void *)&evt, sizeof(evt));
         comp->status = res;
@@ -311,15 +311,15 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
 
     completion.on_complete = aura_fn_deploy_start_cb;
     completion.client_fd = cli_fd;
-    completion.state = A_FN_DEPLOY_STATE_START;
+    completion.state = A_FN_OP_STATE_START;
     completion.proceed = false;
     completion.user_data = (void *)&user_data;
 
     switch (completion.state) {
-    case A_FN_DEPLOY_STATE_START:
+    case A_FN_OP_STATE_START:
         job_id = aura_db_job_insert(
           glob_conf.db_handle, A_FN_DEPLOY, A_DB_JOB_START, 0,
-          A_FN_DEPLOY_ERROR_NONE, A_DB_EXEC_ASYNC, &completion);
+          A_FN_ERROR_NONE, A_DB_EXEC_ASYNC, &completion);
 
         if (job_id < 0) {
             sys_debug(true, errno, "aura_dmn_function_deploy: aura_db_job_insert deploy start error:");
@@ -333,7 +333,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
         user_data.job_id = job_id;
         user_data.rec_off = 0;
 
-    case A_FN_DEPLOY_STATE_RUNNING:
+    case A_FN_OP_STATE_RUNNING:
         int error;
         size_t msg_len;
         char *msg;
@@ -352,7 +352,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
 
         res = aura_load_config_fd(config_fd, aura_function_validator, aura_function_validator_len, parser_err, (void *)&usr_data);
         if (res != 0) {
-            error = A_FN_DEPLOY_ERROR_CONFIG;
+            error = A_FN_ERROR_CONFIG;
             msg_len = 0;
             msg == NULL;
             goto err;
@@ -361,7 +361,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
         if (res == 0 && parser_err->err_cnt > 0) {
             msg = parser_err->errors[0].message;
             msg_len = strlen(msg);
-            error = A_FN_DEPLOY_ERROR_CONFIG;
+            error = A_FN_ERROR_CONFIG;
             goto err;
         }
 
@@ -374,7 +374,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
          * Check if we can parse the meta upfront
          */
         if (aura_fn_meta_parse(fn_meta, &_fn_meta) != 0) {
-            error = A_FN_DEPLOY_ERROR_CONFIG;
+            error = A_FN_ERROR_CONFIG;
             msg_len = 0;
             msg == NULL;
             goto err;
@@ -387,7 +387,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
          * Check if we can parse the config upfront
          */
         if (aura_fn_config_parse(fn_config, &_fn_config) != 0) {
-            error = A_FN_DEPLOY_ERROR_CONFIG;
+            error = A_FN_ERROR_CONFIG;
             msg_len = 0;
             msg == NULL;
             goto err;
@@ -404,14 +404,14 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
 
         rt = JS_NewRuntime();
         if (!rt) {
-            error = A_FN_DEPLOY_ERROR_CONFIG;
+            error = A_FN_ERROR_CONFIG;
             msg_len = 0;
             msg == NULL;
             goto err;
         }
         ctx = JS_NewContext(rt);
         if (!ctx) {
-            error = A_FN_DEPLOY_ERROR_CONFIG;
+            error = A_FN_ERROR_CONFIG;
             msg_len = 0;
             msg == NULL;
             goto err;
@@ -419,7 +419,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
 
         entry_script = aura_load_file(entry_file_fd, &entry_file_len);
         if (!entry_script) {
-            error = A_FN_DEPLOY_ERROR_CONFIG;
+            error = A_FN_ERROR_CONFIG;
             msg_len = sizeof(entry_file_error) - 1;
             msg = (char *)entry_file_error;
             goto err;
@@ -427,7 +427,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
 
         bytecode = aura_qjs_create_bytecode(ctx, entry_script, entry_file_len, entry_file, &bytecode_len);
         if (!bytecode) {
-            error = A_FN_DEPLOY_ERROR_CONFIG;
+            error = A_FN_ERROR_CONFIG;
             msg_len = 0;
             msg == NULL;
             goto err;
@@ -436,7 +436,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
         goto proceed;
 
     err:
-        evt.state = A_FN_DEPLOY_STATE_FAILED;
+        evt.state = A_FN_OP_STATE_FAILED;
         evt.error_code = error;
         evt.msg_len = msg_len;
         memset(evt.msg, 0, sizeof(evt.msg));
@@ -450,10 +450,10 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
 
         /* Move to next */
     proceed:
-        completion.state = A_FN_DEPLOY_STATE_PETITE_SAVE;
+        completion.state = A_FN_OP_STATE_PETITE;
         /* Fall through */
 
-    case A_FN_DEPLOY_STATE_PETITE_SAVE:
+    case A_FN_OP_STATE_PETITE:
         char buf[2000];
         struct aura_iovec p_key, *petite_key, *petite_data;
         struct aura_fn_petite *fn_petite;
@@ -475,15 +475,15 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
          * if we have a job was committed for said function
          */
         if (aura_db_record_exists(glob_conf.db_handle, A_DB_NS_JOB, A_FN_DEPLOY, A_DB_SCHEMA_FN_META_V1, &p_key, true)) {
-            evt.state = A_FN_DEPLOY_STATE_FAILED;
-            evt.error_code = A_FN_DEPLOY_ERROR_DUPLICATE;
+            evt.state = A_FN_OP_STATE_FAILED;
+            evt.error_code = A_FN_ERROR_DUPLICATE;
             evt.msg_len = 0;
             evt.msg[0] = '\0';
 
             /* Don't wait for async op */
             aura_db_job_update(
               glob_conf.db_handle, user_data.job_id, A_DB_JOB_FAILED,
-              A_FN_DEPLOY_ERROR_DUPLICATE, 0, A_DB_EXEC_ASYNC, NULL);
+              A_FN_ERROR_DUPLICATE, 0, A_DB_EXEC_ASYNC, NULL);
             aura_send_resp(cli_fd, (void *)&evt, sizeof(evt));
             goto out;
         }
@@ -525,7 +525,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
             goto out;
         /* Fall through */
 
-    case A_FN_DEPLOY_STATE_META_SAVE:
+    case A_FN_OP_STATE_META:
         /* format: fn:<name>:<version>:<schema> */
         memset(buf, 0, sizeof(buf));
         snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_META);
@@ -564,7 +564,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
             goto out;
         /* Fall through */
 
-    case A_FN_DEPLOY_STATE_CONFIG_SAVE:
+    case A_FN_OP_STATE_CONFIG:
         memset(buf, 0, sizeof(buf));
         snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_CONFIG);
 
@@ -601,7 +601,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
             goto out;
         /* Fall through */
 
-    case A_FN_DEPLOY_STATE_CODE_SAVE:
+    case A_FN_OP_STATE_CODE:
         memset(buf, 0, sizeof(buf));
         snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_CODE);
 
@@ -638,7 +638,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
             goto out;
         /* Fall through */
 
-    case A_FN_DEPLOY_STATE_STAT_SAVE:
+    case A_FN_OP_STATE_STAT:
         struct aura_fn_stat stats;
 
         /* stats */
@@ -679,7 +679,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
             goto out;
         /* Fall through */
 
-    case A_FN_DEPLOY_STATE_FN_STATE_SAVE:
+    case A_FN_OP_STATE_FN_STATE:
         struct aura_fn_state fn_state;
 
         /* state */
@@ -719,10 +719,10 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
             goto out;
         /* Fall through */
 
-    case A_FN_DEPLOY_STATE_DONE:
+    case A_FN_OP_STATE_DONE:
         completion.proceed = false;
         res = aura_db_job_update(glob_conf.db_handle, user_data.job_id, A_DB_JOB_DONE,
-                                 A_FN_DEPLOY_ERROR_NONE, user_data.rec_off, A_DB_EXEC_ASYNC, &completion);
+                                 A_FN_ERROR_NONE, user_data.rec_off, A_DB_EXEC_ASYNC, &completion);
         if (res != 0) {
             goto out;
         }
@@ -732,8 +732,8 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
             goto out;
         }
 
-        evt.state = A_FN_DEPLOY_STATE_DONE;
-        evt.error_code = A_FN_DEPLOY_ERROR_NONE;
+        evt.state = A_FN_OP_STATE_DONE;
+        evt.error_code = A_FN_ERROR_NONE;
         evt.msg_len = 0;
         evt.msg[0] = '\0';
         aura_send_resp(cli_fd, (void *)&evt, sizeof(evt));

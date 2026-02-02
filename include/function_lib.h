@@ -2,6 +2,7 @@
 #define AURA_FUNCTION_LIB_H
 
 #include "blobber_lib.h"
+#include "db/db.h"
 #include "error_lib.h"
 #include "radix_lib.h"
 #include "time_lib.h"
@@ -528,48 +529,29 @@ struct aura_fn_evt {
     char msg[4096];
 };
 
-/* Fn Deployment */
+/* Fn OP states */
 typedef enum {
-    A_FN_DEPLOY_STATE_START = 1,
-    A_FN_DEPLOY_STATE_RUNNING,
-    A_FN_DEPLOY_STATE_CONFIG_VALIDATE,
-    A_FN_DEPLOY_STATE_PETITE_SAVE, /* A small representation for a fn containing only name and version */
-    A_FN_DEPLOY_STATE_META_SAVE,
-    A_FN_DEPLOY_STATE_CONFIG_SAVE,
-    A_FN_DEPLOY_STATE_CODE_SAVE,
-    A_FN_DEPLOY_STATE_STAT_SAVE,
-    A_FN_DEPLOY_STATE_FN_STATE_SAVE,
-    A_FN_DEPLOY_STATE_DONE,
-    A_FN_DEPLOY_STATE_FAILED
-} aura_fn_deploy_state;
+    A_FN_OP_STATE_START = 1,
+    A_FN_OP_STATE_RUNNING,
+    A_FN_OP_STATE_CONFIG_VALIDATE,
+    A_FN_OP_STATE_PETITE, /* A small representation for a fn containing only name and version */
+    A_FN_OP_STATE_META,
+    A_FN_OP_STATE_CONFIG,
+    A_FN_OP_STATE_CODE,
+    A_FN_OP_STATE_STAT,
+    A_FN_OP_STATE_FN_STATE,
+    A_FN_OP_STATE_DONE,
+    A_FN_OP_STATE_FAILED
+} aura_fn_op_state;
 
-/**/
+/* Function errors */
 typedef enum {
-    A_FN_DEPLOY_ERROR_NONE,
-    A_FN_DEPLOY_ERROR_GENERIC,
-    A_FN_DEPLOY_ERROR_CONFIG,
-    A_FN_DEPLOY_ERROR_DUPLICATE
-} aura_fn_deploy_errors;
-
-/* Fn Deletion */
-typedef enum {
-    A_FN_DELETE_STATE_START = 1,
-    A_FN_DELETE_STATE_RUNNING,
-    A_FN_DELETE_STATE_PETITE,
-    A_FN_DELETE_STATE_META,
-    A_FN_DELETE_STATE_CONFIG,
-    A_FN_DELETE_STATE_CODE,
-    A_FN_DELETE_STATE_STAT,
-    A_FN_DELETE_STATE_FN_STATE,
-    A_FN_DELETE_STATE_DONE,
-    A_FN_DELETE_STATE_FAILED,
-} aura_fn_delete_state;
-
-typedef enum {
-    A_FN_DELETE_ERROR_NONE,
-    A_FN_DELETE_ERROR_GENERIC,
-    A_FN_DELETE_ERROR_NOT_EXIST
-} aura_fn_delete_error;
+    A_FN_ERROR_NONE,
+    A_FN_ERROR_GENERIC,
+    A_FN_ERROR_CONFIG,
+    A_FN_ERROR_DUPLICATE,
+    A_FN_ERROR_NOT_EXIST
+} aura_fn_error;
 
 /** DEPLOY STUFF */
 typedef enum {
@@ -676,16 +658,16 @@ static void aura_fn_evt_cli_response_dump(struct aura_fn_evt *evt) {
     app_debug(true, 0, "    Message: %s", evt->msg);
 }
 
-/**/
+/** Parse function meta data */
 int aura_fn_meta_parse(void *meta, struct aura_fn_meta *fn_meta);
 
-/**/
+/* Parse function config */
 int aura_fn_config_parse(void *config, struct aura_fn_config *fn_config);
 
-/**/
+/** Free funtion meta data */
 void aura_fn_meta_destroy(const struct aura_fn_meta *fn_meta);
 
-/**/
+/** Free function config */
 void aura_fn_config_destroy(struct aura_fn_config *fn_config);
 
 /**/
@@ -708,6 +690,9 @@ void aura_fn_config_dump(struct aura_fn_config *fn_conf);
 
 /**/
 void aura_fn_evt_response_dump(struct aura_fn_evt *evt);
+
+/** */
+struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, const char *fn_name);
 
 struct aura_rollback_detector *rollback_detector_create(aura_rollback_cb cb);
 void rollback_detector_add_deployment(struct aura_rollback_detector *rbd, uint64_t fn_id, const char *version /* create a struct to pass error threshold stuff */);

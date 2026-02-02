@@ -303,6 +303,30 @@ static void a_test_wal_replay(void) {
     assert(data5.len == sizeof("Job three second associated record") - 1);
     assert(strncmp(data5.base, "Job three second associated record", data5.len) == 0);
 
+    /* Delete job three assets */
+    job_id = aura_db_job_insert(db, A_DB_JOB_OP_CREATE, A_DB_JOB_START, 0, 0, A_DB_EXEC_DIRECT, NULL);
+    assert(job_id > 0);
+
+    res = aura_db_record_delete(db, 1, 1, job_id, &key4, A_DB_EXEC_DIRECT, NULL);
+    assert(res == 0);
+    res = aura_db_record_delete(db, 1, 1, job_id, &key5, A_DB_EXEC_DIRECT, NULL);
+
+    res = aura_db_job_update(db, job_id, A_DB_JOB_DONE, 0, 0, A_DB_EXEC_DIRECT, NULL);
+    assert(res == 0);
+
+    aura_db_force_wal_replay(db);
+    aura_db_clear_record_cache(db);
+
+    res = aura_db_record_fetch(db, 1, 1, &key4, &data4);
+    assert(res == A_DB_REC_NOT_FOUND);
+    assert(data4.len == 0);
+    assert(data4.base == NULL);
+
+    res = aura_db_record_fetch(db, 1, 1, &key5, &data5);
+    assert(res == A_DB_REC_NOT_FOUND);
+    assert(data5.len == 0);
+    assert(data5.base == NULL);
+
     aura_db_close(db);
 }
 

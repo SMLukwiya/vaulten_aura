@@ -110,7 +110,7 @@ int aura_cli_run_fn_deploy(void *opts_ptr, void *glob_opts) {
             break;
 
         aura_fn_evt_cli_response_dump(evt);
-        if (evt->state == A_FN_DEPLOY_STATE_DONE || evt->state == A_FN_DEPLOY_STATE_FAILED) {
+        if (evt->state == A_FN_OP_STATE_DONE || evt->state == A_FN_OP_STATE_FAILED) {
             terminate = true;
         }
 
@@ -118,19 +118,19 @@ int aura_cli_run_fn_deploy(void *opts_ptr, void *glob_opts) {
             app_info(false, 0, "%s", evt->msg);
         else {
             switch (evt->error_code) {
-            case A_FN_DEPLOY_ERROR_GENERIC:
+            case A_FN_ERROR_GENERIC:
                 app_info(false, 0, "%s", fn_deploy_failed_error);
                 break;
 
-            case A_FN_DEPLOY_ERROR_CONFIG:
+            case A_FN_ERROR_CONFIG:
                 app_info(false, 0, "%s", fn_deploy_config_error);
                 break;
 
-            case A_FN_DEPLOY_ERROR_DUPLICATE:
+            case A_FN_ERROR_DUPLICATE:
                 app_info(false, 0, "%s", fn_deploy_fn_exists_error);
                 break;
 
-            case A_FN_DEPLOY_ERROR_NONE:
+            case A_FN_ERROR_NONE:
                 app_info(false, 0, "%s", fn_deploy_success);
                 break;
 
