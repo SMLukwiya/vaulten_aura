@@ -84,13 +84,6 @@ static void *a_build_fn_config(struct aura_yml_fn_data_ctx *usr_data) {
 
     /* Observability */
 
-    /* Manually add Runtime x-tics */
-    // uint32_t runtime_off = aura_blob_b_add_map(&b);
-    // _fn_conf_tab[A_IDX_FN_RUNTIME] = runtime_off;
-    // uint32_t running = aura_blob_b_add_str(&b, "false");
-    // aura_blob_b_map_add_kv(&b, runtime_off, "active", running);
-    // aura_blob_b_map_add_kv(&b, root_off, "runtime", runtime_off);
-
     fn_config = aura_serialize_blob(&b, _fn_conf_tab, _fn_conf_tab_size, NULL, 0);
     aura_blob_free(&b);
     return fn_config;
@@ -158,7 +151,7 @@ void aura_fn_deploy_start_cb(struct aura_db_completion *comp, ssize_t result) {
     if (result < 0) {
         /* update job as failed, don't wait */
         aura_db_job_update(
-          glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, user_data->rec_off,
+          glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, 0,
           A_FN_ERROR_GENERIC, A_DB_EXEC_ASYNC, NULL);
         evt.state = A_FN_OP_STATE_FAILED;
         evt.error_code = A_FN_ERROR_GENERIC;
@@ -186,7 +179,7 @@ void aura_fn_deploy_artifacts_insert_cb(struct aura_db_completion *comp, ssize_t
 
     if (result < 0) {
         /* Update job failed */
-        aura_db_job_update(glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, user_data->rec_off,
+        aura_db_job_update(glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, 0,
                            A_FN_ERROR_CONFIG, A_DB_EXEC_ASYNC, NULL);
         evt.state = A_FN_OP_STATE_FAILED;
         evt.error_code = A_FN_ERROR_CONFIG;
@@ -199,8 +192,6 @@ void aura_fn_deploy_artifacts_insert_cb(struct aura_db_completion *comp, ssize_t
     }
 
     user_data = (struct aura_fn_cb_data *)comp->user_data;
-    /* update prev record offset */
-    user_data->rec_off = result;
 
     /* Insert job step */
     char buf[2000];
@@ -249,6 +240,13 @@ void aura_fn_deploy_artifacts_insert_cb(struct aura_db_completion *comp, ssize_t
         res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DEPLOY,
                                       A_FN_OP_STATE_FN_STATE, &target, A_DB_EXEC_ASYNC, NULL);
 
+        comp->state = A_FN_OP_STATE_FN_LIST_UPDATE;
+        break;
+
+    case A_FN_OP_STATE_FN_LIST_UPDATE:
+        res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DEPLOY,
+                                      A_FN_OP_STATE_FN_LIST_UPDATE, &target, A_DB_EXEC_ASYNC, NULL);
+
         comp->state = A_FN_OP_STATE_DONE;
         break;
 
@@ -261,7 +259,7 @@ void aura_fn_deploy_artifacts_insert_cb(struct aura_db_completion *comp, ssize_t
     }
 
     if (res != 0) {
-        aura_db_job_update(glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, user_data->rec_off,
+        aura_db_job_update(glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, 0,
                            A_FN_ERROR_CONFIG, A_DB_EXEC_ASYNC, NULL);
         evt.state = A_FN_OP_STATE_FAILED;
         evt.error_code = A_FN_ERROR_CONFIG;
@@ -294,6 +292,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
     struct aura_fn_evt evt;
     int64_t job_id;
     const char *first_err;
+    char buf[2000];
     int res;
 
     void *bytecode, *fn_meta, *fn_config;
@@ -331,7 +330,6 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
             return;
         /* Store job Id and fall through */
         user_data.job_id = job_id;
-        user_data.rec_off = 0;
 
     case A_FN_OP_STATE_RUNNING:
         int error;
@@ -454,73 +452,59 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
         /* Fall through */
 
     case A_FN_OP_STATE_PETITE:
-        char buf[2000];
-        struct aura_iovec p_key, *petite_key, *petite_data;
-        struct aura_fn_petite *fn_petite;
+        struct aura_functions *fns;
 
         fn_name = a_fn_name_get(fn_meta);
         fn_version = a_fn_version_get(fn_meta);
         user_data.fn_name = fn_name;
         user_data.fn_version = fn_version;
 
-        /* key prefix: format: fn:<name>:<version> */
-        snprintf(buf, sizeof(buf), "%s:%s:v%u", A_DB_KEY_PREFIX_FUNC, fn_name, user_data.fn_version);
+        /* Check if we have duplicate */
+        fns = aura_fn_list_fetch(glob_conf.db_handle, &error);
+        if (!fns) {
+            if (error < 0) {
+                evt.state = A_FN_OP_STATE_FAILED;
+                evt.error_code = A_FN_ERROR_GENERIC;
+                evt.msg_len = 0;
+                evt.msg[0] = '\0';
 
-        p_key.base = buf;
-        p_key.len = strlen(buf);
+                /* Don't wait for async op */
+                aura_db_job_update(
+                  glob_conf.db_handle, user_data.job_id, A_DB_JOB_FAILED,
+                  A_FN_ERROR_DUPLICATE, 0, A_DB_EXEC_ASYNC, NULL);
+                aura_send_resp(cli_fd, (void *)&evt, sizeof(evt));
+                goto out;
+            }
+        }
+        if (fns) {
+            for (int i = 0; i < fns->func_cnt; ++i) {
+                if (strcmp(fn_name, fns->funcs[i].fn_name) == 0 && fn_version == fns->funcs[i].fn_version) {
+                    /* verify if job committed */
+                    struct aura_db_job_rec *job;
 
-        /**
-         * Check for existing record using fn meta
-         */
-        if (aura_db_record_exists(glob_conf.db_handle, A_DB_NS_FN, A_FN_DEPLOY, A_DB_SCHEMA_FN_META_V1, &p_key, true)) {
-            evt.state = A_FN_OP_STATE_FAILED;
-            evt.error_code = A_FN_ERROR_DUPLICATE;
-            evt.msg_len = 0;
-            evt.msg[0] = '\0';
+                    job = aura_db_job_fetch(glob_conf.db_handle, fns->funcs[i].job_id);
+                    if (!job)
+                        break;
 
-            /* Don't wait for async op */
-            aura_db_job_update(
-              glob_conf.db_handle, user_data.job_id, A_DB_JOB_FAILED,
-              A_FN_ERROR_DUPLICATE, 0, A_DB_EXEC_ASYNC, NULL);
-            aura_send_resp(cli_fd, (void *)&evt, sizeof(evt));
-            goto out;
+                    if (job->state != A_DB_JOB_DONE)
+                        break;
+
+                    evt.state = A_FN_OP_STATE_FAILED;
+                    evt.error_code = A_FN_ERROR_DUPLICATE;
+                    evt.msg_len = 0;
+                    evt.msg[0] = '\0';
+
+                    /* Don't wait for async op */
+                    aura_db_job_update(
+                      glob_conf.db_handle, user_data.job_id, A_DB_JOB_FAILED,
+                      A_FN_ERROR_DUPLICATE, 0, A_DB_EXEC_ASYNC, NULL);
+                    aura_send_resp(cli_fd, (void *)&evt, sizeof(evt));
+                    goto out;
+                }
+            }
         }
 
-        memset(buf, 0, sizeof(buf));
-        /* format: fn:<name> */
-        snprintf(buf, sizeof(buf), "%s:%s", A_DB_KEY_PREFIX_FUNC, fn_name);
-        petite_key = aura_iovec_init(&glob_conf.mc, strlen(buf), NULL);
-        if (!petite_key) {
-            /* @todo: report failure */
-            goto out;
-        }
-        petite_data = aura_iovec_init(&glob_conf.mc, sizeof(*fn_petite), NULL);
-        if (!petite_data) {
-            aura_iovec_destroy(petite_key);
-            goto out;
-        }
-
-        memcpy(petite_key->base, buf, petite_key->len);
-        fn_petite = (struct aura_fn_petite *)petite_data->base;
-        fn_petite->fn_version = fn_version;
-        memcpy(fn_petite->fn_name, fn_name, sizeof(fn_petite->fn_name));
-
-        completion.proceed = false;
-        completion.on_complete = aura_fn_deploy_artifacts_insert_cb;
-        res = aura_db_record_insert(
-          glob_conf.db_handle, A_DB_NS_FN, A_DB_SCHEMA_FN_PETITE_V1,
-          user_data.job_id, user_data.rec_off, A_DB_OP_INSERT,
-          petite_key, petite_data, A_DB_EXEC_ASYNC, &completion);
-
-        if (res != 0) {
-            aura_iovec_destroy(petite_key);
-            aura_iovec_destroy(petite_data);
-            goto out;
-        }
-
-        aura_fn_async_op_wait(completion.proceed);
-        if (completion.status != 0)
-            goto out;
+        completion.state = A_FN_OP_STATE_META;
         /* Fall through */
 
     case A_FN_OP_STATE_META:
@@ -548,7 +532,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
         completion.on_complete = aura_fn_deploy_artifacts_insert_cb;
         res = aura_db_record_insert(
           glob_conf.db_handle, A_DB_NS_FN, A_DB_SCHEMA_FN_META_V1,
-          user_data.job_id, user_data.rec_off, A_DB_OP_INSERT,
+          user_data.job_id, 0, A_DB_OP_INSERT,
           meta_key, meta_data, A_DB_EXEC_ASYNC, &completion);
 
         if (res != 0) {
@@ -585,7 +569,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
         completion.proceed = false;
         res = aura_db_record_insert(
           glob_conf.db_handle, A_DB_NS_FN, A_DB_SCHEMA_FN_CONFIG_V1,
-          user_data.job_id, user_data.rec_off, A_DB_OP_INSERT,
+          user_data.job_id, 0, A_DB_OP_INSERT,
           config_key, config_data, A_DB_EXEC_ASYNC, &completion);
 
         if (res != 0) {
@@ -622,7 +606,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
         completion.proceed = false;
         res = aura_db_record_insert(
           glob_conf.db_handle, A_DB_NS_FN, A_DB_SCHEMA_FN_CODE_V1,
-          user_data.job_id, user_data.rec_off, A_DB_OP_INSERT,
+          user_data.job_id, 0, A_DB_OP_INSERT,
           code_key, code_data, A_DB_EXEC_ASYNC, &completion);
 
         if (res != 0) {
@@ -663,7 +647,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
         completion.proceed = false;
         res = aura_db_record_insert(
           glob_conf.db_handle, A_DB_NS_FN, A_DB_SCHEMA_FN_STAT_DELTA,
-          user_data.job_id, user_data.rec_off, A_DB_OP_INSERT,
+          user_data.job_id, 0, A_DB_OP_INSERT,
           stats_key, stats_data, A_DB_EXEC_ASYNC, &completion);
 
         if (res != 0) {
@@ -703,7 +687,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
         completion.proceed = false;
         res = aura_db_record_insert(
           glob_conf.db_handle, A_DB_NS_FN, A_DB_SCHEMA_FN_STATE_V1,
-          user_data.job_id, user_data.rec_off, A_DB_OP_INSERT,
+          user_data.job_id, 0, A_DB_OP_INSERT,
           state_key, state_data, A_DB_EXEC_ASYNC, &completion);
 
         if (res != 0) {
@@ -717,10 +701,34 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
             goto out;
         /* Fall through */
 
+    case A_FN_OP_STATE_FN_LIST_UPDATE:
+        completion.proceed = false;
+
+        /* Insert function into function list */
+        res = aura_fn_list_add(glob_conf.db_handle, &glob_conf.mc, fn_name, fn_version, job_id, &completion);
+        if (res < 0) {
+            evt.state = A_FN_OP_STATE_FAILED;
+            evt.error_code = A_FN_ERROR_GENERIC;
+            evt.msg_len = 0;
+            evt.msg[0] = '\0';
+
+            /* Don't wait for async op */
+            aura_db_job_update(
+              glob_conf.db_handle, user_data.job_id, A_DB_JOB_FAILED,
+              A_FN_ERROR_DUPLICATE, 0, A_DB_EXEC_ASYNC, NULL);
+            aura_send_resp(cli_fd, (void *)&evt, sizeof(evt));
+            goto out;
+        }
+
+        aura_fn_async_op_wait(completion.proceed);
+        if (completion.status != 0) {
+            goto out;
+        }
+
     case A_FN_OP_STATE_DONE:
         completion.proceed = false;
         res = aura_db_job_update(glob_conf.db_handle, user_data.job_id, A_DB_JOB_DONE,
-                                 A_FN_ERROR_NONE, user_data.rec_off, A_DB_EXEC_ASYNC, &completion);
+                                 A_FN_ERROR_NONE, 0, A_DB_EXEC_ASYNC, &completion);
         if (res != 0) {
             goto out;
         }

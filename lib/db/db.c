@@ -1074,7 +1074,7 @@ int aura_db_record_fetch(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_
     off_t offset;
     ssize_t res;
     char *record;
-    char key_buf[4096];
+    char key_buf[2000];
     AURA_DB *db;
 
     db = (AURA_DB *)_db;
@@ -1142,7 +1142,7 @@ int aura_db_record_fetch(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_
 
                     res = pread(db->db_fd, record, rec_hdr.data_len, offset + sizeof(rec_hdr) + rec_hdr.key_len);
                     if (res < 0) {
-                        free(record); /* probably no need to free record, since I am exiting for now */
+                        free(record);
                         goto exception;
                     }
                     data_out->base = record;
@@ -2274,6 +2274,8 @@ char *a_db_get_schema_str(uint16_t schema_id) {
         return "Schema Job step";
     case A_DB_SCHEMA_FN_PETITE_V1:
         return "Schema Fn Petite";
+    case A_DB_SCHEMA_FNS:
+        return "Schema Function List";
     default:
         return "Schema Unknown";
     }

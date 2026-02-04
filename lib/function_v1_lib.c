@@ -94,6 +94,194 @@ int _fn_conf_tab[] = {
 
 size_t _fn_conf_tab_size = ARRAY_SIZE(_fn_conf_tab);
 
+struct aura_functions *aura_fn_list_fetch(AURA_DBHANDLE db, int *error) {
+    struct aura_functions *fns;
+    struct aura_iovec key, data;
+    int res;
+
+    key = a_function_list_key;
+    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FNS, &key, &data);
+    if (res < 0 || res == A_DB_REC_NOT_FOUND) {
+        *error = res;
+        return NULL;
+    }
+
+    fns = (struct aura_functions *)data.base;
+    fns->funcs = (struct aura_fn_petite *)(data.base + sizeof(*fns));
+    return fns;
+}
+
+int aura_fn_list_add(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *fn_name,
+                     uint32_t fn_version, uint64_t job_id, struct aura_db_completion *comp) {
+    struct aura_functions *fns;
+    struct aura_iovec key;
+    struct aura_iovec *key_ptr, *data_ptr;
+    size_t fns_len;
+    int res, rv, error;
+
+    key = a_function_list_key;
+    fns = aura_fn_list_fetch(db, &error);
+    if (!fns) {
+        if (error < 0)
+            return error;
+
+        /* Record does not exist yet, create one */
+        fns_len = sizeof(*fns) + sizeof(struct aura_fn_petite);
+
+        key_ptr = aura_iovec_init(mc, key.len, NULL);
+        if (!key_ptr)
+            return -1;
+
+        data_ptr = aura_iovec_init(mc, fns_len, NULL);
+        if (!data_ptr) {
+            aura_iovec_destroy(key_ptr);
+            return -1;
+        }
+
+        memcpy(key_ptr->base, key.base, key.len);
+        fns = (struct aura_functions *)data_ptr->base;
+        fns->funcs = (struct aura_fn_petite *)(data_ptr->base + sizeof(*fns));
+        memcpy(fns->funcs[0].fn_name, fn_name, A_FN_NAME_MAX_LEN);
+        fns->funcs[0].fn_version = fn_version;
+        fns->funcs[0].job_id = job_id;
+        fns->func_cnt = 1;
+
+        res = aura_db_record_insert(db, A_DB_NS_FN, A_DB_SCHEMA_FNS, job_id, 0, A_DB_OP_INSERT, key_ptr, data_ptr, A_DB_EXEC_ASYNC, comp);
+        if (res != 0) {
+            aura_iovec_destroy(key_ptr);
+            aura_iovec_destroy(data_ptr);
+            return -1;
+        }
+
+        return 0;
+    }
+
+    /* Increase function count */
+    fns_len = sizeof(*fns) + (sizeof(struct aura_fn_petite) * (fns->func_cnt + 1));
+    key_ptr = aura_iovec_init(mc, key.len, NULL);
+    if (!key_ptr) {
+        rv = -1;
+        goto out;
+    }
+
+    data_ptr = aura_iovec_init(mc, fns_len, NULL);
+    if (!data_ptr) {
+        aura_iovec_destroy(key_ptr);
+        rv = -1;
+        goto out;
+    }
+
+    memcpy(key_ptr->base, key.base, key.len);
+    memcpy(data_ptr->base, fns, fns_len - sizeof(struct aura_functions));
+
+    struct aura_functions *fns_ptr;
+
+    fns_ptr = (struct aura_functions *)data_ptr->base;
+    fns_ptr->funcs = (struct aura_fn_petite *)(data_ptr->base + sizeof(*fns_ptr));
+    memcpy(fns_ptr->funcs[fns_ptr->func_cnt].fn_name, fn_name, A_FN_NAME_MAX_LEN);
+    fns_ptr->funcs[fns_ptr->func_cnt].fn_version = fn_version;
+    fns_ptr->funcs[fns_ptr->func_cnt].job_id = job_id;
+    fns_ptr->func_cnt++;
+
+    res = aura_db_record_insert(db, A_DB_NS_FN, A_DB_SCHEMA_FNS, job_id, 0, A_DB_OP_INSERT, key_ptr, data_ptr, A_DB_EXEC_ASYNC, comp);
+    if (res != 0) {
+        aura_iovec_destroy(key_ptr);
+        aura_iovec_destroy(data_ptr);
+        rv = -1;
+        goto out;
+    }
+    comp->proceed = true;
+    rv = 0;
+
+out:
+    if (fns)
+        free(fns);
+
+    return rv;
+}
+
+int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *fn_name,
+                        uint32_t fn_version, struct aura_db_completion *comp) {
+    struct aura_functions *fns;
+    struct aura_iovec key;
+    int res, del_idx;
+    int rv, error;
+    size_t fns_len;
+
+    key = a_function_list_key;
+    fns = aura_fn_list_fetch(db, &error);
+    if (!fns)
+        return error;
+
+    if (fns->func_cnt == 0) {
+        return -1;
+    }
+
+    /* Check for function existence */
+    del_idx = -1;
+    for (int i = 0; i < fns->func_cnt; ++i) {
+        if (strcmp(fns->funcs[i].fn_name, fn_name) == 0 && fns->funcs[0].fn_version == fn_version) {
+            del_idx = i;
+        }
+    }
+
+    /* No match found for fn_name and version */
+    if (del_idx == -1) {
+        rv = -1;
+        goto out;
+    }
+
+    struct aura_iovec *key_ptr, *data_ptr;
+    struct aura_functions *fns_ptr;
+
+    key_ptr = aura_iovec_init(mc, key.len, NULL);
+    if (!key_ptr) {
+        rv = -1;
+        goto out;
+    }
+
+    /* reduce function cnt */
+    fns_len = sizeof(*fns) + (sizeof(struct aura_fn_petite) * (fns->func_cnt - 1));
+    data_ptr = aura_iovec_init(mc, fns_len, NULL);
+    if (!data_ptr) {
+        aura_iovec_destroy(key_ptr);
+        rv = -1;
+        goto out;
+    }
+
+    memcpy(key_ptr->base, key.base, key.len);
+    fns_ptr = (struct aura_functions *)data_ptr->base;
+    fns_ptr->funcs = (struct aura_fn_petite *)(data_ptr->base + sizeof(*fns_ptr));
+    /* Copy over the new function list */
+    int idx = 0;
+    for (int i = 0; i < fns->func_cnt; ++i) {
+        if (i == del_idx)
+            continue;
+        memcpy(fns_ptr->funcs[idx].fn_name, fns->funcs[i].fn_name, A_FN_NAME_MAX_LEN);
+        fns_ptr->funcs[idx].fn_version = fns->funcs[i].fn_version;
+        fns_ptr->funcs[idx].job_id = fns->funcs[i].job_id;
+        idx++;
+    }
+    fns_ptr->func_cnt = fns->func_cnt - 1;
+
+    res = aura_db_record_insert(db, A_DB_NS_FN, A_DB_SCHEMA_FNS, 0, 0, A_DB_OP_INSERT, key_ptr, data_ptr, A_DB_EXEC_ASYNC, comp);
+    if (res != 0) {
+        aura_iovec_destroy(key_ptr);
+        aura_iovec_destroy(data_ptr);
+        rv = -1;
+        goto out;
+    }
+    app_debug(true, 0, "aura_fn_list_delete func _E: del idx: %d", del_idx);
+    app_debug(true, 0, "aura_fn_list_delete func _E: new cnt: %lu", fns_ptr->func_cnt);
+    app_debug(true, 0, "aura_fn_list_delete func _E: Last inserted idx: %lu", idx);
+
+    rv = 0;
+out:
+    if (fns)
+        free(fns);
+    return rv;
+}
+
 int aura_fn_meta_parse(void *meta, struct aura_fn_meta *fn_meta) {
     const st_aura_blob_node *nodes;
     const st_aura_blob_arr_entry *arrs;
@@ -278,7 +466,7 @@ int aura_fn_meta_parse(void *meta, struct aura_fn_meta *fn_meta) {
 
 exception:
     aura_fn_meta_destroy(fn_meta);
-    return 1;
+    return -1;
 }
 
 int aura_fn_config_parse(void *config, struct aura_fn_config *fn_config) {
@@ -300,16 +488,18 @@ int aura_fn_config_parse(void *config, struct aura_fn_config *fn_config) {
     memset(fn_config, 0, sizeof(*fn_config));
 
     const st_aura_blob_node *env_node;
+    int env_cnt;
 
     /* Envs */
     if (fn_tab[A_IDX_FN_ENV] != 0) {
         int i;
 
+        env_cnt = 0;
         env_node = &nodes[fn_tab[A_IDX_FN_ENV]];
         kv_cnt = env_node->map.kv_cnt;
         kv_idx = env_node->map.kv_idx;
 
-        fn_config->envs = malloc((kv_cnt + 1) * sizeof(struct aura_iovec)); /* Null aura_iovec terminated */
+        fn_config->envs = malloc(kv_cnt * sizeof(struct aura_iovec));
         if (!fn_config->envs)
             goto exception;
 
@@ -320,10 +510,10 @@ int aura_fn_config_parse(void *config, struct aura_fn_config *fn_config) {
 
             fn_config->envs[i].base = strdup(strtab + kv_val_node->str_offset);
             fn_config->envs[i].len = strlen(fn_config->envs[i].base);
+            env_cnt++;
         }
         /* Terminate */
-        fn_config->envs[i].base = NULL;
-        fn_config->envs[i].len = 0;
+        fn_config->env_cnt = env_cnt;
     }
 
     const st_aura_blob_node *min_instance_node, *max_instance_node;
@@ -360,7 +550,10 @@ int aura_fn_config_parse(void *config, struct aura_fn_config *fn_config) {
     return 0;
 exception:
     aura_fn_config_destroy(fn_config);
-    return 1;
+    return -1;
+}
+
+void *aura_fn_config_blob(struct aura_fn_config *config) {
 }
 
 void aura_fn_meta_destroy(const struct aura_fn_meta *fn_meta) {
@@ -387,7 +580,7 @@ void aura_fn_config_destroy(struct aura_fn_config *fn_config) {
         return;
 
     if (fn_config->envs) {
-        for (int i = 0; fn_config->envs[i].base != NULL; ++i) {
+        for (int i = 0; i < fn_config->env_cnt; ++i) {
             free(fn_config->envs[i].base);
         }
         free(fn_config->envs);
@@ -438,6 +631,99 @@ struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, const char *fn_nam
     }
 
     return (struct aura_fn_petite *)data.base;
+}
+
+struct aura_fn *aura_fn_load(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version) {
+    struct aura_fn *fn;
+    struct aura_iovec key, data;
+    struct aura_fn_petite *fn_petite;
+    char buf[2000];
+    int res;
+
+    /* Fn available */
+    snprintf(buf, sizeof(buf), "%s:%s:v%u", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version);
+    key.base = buf;
+    if (!aura_db_record_exists(db, A_DB_NS_FN, A_FN_DEPLOY, A_DB_SCHEMA_FN_META_V1, &key, true))
+        return NULL;
+
+    /* Meta */
+    memset(buf, 0, sizeof(buf));
+    snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_META);
+    key.base = buf;
+    key.len = strlen(buf);
+    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_META_V1, &key, &data);
+    if (res < 0 || res == A_DB_REC_NOT_FOUND) {
+        return NULL;
+    }
+
+    if (aura_fn_meta_parse(data.base, &fn->meta) < 0) {
+        free(data.base);
+        return NULL;
+    }
+    free(data.base);
+    data.base = NULL;
+
+    /* Config */
+    memset(buf, 0, sizeof(buf));
+    snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_CONFIG);
+    key.base = buf;
+    key.len = strlen(buf);
+    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_CONFIG_V1, &key, &data);
+    if (res < 0 || res == A_DB_REC_NOT_FOUND) {
+        return NULL;
+    }
+
+    if (aura_fn_config_parse(data.base, &fn->config) < 0) {
+        free(data.base);
+        return NULL;
+    }
+    free(data.base);
+    data.base = NULL;
+
+    /* Stats */
+    memset(buf, 0, sizeof(buf));
+    snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_STAT);
+    key.base = buf;
+    key.len = strlen(buf);
+    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_STAT_DELTA, &key, &data);
+    if (res < 0 || res == A_DB_REC_NOT_FOUND) {
+        return NULL;
+    }
+
+    memcpy(&fn->stats, data.base, sizeof(fn->stats));
+    free(data.base);
+    data.base = NULL;
+
+    /* State */
+    memset(buf, 0, sizeof(buf));
+    snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_STATE);
+    key.base = buf;
+    key.len = strlen(buf);
+    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_STATE_V1, &key, &data);
+    if (res < 0 || res == A_DB_REC_NOT_FOUND) {
+        return NULL;
+    }
+
+    memcpy(&fn->state, data.base, sizeof(fn->state));
+    free(data.base);
+    data.base = NULL;
+
+    /* Code */
+    struct aura_iovec code;
+
+    memset(buf, 0, sizeof(buf));
+    snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_CODE);
+    key.base = buf;
+    key.len = strlen(buf);
+    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_CODE_V1, &key, &code);
+    if (res < 0 || res == A_DB_REC_NOT_FOUND) {
+        return NULL;
+    }
+    /* We transfer memory ownership to fn */
+    fn->fn_code = code.base;
+    fn->fn_code_len = code.len;
+
+    return fn;
 }
 
 void aura_fn_meta_dump(struct aura_fn_meta *fn_conf) {

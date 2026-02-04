@@ -55,6 +55,7 @@ typedef enum {
     A_DB_SCHEMA_FN_PETITE_V1,
     A_DB_SCHEMA_FN_STATE_V1,
     A_DB_SCHEMA_CHECK_PNT,
+    A_DB_SCHEMA_FNS,
 } aura_db_schema_id;
 
 typedef enum {

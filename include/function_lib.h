@@ -14,6 +14,13 @@
 #include <sys/time.h>
 #include <sys/types.h>
 
+#define A_FN_NAME_MAX_LEN 1024
+
+static struct aura_iovec a_function_list_key = {
+  .base = "system:functions",
+  .len = sizeof("system:functions") - 1,
+};
+
 #define MAX_CIRCUIT_BREAKER_TRIGGERS 3
 
 #define aura_fn_async_op_wait(done) \
@@ -22,7 +29,6 @@
 
 struct aura_fn_cb_data {
     uint64_t job_id;
-    off_t rec_off;
     const char *fn_name;
     uint32_t fn_version;
 };
@@ -465,6 +471,7 @@ struct aura_fn_meta {
 /* Function config structure */
 struct aura_fn_config {
     struct aura_iovec *envs;
+    size_t env_cnt;
     struct aura_fn_concurrency fn_concurrency;
     struct aura_fn_observability fn_observability;
     // placement
@@ -498,6 +505,7 @@ struct aura_fn {
     struct aura_fn_meta meta;
     struct aura_fn_config config;
     struct aura_fn_stat stats;
+    struct aura_fn_state state;
     uint64_t fn_code_len;
     void *fn_code;
 };
@@ -511,9 +519,15 @@ struct aura_fn {
  * This is very tiny as compared to the real function meta
  */
 struct aura_fn_petite {
-    char fn_name[1024];
+    char fn_name[A_FN_NAME_MAX_LEN];
     uint32_t fn_version;
     uint64_t job_id; /* Job on which this function was created */
+};
+
+/** System functions structure */
+struct aura_functions {
+    size_t func_cnt;
+    struct aura_fn_petite *funcs;
 };
 
 struct aura_fn_tls_version {
@@ -540,6 +554,7 @@ typedef enum {
     A_FN_OP_STATE_CODE,
     A_FN_OP_STATE_STAT,
     A_FN_OP_STATE_FN_STATE,
+    A_FN_OP_STATE_FN_LIST_UPDATE,
     A_FN_OP_STATE_DONE,
     A_FN_OP_STATE_FAILED
 } aura_fn_op_state;
@@ -693,6 +708,17 @@ void aura_fn_evt_response_dump(struct aura_fn_evt *evt);
 
 /** */
 struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, const char *fn_name);
+
+/** Get the list of functions deployed in the system */
+struct aura_functions *aura_fn_list_fetch(AURA_DBHANDLE db, int *error);
+
+/** Add a new function to the list of deployed functions */
+int aura_fn_list_add(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *fn_name,
+                     uint32_t fn_version, uint64_t job_id, struct aura_db_completion *comp);
+
+/** Remove a function from the list of deployed functions */
+int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *fn_name,
+                        uint32_t fn_version, struct aura_db_completion *comp);
 
 struct aura_rollback_detector *rollback_detector_create(aura_rollback_cb cb);
 void rollback_detector_add_deployment(struct aura_rollback_detector *rbd, uint64_t fn_id, const char *version /* create a struct to pass error threshold stuff */);

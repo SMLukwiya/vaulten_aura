@@ -25,6 +25,7 @@ struct aura_daemon_glob_conf {
     struct aura_memory_ctx mc;
     int server_pid;
     struct pollfd poll_fds[MAX_CONN];
+    uint64_t boot_time;
 };
 
 int aura_daemon(void);
