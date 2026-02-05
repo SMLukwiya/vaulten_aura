@@ -13,6 +13,7 @@ void aura_dmn_function_status(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
     const char *fn_name;
     uint32_t fn_version;
     char buf[2000];
+    int res, error;
 
     fn_name = key->iov_base;
     fn_version = UINT32_MAX;
@@ -22,25 +23,30 @@ void aura_dmn_function_status(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
         *sep = '\0';
     }
 
-    /* Version not provided, get latest */
-    if (fn_version == UINT32_MAX) {
-        fn_petite = aura_fn_petite_fetch(db, fn_name);
-        if (!fn_petite) {
-            evt.error_code = A_FN_ERROR_NOT_EXIST;
-            evt.state = A_FN_OP_STATE_FAILED;
-            evt.msg_len = 0;
+    fn_petite = aura_fn_petite_fetch(db, fn_name, fn_version, &error);
+    if (!fn_petite) {
+        evt.state = A_FN_OP_STATE_FAILED;
+        evt.msg_len = 0;
 
-            aura_send_resp(cli_fd, &evt, sizeof(evt));
-            goto out;
+        if (error == A_DB_REC_NOT_FOUND || error == 0) {
+            evt.error_code = A_FN_ERROR_NOT_EXIST;
+        } else if (error < 0) {
+            evt.error_code = A_FN_ERROR_GENERIC;
         }
-        fn_version = fn_petite->fn_version;
-        free(fn_petite);
+
+        aura_send_resp(cli_fd, &evt, sizeof(evt));
+        goto out;
     }
+
+    fn_version = fn_petite->fn_version;
+    free(fn_petite);
 
     snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_STATE);
     state_key.base = buf;
     state_key.len = strlen(buf);
-    if (aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_STATE_V1, &state_key, &state_data) < 0) {
+    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_STATE_V1, &state_key, &state_data);
+    if (res < 0 || res == A_DB_REC_NOT_FOUND) {
+        /* @todo: differentiate errors */
         evt.error_code = A_FN_ERROR_NOT_EXIST;
         evt.state = A_FN_OP_STATE_FAILED;
         evt.msg_len = 0;
@@ -55,6 +61,7 @@ void aura_dmn_function_status(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
     evt.state = A_FN_OP_STATE_DONE;
     evt.msg_len = fn_state->is_active ? sizeof(fn_status_active) : sizeof(fn_status_inactive);
     memcpy(evt.msg, fn_state->is_active ? fn_status_active : fn_status_inactive, evt.msg_len);
+    free(fn_state);
 
     aura_send_resp(cli_fd, &evt, sizeof(evt));
 
@@ -80,6 +87,7 @@ void aura_fn_start_cb(struct aura_db_completion *comp, ssize_t result) {
 
 void aura_dmn_function_start(AURA_DBHANDLE db, struct aura_memory_ctx *mc, struct iovec *fn, int cli_fd) {
     struct aura_fn_state *fn_state;
+    struct aura_functions *fns;
     struct aura_fn_petite *fn_petite;
     struct aura_fn_evt evt;
     struct aura_iovec key;
@@ -87,7 +95,8 @@ void aura_dmn_function_start(AURA_DBHANDLE db, struct aura_memory_ctx *mc, struc
     uint32_t fn_version;
     struct aura_db_completion comp;
     char buf[2000];
-    int res;
+    int res, error;
+    bool fn_exists;
 
     comp.client_fd = cli_fd;
     comp.on_complete = aura_fn_start_cb;
@@ -100,32 +109,23 @@ void aura_dmn_function_start(AURA_DBHANDLE db, struct aura_memory_ctx *mc, struc
         *sep = '\0';
     }
 
-    /* Version not provided, get latest */
-    if (fn_version == UINT32_MAX) {
-        fn_petite = aura_fn_petite_fetch(db, fn_name);
-        if (!fn_petite) {
-            evt.error_code = A_FN_ERROR_NOT_EXIST;
-            evt.state = A_FN_OP_STATE_FAILED;
-            evt.msg_len = 0;
-
-            aura_send_resp(cli_fd, &evt, sizeof(evt));
-            goto out;
-        }
-        fn_version = fn_petite->fn_version;
-        free(fn_petite);
-    }
-
-    snprintf(buf, sizeof(buf), "%s:%s:v%u", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version);
-    key.base = buf;
-    key.len = strlen(buf);
-    if (!aura_db_record_exists(db, A_DB_NS_FN, A_FN_DEPLOY, A_DB_SCHEMA_FN_META_V1, &key, true)) {
-        evt.error_code = A_FN_ERROR_NOT_EXIST;
+    fn_petite = aura_fn_petite_fetch(db, fn_name, fn_version, &error);
+    if (!fn_petite) {
         evt.state = A_FN_OP_STATE_FAILED;
         evt.msg_len = 0;
+
+        if (error == A_DB_REC_NOT_FOUND || error == 0) {
+            evt.error_code = A_FN_ERROR_NOT_EXIST;
+        } else if (error < 0) {
+            evt.error_code = A_FN_ERROR_GENERIC;
+        }
 
         aura_send_resp(cli_fd, &evt, sizeof(evt));
         goto out;
     }
+
+    fn_version = fn_petite->fn_version;
+    free(fn_petite);
 
     struct aura_iovec *state_key, *state_data;
 
@@ -152,8 +152,8 @@ void aura_dmn_function_start(AURA_DBHANDLE db, struct aura_memory_ctx *mc, struc
         aura_iovec_destroy(state_data);
         goto out;
     }
-    aura_fn_async_op_wait(comp.proceed);
 
+    aura_fn_async_op_wait(comp.proceed);
     if (comp.status != 0)
         goto out;
 
@@ -163,6 +163,8 @@ void aura_dmn_function_start(AURA_DBHANDLE db, struct aura_memory_ctx *mc, struc
     aura_send_resp(cli_fd, &evt, sizeof(evt));
 
 out:
+    if (fn_name)
+        free((void *)fn_name);
     close(cli_fd);
 }
 
@@ -175,7 +177,7 @@ void aura_dmn_function_stop(AURA_DBHANDLE db, struct aura_memory_ctx *mc, struct
     uint32_t fn_version;
     struct aura_db_completion comp;
     char buf[2000];
-    int res;
+    int res, error;
 
     comp.client_fd = cli_fd;
     comp.on_complete = aura_fn_start_cb;
@@ -188,32 +190,23 @@ void aura_dmn_function_stop(AURA_DBHANDLE db, struct aura_memory_ctx *mc, struct
         *sep = '\0';
     }
 
-    /* Version not provided, get latest */
-    if (fn_version == UINT32_MAX) {
-        fn_petite = aura_fn_petite_fetch(db, fn_name);
-        if (!fn_petite) {
-            evt.error_code = A_FN_ERROR_NOT_EXIST;
-            evt.state = A_FN_OP_STATE_FAILED;
-            evt.msg_len = 0;
-
-            aura_send_resp(cli_fd, &evt, sizeof(evt));
-            goto out;
-        }
-        fn_version = fn_petite->fn_version;
-        free(fn_petite);
-    }
-
-    snprintf(buf, sizeof(buf), "%s:%s:v%u", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version);
-    key.base = buf;
-    key.len = strlen(buf);
-    if (!aura_db_record_exists(db, A_DB_NS_FN, A_FN_DEPLOY, A_DB_SCHEMA_FN_META_V1, &key, true)) {
-        evt.error_code = A_FN_ERROR_NOT_EXIST;
+    fn_petite = aura_fn_petite_fetch(db, fn_name, fn_version, &error);
+    if (!fn_petite) {
         evt.state = A_FN_OP_STATE_FAILED;
         evt.msg_len = 0;
+
+        if (error == A_DB_REC_NOT_FOUND || error == 0) {
+            evt.error_code = A_FN_ERROR_NOT_EXIST;
+        } else if (error < 0) {
+            evt.error_code = A_FN_ERROR_GENERIC;
+        }
 
         aura_send_resp(cli_fd, &evt, sizeof(evt));
         goto out;
     }
+
+    fn_version = fn_petite->fn_version;
+    free(fn_petite);
 
     struct aura_iovec *state_key, *state_data;
 
@@ -240,8 +233,8 @@ void aura_dmn_function_stop(AURA_DBHANDLE db, struct aura_memory_ctx *mc, struct
         aura_iovec_destroy(state_data);
         goto out;
     }
-    aura_fn_async_op_wait(comp.proceed);
 
+    aura_fn_async_op_wait(comp.proceed);
     if (comp.status != 0)
         goto out;
 
@@ -251,5 +244,7 @@ void aura_dmn_function_stop(AURA_DBHANDLE db, struct aura_memory_ctx *mc, struct
     aura_send_resp(cli_fd, &evt, sizeof(evt));
 
 out:
+    if (fn_name)
+        free((void *)fn_name);
     close(cli_fd);
 }

@@ -271,9 +271,6 @@ int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char
         rv = -1;
         goto out;
     }
-    app_debug(true, 0, "aura_fn_list_delete func _E: del idx: %d", del_idx);
-    app_debug(true, 0, "aura_fn_list_delete func _E: new cnt: %lu", fns_ptr->func_cnt);
-    app_debug(true, 0, "aura_fn_list_delete func _E: Last inserted idx: %lu", idx);
 
     rv = 0;
 out:
@@ -615,21 +612,79 @@ void aura_fn_networking_destroy(const void *networking) {
     /**/
 }
 
-struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, const char *fn_name) {
+struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version, int *error) {
     struct aura_fn_petite *fn_petite;
+    struct aura_functions *fns;
     struct aura_iovec key, data;
-    off_t off;
-    char buf[2000];
 
-    snprintf(buf, sizeof(buf), "%s:%s", A_DB_KEY_PREFIX_FUNC, fn_name);
-    key.base = buf;
-    key.len = strlen(buf);
-
-    off = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_PETITE_V1, &key, &data);
-    if (off < 0 || off == A_DB_REC_NOT_FOUND) {
+    fns = aura_fn_list_fetch(db, error);
+    if (!fns) {
         return NULL;
     }
 
+    if (fns->func_cnt == 0) {
+        *error = 0;
+        return NULL;
+    }
+
+    /* Function version not provided */
+    if (fn_version == UINT32_MAX) {
+        /** Loop reverse to get the latest function version  */
+        for (int i = fns->func_cnt - 1; i >= 0; --i) {
+            if (strcmp(fns->funcs[i].fn_name, fn_name) == 0) {
+                /* verify if job committed */
+                struct aura_db_job_rec *job;
+                uint8_t job_state;
+
+                job = aura_db_job_fetch(db, fns->funcs[i].job_id, error);
+                if (!job) {
+                    free(fns);
+                    return NULL;
+                }
+
+                job_state = job->state;
+                free(job);
+                if (job_state != A_DB_JOB_DONE) {
+                    free(fns);
+                    return NULL;
+                }
+
+                data.len = sizeof(struct aura_fn_petite);
+                data.base = malloc(data.len);
+                memcpy(data.base, &fns->funcs[i], data.len);
+                break;
+            }
+        }
+    } else {
+        /* version was provided */
+        for (int i = fns->func_cnt - 1; i >= 0; --i) {
+            if (strcmp(fns->funcs[i].fn_name, fn_name) == 0 && fns->funcs[i].fn_version == fn_version) {
+                /* verify if job committed */
+                struct aura_db_job_rec *job;
+                uint8_t job_state;
+
+                job = aura_db_job_fetch(db, fns->funcs[i].job_id, error);
+                if (!job) {
+                    free(fns);
+                    return NULL;
+                }
+
+                job_state = job->state;
+                free(job);
+                if (job_state != A_DB_JOB_DONE) {
+                    free(fns);
+                    return NULL;
+                }
+
+                data.len = sizeof(struct aura_fn_petite);
+                data.base = malloc(data.len);
+                memcpy(data.base, &fns->funcs[i], data.len);
+                break;
+            }
+        }
+    }
+
+    free(fns);
     return (struct aura_fn_petite *)data.base;
 }
 

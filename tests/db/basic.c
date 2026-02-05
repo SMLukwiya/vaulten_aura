@@ -83,7 +83,7 @@ static void a_test_put_get_delete(void) {
 static void a_test_job_insert_update_delete(void) {
     AURA_DBHANDLE *db;
     char db_path[512];
-    int res;
+    int res, error;
     uint64_t job_id;
     struct aura_db_job_rec *job;
 
@@ -97,7 +97,7 @@ static void a_test_job_insert_update_delete(void) {
     assert(job_id > 0);
 
     /* FETCH */
-    job = aura_db_job_fetch(db, job_id);
+    job = aura_db_job_fetch(db, job_id, &error);
     assert(job != NULL);
     assert(job->job_type == A_DB_JOB_OP_CREATE);
     assert(job->state == A_DB_JOB_START);
@@ -107,7 +107,7 @@ static void a_test_job_insert_update_delete(void) {
     assert(res == 0);
 
     /* FETCH */
-    job = aura_db_job_fetch(db, job_id);
+    job = aura_db_job_fetch(db, job_id, &error);
     assert(job != NULL);
     assert(job->job_type == A_DB_JOB_OP_CREATE);
     assert(job->state == A_DB_JOB_FAILED);

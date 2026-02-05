@@ -706,8 +706,11 @@ void aura_fn_config_dump(struct aura_fn_config *fn_conf);
 /**/
 void aura_fn_evt_response_dump(struct aura_fn_evt *evt);
 
-/** */
-struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, const char *fn_name);
+/**
+ * Get 'tiny' function meta data from
+ * list of functions
+ */
+struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version, int *error);
 
 /** Get the list of functions deployed in the system */
 struct aura_functions *aura_fn_list_fetch(AURA_DBHANDLE db, int *error);

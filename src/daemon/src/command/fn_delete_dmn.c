@@ -45,12 +45,6 @@ void aura_fn_delete_cb(struct aura_db_completion *comp, ssize_t result) {
 
     case A_FN_OP_STATE_RUNNING:
         res = 0;
-        comp->state = A_FN_OP_STATE_PETITE;
-        break;
-
-    case A_FN_OP_STATE_PETITE:
-        res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DELETE,
-                                      A_FN_OP_STATE_PETITE, &target, A_DB_EXEC_ASYNC, NULL);
         comp->state = A_FN_OP_STATE_META;
         break;
 
@@ -121,6 +115,8 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
     struct aura_fn_cb_data user_data;
     uint64_t job_id;
     ssize_t res;
+    char buf[2000];
+
     /* Mark function as deleted */
     /* Delete from cache */
     /* Gradually move all new function invocations to new ones */
@@ -130,6 +126,7 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
     comp.proceed = false;
     comp.user_data = &user_data;
     comp.on_complete = aura_fn_delete_cb;
+    fn_name = NULL;
 
     switch (comp.state) {
     case A_FN_OP_STATE_START:
@@ -142,10 +139,8 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
         /* Fall through */
 
     case A_FN_OP_STATE_RUNNING:
-        char buf[2000];
-        struct aura_functions *fns;
+        struct aura_fn_petite *fn_petite;
         int error;
-        bool fn_exist;
 
         /**
          * Extract fn name and version
@@ -159,68 +154,25 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
             *sep = '\0';
         }
 
-        fns = aura_fn_list_fetch(db, &error);
-        if (!fns) {
-            if (error < 0) {
-                aura_db_job_update(db, job_id, A_DB_JOB_FAILED, A_FN_ERROR_NOT_EXIST, 0, A_DB_EXEC_ASYNC, NULL);
-                evt.error_code = A_FN_ERROR_GENERIC;
-                evt.state = A_FN_OP_STATE_FAILED;
-                evt.msg_len = 0;
-
-                aura_send_resp(cli_fd, &evt, sizeof(evt));
-                goto out;
-            }
-
-            if (error == A_DB_REC_NOT_FOUND) {
-                aura_db_job_update(db, job_id, A_DB_JOB_FAILED, A_FN_ERROR_NOT_EXIST, 0, A_DB_EXEC_ASYNC, NULL);
-                evt.error_code = A_FN_ERROR_NOT_EXIST;
-                evt.state = A_FN_OP_STATE_FAILED;
-                evt.msg_len = 0;
-
-                aura_send_resp(cli_fd, &evt, sizeof(evt));
-                goto out;
-            }
-        }
-
-        fn_exist = false;
-        /* No fn version was provided, get latest fn version */
-        if (fn_version == UINT32_MAX) {
-            for (int i = fns->func_cnt - 1; i >= 0; --i) {
-                /**
-                 * Loop in reverse and get the latest function version
-                 */
-                if (strcmp(fns->funcs[i].fn_name, fn_name) == 0) {
-                    fn_version = fns->funcs[i].fn_version;
-                    fn_exist = true;
-                    break;
-                }
-            }
-        } else {
-            /* Fn version provided, find function from list */
-            for (int i = fns->func_cnt - 1; i >= 0; --i) {
-                /**
-                 * Loop in reverse and get the latest function version
-                 */
-                if (strcmp(fns->funcs[i].fn_name, fn_name) == 0 && fns->funcs[i].fn_version == fn_version) {
-                    fn_exist = true;
-                    break;
-                }
-            }
-        }
-
-        if (!fn_exist) {
-            aura_db_job_update(db, job_id, A_DB_JOB_FAILED, A_FN_ERROR_NOT_EXIST, 0, A_DB_EXEC_ASYNC, NULL);
-            evt.error_code = A_FN_ERROR_NOT_EXIST;
+        fn_petite = aura_fn_petite_fetch(db, fn_name, fn_version, &error);
+        if (!fn_petite) {
             evt.state = A_FN_OP_STATE_FAILED;
             evt.msg_len = 0;
 
+            if (error == A_DB_REC_NOT_FOUND || error == 0) {
+                evt.error_code = A_FN_ERROR_NOT_EXIST;
+            } else if (error < 0) {
+                evt.error_code = A_FN_ERROR_GENERIC;
+            }
+
+            aura_db_job_update(db, job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
             aura_send_resp(cli_fd, &evt, sizeof(evt));
-            free(fns);
             goto out;
         }
 
-        if (fns)
-            free(fns);
+        fn_version = fn_petite->fn_version;
+        free(fn_petite);
+
         user_data.fn_name = fn_name;
         user_data.fn_version = fn_version;
         comp.state = A_FN_OP_STATE_META;
@@ -351,7 +303,6 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
         /* Fall through */
 
     case A_FN_OP_STATE_DONE:
-        app_debug(true, 0, "A_FN_OP_STATE_DONE_DELETE");
         res = aura_db_job_update(db, job_id, A_DB_JOB_DONE, A_FN_ERROR_NONE, 0, A_DB_EXEC_ASYNC, &comp);
         if (res != 0)
             goto out;

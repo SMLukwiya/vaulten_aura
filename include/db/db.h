@@ -194,7 +194,7 @@ uint64_t aura_db_job_insert(AURA_DBHANDLE _db, uint32_t job_type, uint8_t state,
                             aura_db_exec_mode exec_mode, struct aura_db_completion *completion);
 
 /**/
-struct aura_db_job_rec *aura_db_job_fetch(AURA_DBHANDLE _db, uint64_t job_id);
+struct aura_db_job_rec *aura_db_job_fetch(AURA_DBHANDLE _db, uint64_t job_id, int *error);
 
 /**/
 int aura_db_job_step_insert(AURA_DBHANDLE _db, uint64_t job_id, uint32_t job_type, uint8_t step,

@@ -815,13 +815,13 @@ int aura_db_job_update(AURA_DBHANDLE _db, uint64_t job_id, uint16_t state, int e
     char buf[1024];
     struct aura_iovec key, data;
     struct aura_db_job_rec *job_rec;
-    int res;
+    int res, err;
     off_t offset;
 
     db = (AURA_DB *)_db;
-    job_rec = aura_db_job_fetch(_db, job_id);
+    job_rec = aura_db_job_fetch(_db, job_id, &err);
     if (!job_rec) {
-        return -1;
+        return err;
     }
 
     /* Update new state, last_rec_off and possibly error */
@@ -870,19 +870,19 @@ int aura_db_job_update(AURA_DBHANDLE _db, uint64_t job_id, uint16_t state, int e
     }
 }
 
-struct aura_db_job_rec *aura_db_job_fetch(AURA_DBHANDLE _db, uint64_t job_id) {
+struct aura_db_job_rec *aura_db_job_fetch(AURA_DBHANDLE _db, uint64_t job_id, int *error) {
     AURA_DB *db;
     struct aura_db_job_rec *job;
     struct aura_iovec key, data;
     char key_buf[2046];
-    int res;
+    // int res;
 
     db = (AURA_DB *)_db;
     if (job_id) {
         snprintf(key_buf, sizeof(key_buf) - 1, "job:%lu", job_id);
         key.base = key_buf;
         key.len = strlen(key_buf);
-        res = aura_db_record_fetch(_db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_V1, &key, &data);
+        *error = aura_db_record_fetch(_db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_V1, &key, &data);
         if (!data.base) {
             return NULL;
         }
@@ -998,6 +998,7 @@ bool aura_db_record_exists(AURA_DBHANDLE _db, uint16_t namespace, uint16_t job_t
     uint32_t hash;
     AURA_DB *db;
     ssize_t res;
+    int error;
 
     db = (AURA_DB *)_db;
 
@@ -1011,7 +1012,7 @@ bool aura_db_record_exists(AURA_DBHANDLE _db, uint16_t namespace, uint16_t job_t
         /** @todo: do more sanity checks on the job step */
 
         /* Get commit canonical job record as confirmation */
-        job_rec = aura_db_job_fetch(db, job_step_rec->job_id);
+        job_rec = aura_db_job_fetch(db, job_step_rec->job_id, &error);
         if (!job_rec) {
             free(job_step_rec);
             return false;

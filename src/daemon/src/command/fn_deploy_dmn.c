@@ -307,6 +307,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
     bytecode = NULL;
     fn_meta = NULL;
     fn_config = NULL;
+    entry_script = NULL;
 
     completion.on_complete = aura_fn_deploy_start_cb;
     completion.client_fd = cli_fd;
@@ -349,6 +350,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
         a_fn_init_user_data_ctx(&usr_data, extract, dir_fd);
 
         res = aura_load_config_fd(config_fd, aura_function_validator, aura_function_validator_len, parser_err, (void *)&usr_data);
+        close(config_fd); /* No longer needed */
         if (res != 0) {
             error = A_FN_ERROR_CONFIG;
             msg_len = 0;
@@ -416,6 +418,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
         }
 
         entry_script = aura_load_file(entry_file_fd, &entry_file_len);
+        close(entry_file_fd); /* No longer useful */
         if (!entry_script) {
             error = A_FN_ERROR_CONFIG;
             msg_len = sizeof(entry_file_error) - 1;
@@ -446,13 +449,13 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
         aura_send_resp(cli_fd, (void *)&evt, sizeof(evt));
         goto out;
 
-        /* Move to next */
+        /* Move to next step */
     proceed:
         completion.state = A_FN_OP_STATE_PETITE;
         /* Fall through */
 
     case A_FN_OP_STATE_PETITE:
-        struct aura_functions *fns;
+        struct aura_fn_petite *fn_petite;
 
         fn_name = a_fn_name_get(fn_meta);
         fn_version = a_fn_version_get(fn_meta);
@@ -460,48 +463,29 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
         user_data.fn_version = fn_version;
 
         /* Check if we have duplicate */
-        fns = aura_fn_list_fetch(glob_conf.db_handle, &error);
-        if (!fns) {
+        fn_petite = aura_fn_petite_fetch(glob_conf.db_handle, fn_name, fn_version, &error);
+        if (!fn_petite) {
             if (error < 0) {
                 evt.state = A_FN_OP_STATE_FAILED;
                 evt.error_code = A_FN_ERROR_GENERIC;
                 evt.msg_len = 0;
-                evt.msg[0] = '\0';
 
-                /* Don't wait for async op */
-                aura_db_job_update(
-                  glob_conf.db_handle, user_data.job_id, A_DB_JOB_FAILED,
-                  A_FN_ERROR_DUPLICATE, 0, A_DB_EXEC_ASYNC, NULL);
-                aura_send_resp(cli_fd, (void *)&evt, sizeof(evt));
+                aura_db_job_update(glob_conf.db_handle, job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
+                aura_send_resp(cli_fd, &evt, sizeof(evt));
                 goto out;
             }
         }
-        if (fns) {
-            for (int i = 0; i < fns->func_cnt; ++i) {
-                if (strcmp(fn_name, fns->funcs[i].fn_name) == 0 && fn_version == fns->funcs[i].fn_version) {
-                    /* verify if job committed */
-                    struct aura_db_job_rec *job;
 
-                    job = aura_db_job_fetch(glob_conf.db_handle, fns->funcs[i].job_id);
-                    if (!job)
-                        break;
+        if (fn_petite) {
+            evt.state = A_FN_OP_STATE_FAILED;
+            evt.error_code = A_FN_ERROR_DUPLICATE;
+            evt.msg_len = 0;
+            evt.msg[0] = '\0';
 
-                    if (job->state != A_DB_JOB_DONE)
-                        break;
-
-                    evt.state = A_FN_OP_STATE_FAILED;
-                    evt.error_code = A_FN_ERROR_DUPLICATE;
-                    evt.msg_len = 0;
-                    evt.msg[0] = '\0';
-
-                    /* Don't wait for async op */
-                    aura_db_job_update(
-                      glob_conf.db_handle, user_data.job_id, A_DB_JOB_FAILED,
-                      A_FN_ERROR_DUPLICATE, 0, A_DB_EXEC_ASYNC, NULL);
-                    aura_send_resp(cli_fd, (void *)&evt, sizeof(evt));
-                    goto out;
-                }
-            }
+            /* Don't wait for async op */
+            aura_db_job_update(glob_conf.db_handle, job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
+            aura_send_resp(cli_fd, (void *)&evt, sizeof(evt));
+            goto out;
         }
 
         completion.state = A_FN_OP_STATE_META;
@@ -766,6 +750,9 @@ out:
         JS_FreeContext(ctx);
     if (rt)
         JS_FreeRuntime(rt);
+
+    if (entry_script)
+        free((void *)entry_script);
 
     if (fn_meta)
         free(fn_meta);
