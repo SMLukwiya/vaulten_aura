@@ -50,7 +50,7 @@ void a_set_flag_value(struct aura_cli_flag *flag, void *opt, char *value) {
 /**
  *
  */
-struct aura_cli_flag *find_flag(struct aura_cli_flag *cmd_flags[], int flag_count, char *name, bool short_name) {
+static inline struct aura_cli_flag *find_flag(struct aura_cli_flag *cmd_flags[], int flag_count, char *name, bool short_name) {
     int i;
 
     for (i = 0; i < flag_count; ++i) {
@@ -64,7 +64,7 @@ struct aura_cli_flag *find_flag(struct aura_cli_flag *cmd_flags[], int flag_coun
 /**
  *
  */
-struct aura_cli_flag *find_short_flag(struct aura_cli_flag *cmd_flags[], int flag_count, char name) {
+static inline struct aura_cli_flag *find_short_flag(struct aura_cli_flag *cmd_flags[], int flag_count, char name) {
     int i;
 
     for (i = 0; i < flag_count; ++i) {
@@ -111,8 +111,8 @@ int a_parse_long_arg(struct aura_cli_flag *cmd_flags[], int flag_count,
     argc--;
     /**
      * Always end early when help or version,
-     * this works even for invalid commands as long we end with help or version
-     * which doesn't quite seem right, but it's helpful
+     * Even for invalid commands, as long it ends with help or version
+     * which is more helpful than complete rejection
      */
     if (flag) {
         if (flag->short_name == 'h') {
@@ -124,17 +124,16 @@ int a_parse_long_arg(struct aura_cli_flag *cmd_flags[], int flag_count,
 
     if (value) {
         /* format would be --flag=value */
-        a_set_flag_value(flag, opt, value);
-        flag->is_set = true;
-    } else if (argc > 1) {
+    } else if (argc > 0) {
         /* format would be --flag value */
-        value = args[0];
-        a_set_flag_value(flag, opt, value);
-        flag->is_set = true;
+        value = args[1];
     } else {
         app_info(false, 0, "flag needs an argument\n");
         return A_CLI_CMD_ERR;
     }
+
+    a_set_flag_value(flag, opt, value);
+    flag->is_set = true;
 
     return A_CLI_CMD_OK;
 }
@@ -166,8 +165,8 @@ static int a_parse_short_arg(struct aura_cli_flag *cmd_flags[], int flag_count,
 
     /**
      * Always end early when help or version,
-     * this works even for invalid commands as long we end with help or version
-     * which doesn't quite seem right, but it's helpful
+     * Even for invalid commands, as long it ends with help or version
+     * which is more helpful than complete rejection
      */
     if (flag) {
         if (flag->short_name == 'h') {
@@ -240,10 +239,9 @@ struct aura_cli_cmd *find_command(struct aura_cli_cmd *sub_cmds[], int sub_cmd_c
 }
 
 /**
- * We are trying to be a little futuristic here
- * as we could run into use cases with parent commands
- * having their own flags. Right now, flags are only on
- * leaf commands. We currently error on any parent flags
+ * I would imagine cases where parent commands could be
+ * having their own flags. Right now however, flags are only on
+ * leaf commands. We currently ignore parent flags
  */
 static int a_parse_command_args(struct aura_cli_ctx *ctx) {
     char *curr_arg;
@@ -261,7 +259,7 @@ static int a_parse_command_args(struct aura_cli_ctx *ctx) {
         curr_arg = cmd->args[i];
 
         if (!curr_arg || !*(curr_arg + 1)) {
-            app_info(false, 0, "Bad syntax\n");
+            app_info(false, 0, "Bad syntax");
             return A_CLI_CMD_ERR;
         }
 
