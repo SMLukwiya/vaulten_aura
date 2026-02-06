@@ -7,6 +7,7 @@ extern struct aura_cli_cmd fn_config_validate_cli;
 extern struct aura_cli_cmd fn_status_cli;
 extern struct aura_cli_cmd fn_start_cli;
 extern struct aura_cli_cmd fn_stop_cli;
+extern struct aura_cli_cmd fn_list_cli;
 
 struct aura_cli_cmd *function_subs[] = {
   &fn_config_validate_cli,
@@ -15,6 +16,7 @@ struct aura_cli_cmd *function_subs[] = {
   &fn_status_cli,
   &fn_start_cli,
   &fn_stop_cli,
+  &fn_list_cli,
 };
 
 int aura_cli_fn_base_handler() {
@@ -33,7 +35,7 @@ struct aura_cli_cmd function_base_cmd = {
   .usage = "Manage aura functions, run with help to see options",
   .deprecated = NULL,
   .flags = NULL,
-  .flag_count = 0,
+  .flag_cnt = 0,
   .args = NULL,
   .sub_cmds = function_subs,
   .sub_cmd_cnt = ARRAY_SIZE(function_subs),

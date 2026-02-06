@@ -10,50 +10,71 @@
 #define ERROR_INVALID_ARG 1
 #define ERROR_INVALID_COMMAND 2
 
-struct aura_cli_ctx cli_ctx;
-
-extern struct aura_cli_cmd root_cmd;
-
 void aura_cli_cmd_flag_dump(struct aura_cli_flag *flag);
 
 /** Long flag of --flag format */
-static inline bool a_is_long_flag(char *flag) {
+static inline bool a_arg_is_long_flag(char *flag) {
     return strlen(flag) > 2 && *flag == '-' && (flag + 1) && *(flag + 1) == '-';
 }
 
 /** Short flag of -flag format */
-static inline bool a_is_short_flag(char *flag) {
-    return strlen(flag) == 2 && *flag == '-' && (flag + 1) && *(flag + 1) != '-';
+static inline bool a_arg_is_short_flag(char *flag) {
+    if (strlen(flag) == 2 && *flag == '-' && (flag + 1) && isalpha(*(flag + 1)))
+        return true;
+
+    if (strlen(flag) > 2 && *flag == '-' && isalpha(*(flag + 1)) && *(flag + 2) == '=')
+        return true;
 }
 
 /**
  *
  */
-void a_set_flag_value(struct aura_cli_flag *flag, void *opt, char *value) {
-    void *target = (char *)opt + flag->offset_in_option;
+int a_set_flag_value(struct aura_cli_flag *flag, void *opt, char *value) {
+    void *target;
+    int rv;
 
+    target = (char *)opt + flag->offset_in_option;
+    rv = A_CLI_CMD_OK;
     switch (flag->type) {
     case A_CLI_FLAG_BOOL:
-        *(bool *)target = true;
+        if (!value || *value == '\0')
+            *(bool *)target = true;
+        /* parse value to get bool */
         break;
     case A_CLI_FLAG_STRING:
-        /* we may not need this */
-        if (*(char **)target)
-            free(*(char **)target);
-        *(char **)target = strdup(value);
+        if (!value || *value == '\0') {
+            if (flag->is_required) {
+                rv = A_CLI_CMD_VALUE_MISSING;
+                break;
+            }
+        }
+        if (!flag->is_required) {
+            rv = A_CLI_CMD_BAD_SYNTAX;
+            break;
+        }
+        /** @todo: how do handle duplicate flags */
+        if (flag->is_set) {
+            // if (*(char **)target)
+            // free(*(char **)target);
+        } else {
+            *(char **)target = strdup(value);
+            flag->is_set = true;
+        }
         break;
     default:
         // report error
+        break;
     }
+
+    return rv;
 }
 
 /**
  *
  */
 static inline struct aura_cli_flag *find_flag(struct aura_cli_flag *cmd_flags[], int flag_count, char *name, bool short_name) {
-    int i;
 
-    for (i = 0; i < flag_count; ++i) {
+    for (int i = 0; i < flag_count; ++i) {
         if (strcmp(cmd_flags[i]->name, name) == 0)
             return cmd_flags[i];
     }
@@ -65,9 +86,8 @@ static inline struct aura_cli_flag *find_flag(struct aura_cli_flag *cmd_flags[],
  *
  */
 static inline struct aura_cli_flag *find_short_flag(struct aura_cli_flag *cmd_flags[], int flag_count, char name) {
-    int i;
 
-    for (i = 0; i < flag_count; ++i) {
+    for (int i = 0; i < flag_count; ++i) {
         if (cmd_flags[i]->short_name == name)
             return cmd_flags[i];
     }
@@ -78,8 +98,7 @@ static inline struct aura_cli_flag *find_short_flag(struct aura_cli_flag *cmd_fl
 /**
  * We try to get the value from a long flag
  */
-int a_parse_long_arg(struct aura_cli_flag *cmd_flags[], int flag_count,
-                     void *opt, char *arg, int argc, char *args[]) {
+int a_parse_long_flag(struct aura_cli_cmd *cmd, char *arg) {
     char *name, *value;
     char *equal_sign;
     struct aura_cli_flag *flag;
@@ -87,127 +106,122 @@ int a_parse_long_arg(struct aura_cli_flag *cmd_flags[], int flag_count,
     name = arg + 2;
     value = NULL;
     if (strlen(name) == 0 || *name == '-' || *name == '=') {
-        app_info(false, 0, "Bad syntax\n");
-        return A_CLI_CMD_ERR;
+        return A_CLI_CMD_BAD_SYNTAX;
     }
 
-    if ((equal_sign = strchr(name, '=')) != NULL) {
+    equal_sign = strchr(name, '=');
+    if (equal_sign) {
         value = equal_sign + 1;
         *equal_sign = '\0';
     }
 
-    flag = find_flag(cmd_flags, flag_count, name, false);
-
+    flag = find_flag(cmd->flags, cmd->flag_cnt, name, false);
     if (!flag) {
-        if (strcmp(name, "help") == 0) {
-            return A_CLI_CMD_HELP;
-        } else {
-            app_info(false, 0, "unknown flag\n");
-            return A_CLI_CMD_HELP;
-        }
+        return A_CLI_CMD_UNKNOWN_FLAG;
     }
 
-    /* Account for flag */
-    argc--;
     /**
-     * Always end early when help or version,
+     * We end early when help or version,
      * Even for invalid commands, as long it ends with help or version
-     * which is more helpful than complete rejection
+     * which might be more helpful than complete rejection
      */
-    if (flag) {
-        if (flag->short_name == 'h') {
-            return A_CLI_CMD_HELP;
-        } else if (flag->short_name == 'v') {
-            return A_CLI_CMD_VERSION;
-        }
+    if (flag->short_name == 'h') {
+        return A_CLI_CMD_HELP;
+    } else if (flag->short_name == 'v') {
+        return A_CLI_CMD_VERSION;
     }
 
     if (value) {
         /* format would be --flag=value */
-    } else if (argc > 0) {
+        cmd->matched++;
+    } else if (cmd->args_cnt - cmd->matched > 1) {
         /* format would be --flag value */
-        value = args[1];
-    } else {
-        app_info(false, 0, "flag needs an argument\n");
-        return A_CLI_CMD_ERR;
+        cmd->matched += 2;
+        value = cmd->args[cmd->matched - 1]; /* -1 for zero indexed */
     }
 
-    a_set_flag_value(flag, opt, value);
-    flag->is_set = true;
-
-    return A_CLI_CMD_OK;
+    return a_set_flag_value(flag, cmd->options, value);
 }
 
 /**
  * We try to get the value from a short flag
  */
-static int a_parse_short_arg(struct aura_cli_flag *cmd_flags[], int flag_count,
-                             void *opt, char *arg, int argc, char *args[]) {
+static int a_parse_short_flag(struct aura_cli_cmd *cmd, char *arg) {
+    char *name, *value;
     char c;
-    char *equal_sign, *value, *name;
     struct aura_cli_flag *flag;
 
     value = NULL;
     name = arg + 1;
     c = *name;
-    flag = find_short_flag(cmd_flags, flag_count, c);
+    flag = find_short_flag(cmd->flags, cmd->flag_cnt, c);
     if (!flag) {
         if (c == 'h') {
             return A_CLI_CMD_HELP;
         } else {
-            app_info(false, 0, "unknown shorthand: %s\n", arg);
-            return A_CLI_CMD_HELP;
+            return A_CLI_CMD_UNKNOWN_FLAG;
         }
     }
 
-    /* Account for flag */
-    argc--;
-
     /**
-     * Always end early when help or version,
+     * We end early when help or version,
      * Even for invalid commands, as long it ends with help or version
-     * which is more helpful than complete rejection
+     * which might be more helpful than complete rejection
      */
-    if (flag) {
-        if (flag->short_name == 'h') {
-            return A_CLI_CMD_HELP;
-        } else if (flag->short_name == 'v') {
-            return A_CLI_CMD_VERSION;
-        }
+    if (flag->short_name == 'h') {
+        return A_CLI_CMD_HELP;
+    } else if (flag->short_name == 'v') {
+        return A_CLI_CMD_VERSION;
     }
 
     if (strlen(name) > 2 && *(name + 1) == '=') {
+        /* format would be -f=value */
         value = name + 2;
-    } else if (argc > 0) {
-        value = args[1];
-    } else {
-        app_info(false, 0, "need argument short\n");
-        return A_CLI_CMD_ERR;
+        cmd->matched++;
+    } else if (cmd->args_cnt - cmd->matched > 1) {
+        /* format would be -f value */
+        cmd->matched += 2;
+        value = cmd->args[cmd->matched - 1]; /* -1 for zero indexed */
     }
 
-    a_set_flag_value(flag, opt, value);
-    flag->is_set = true;
-    return A_CLI_CMD_OK;
+    return a_set_flag_value(flag, cmd->options, value);
 }
 
-static int a_parse_flags(struct aura_cli_cmd *cmd) {
+static int a_parse_flags(struct aura_cli_cmd *cmd, struct aura_cli_ctx *ctx) {
     int i, res;
     char *curr_arg;
+
+    /**
+     * For the case where a command is specified without
+     * arguments, but said command expects arguments.
+     * Run the help function of the command!
+     */
+    if (cmd->args_cnt == 1 && cmd->flag_cnt == 0) {
+        cmd->opt_help();
+        return -1;
+    }
 
     /**
      * only allocate if cmd really works with options.
      * NOTE: make sure the underlying allocator is setup properly
      * and returns valid memory, otherwise you are a danger to society!!
      */
+    /** @todo: should all commands get options allocator and deallocator */
     if (cmd->options == NULL && cmd->options_size > 0 && cmd->opt_allocator)
         cmd->options = cmd->opt_allocator();
 
-    for (i = 0; i < cmd->args_cnt; ++i) {
+    cmd->matched = 0;
+    for (i = 0; i < cmd->args_cnt;) {
         curr_arg = cmd->args[i];
-        if (a_is_long_flag(curr_arg))
-            res = a_parse_long_arg(cmd->flags, cmd->flag_count, cmd->options, curr_arg, cmd->args_cnt, cmd->args);
-        else if (a_is_short_flag(curr_arg))
-            res = a_parse_short_arg(cmd->flags, cmd->flag_count, cmd->options, curr_arg, cmd->args_cnt, cmd->args);
+        if (a_arg_is_long_flag(curr_arg)) {
+            res = a_parse_long_flag(cmd, curr_arg);
+            i += cmd->matched;
+        } else if (a_arg_is_short_flag(curr_arg)) {
+            res = a_parse_short_flag(cmd, curr_arg);
+            i += cmd->matched;
+        } else {
+            res = A_CLI_CMD_UNKNOWN;
+        }
 
         switch (res) {
         case A_CLI_CMD_VERSION:
@@ -218,6 +232,22 @@ static int a_parse_flags(struct aura_cli_cmd *cmd) {
             aura_cli_cmd_help_fn(cmd);
             exit(0);
 
+        case A_CLI_CMD_BAD_SYNTAX:
+            aura_cli_cmd_bad_syntax(cmd);
+            exit(0);
+
+        case A_CLI_CMD_UNKNOWN_FLAG:
+            aura_cli_unknown_flag(cmd);
+            exit(0);
+
+        case A_CLI_CMD_UNKNOWN:
+            aura_cli_command_unknown(ctx);
+            exit(0);
+
+        case A_CLI_CMD_VALUE_MISSING:
+            aura_cli_cmd_value_missing(cmd);
+            exit(0);
+
         case A_CLI_CMD_ERR:
             exit(0);
 
@@ -225,13 +255,13 @@ static int a_parse_flags(struct aura_cli_cmd *cmd) {
             break;
         }
     }
-    return A_CLI_CMD_OK;
+
+    return 0;
 }
 
 struct aura_cli_cmd *find_command(struct aura_cli_cmd *sub_cmds[], int sub_cmd_count, char *name) {
-    int i;
 
-    for (i = 0; i < sub_cmd_count; ++i) {
+    for (int i = 0; i < sub_cmd_count; ++i) {
         if (strcmp(sub_cmds[i]->name, name) == 0)
             return sub_cmds[i];
     }
@@ -239,49 +269,41 @@ struct aura_cli_cmd *find_command(struct aura_cli_cmd *sub_cmds[], int sub_cmd_c
 }
 
 /**
- * I would imagine cases where parent commands could be
- * having their own flags. Right now however, flags are only on
- * leaf commands. We currently ignore parent flags
+ * Parent commands can have their own flags.
+ * Right now however, flags are only on
+ * leaf commands.
  */
 static int a_parse_command_args(struct aura_cli_ctx *ctx) {
     char *curr_arg;
     int i, pos = 0;
-    bool in_flag = false;
+    bool in_flag;
     struct aura_cli_cmd *cmd;
     struct aura_cli_cmd *sub;
     size_t flag_size;
-    char *flags[ctx->args_count];
+    char *flags[ctx->args_cnt];
 
     cmd = ctx->current_cmd;
     sub = NULL;
+    in_flag = false;
+    /**
+     *
+     */
     for (i = 0; i < cmd->args_cnt; ++i) {
-        /* we pretend to collect flags until we encounter what may be a subcommand */
         curr_arg = cmd->args[i];
 
-        if (!curr_arg || !*(curr_arg + 1)) {
-            app_info(false, 0, "Bad syntax");
-            return A_CLI_CMD_ERR;
-        }
+        if (*curr_arg == '-') {
+            in_flag = true;
+            ctx->pos++;
+            continue;
+        };
 
-        if (*curr_arg == '-' && *(curr_arg + 1) == '-' && strchr(curr_arg, '=') == NULL) { /* -- (long) */
-            in_flag = true;
-            flags[pos++] = curr_arg;
-            ctx->pos++;
-            continue;
-        } else if (*curr_arg == '-' && strchr(curr_arg, '=') == NULL && strlen(curr_arg) == 2) { /* - (short) */
-            in_flag = true;
-            flags[pos++] = curr_arg;
-            ctx->pos++;
-            continue;
-        } else if (in_flag) { /* value */
+        if (in_flag) {
             in_flag = false;
-            flags[pos++] = curr_arg;
-            ctx->pos++;
-            continue;
         }
 
         sub = find_command(cmd->sub_cmds, cmd->sub_cmd_cnt, curr_arg);
         if (!sub) {
+            aura_cli_command_unknown(ctx);
             return A_CLI_CMD_UNKNOWN;
         }
 
@@ -292,10 +314,11 @@ static int a_parse_command_args(struct aura_cli_ctx *ctx) {
 
         ctx->pos++;
         sub->args = ctx->argv_vec + ctx->pos;
-        sub->args_cnt = ctx->args_count - ctx->pos;
+        sub->args_cnt = ctx->args_cnt - ctx->pos;
         ctx->current_cmd = sub;
         return a_parse_command_args(ctx);
     }
+
     return A_CLI_CMD_OK;
 }
 
@@ -307,10 +330,10 @@ static int a_parse_command_args(struct aura_cli_ctx *ctx) {
 int validate_required_flags(struct aura_cli_cmd *cmd) {
     int i;
     struct aura_cli_flag *fl;
-    char *missing_flags[cmd->flag_count];
+    char *missing_flags[cmd->flag_cnt];
     int missing_flag_count = 0, missing_flags_str_len = 0;
 
-    for (i = 0; i < cmd->flag_count; ++i) {
+    for (i = 0; i < cmd->flag_cnt; ++i) {
         fl = cmd->flags[i];
         if (fl->is_required && !fl->is_set && fl->default_value == NULL) {
             missing_flags[missing_flag_count++] = fl->name;
@@ -337,7 +360,7 @@ int validate_required_flags(struct aura_cli_cmd *cmd) {
 /**
  *
  */
-int a_execute(struct aura_cli_cmd *cmd) {
+int a_execute(struct aura_cli_cmd *cmd, struct aura_cli_ctx *ctx) {
     int res;
 
     if (!cmd) {
@@ -346,11 +369,11 @@ int a_execute(struct aura_cli_cmd *cmd) {
     }
 
     if (cmd->deprecated) {
-        app_warn(false, 0, "Aura cli command %s is deprecated: %s", cmd->name, cmd->deprecated);
+        app_info(false, 0, "Aura cli command %s is deprecated: %s", cmd->name, cmd->deprecated);
         return 1;
     }
 
-    res = a_parse_flags(cmd);
+    res = a_parse_flags(cmd, ctx);
     if (res != 0) /* somebody already likely reported it!! */
         return 1;
     ;
@@ -370,46 +393,28 @@ int a_execute(struct aura_cli_cmd *cmd) {
 /**
  *
  */
-static int a_parse_and_execute(struct aura_cli_ctx *ctx) {
+int aura_parse_and_execute(struct aura_cli_ctx *ctx) {
     struct aura_cli_cmd *cmd, *sub;
     int res = 0;
 
     cmd = ctx->current_cmd;
     sub = NULL;
-    if (cmd->flag_count > 0) {
+
+    /**
+     * Here we are sure that the first cmd (aura) always
+     * has a flag count greater than 0, since we define it as
+     * such!
+     */
+    if (cmd->flag_cnt > 0) {
         res = a_parse_command_args(ctx);
-        if (res == A_CLI_CMD_UNKNOWN) {
-            aura_cli_command_unknown(ctx);
-            return 1;
-        }
 
         if (res != 0) {
             return 1;
         }
         sub = ctx->current_cmd ? ctx->current_cmd : cmd;
-    } else {
-        sub = find_command(cmd->sub_cmds, cmd->sub_cmd_cnt, ctx->argv_vec[0]);
     }
 
-    return a_execute(sub);
-}
-
-/**
- *
- */
-static inline void init_cli_context(int argc, char *args[]) {
-    root_cmd.args = args;
-    root_cmd.args_cnt = argc;
-
-    cli_ctx.current_cmd = &root_cmd;
-    cli_ctx.args_count = argc;
-    cli_ctx.argv_vec = args;
-}
-
-void parse_cli_command(int argc, char *argv[]) {
-    init_cli_context(argc, argv);
-    a_parse_and_execute(&cli_ctx);
-    return;
+    return a_execute(sub, ctx);
 }
 
 /**
@@ -470,10 +475,10 @@ void aura_cli_command_dump(struct aura_cli_cmd *cmd) {
     app_debug(false, 0, "   Top level: %s", cmd->is_top_level ? "Yes" : "No");
     app_debug(false, 0, "   Hidden: %s", cmd->is_hidden ? "Yes" : "No");
     app_debug(false, 0, "   Experimental: %s", cmd->is_experimental ? "Yes" : "No");
-    app_debug(false, 0, "   Flag cnt: %zu", cmd->flag_count);
+    app_debug(false, 0, "   Flag cnt: %zu", cmd->flag_cnt);
     app_debug(false, 0, "   Sub cmd cnt: %zu", cmd->sub_cmd_cnt);
 
-    for (int i = 0; i < cmd->flag_count; ++i)
+    for (int i = 0; i < cmd->flag_cnt; ++i)
         aura_cli_cmd_flag_dump(cmd->flags[i]);
 
     app_debug(false, 0, "   SUB COMMANDS");

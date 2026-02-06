@@ -7,6 +7,7 @@
 typedef enum {
     A_CLI_FLAG_NONE,
     A_CLI_FLAG_STRING,
+    A_CLI_FLAG_CHAR,
     A_CLI_FLAG_BOOL,
     A_CLI_FLAG_INT,
     A_CLI_FLAG_FLOAT
@@ -27,6 +28,5 @@ struct aura_cli_flag {
 
 extern struct aura_cli_flag version_flag;
 extern struct aura_cli_flag help_flag;
-// extern struct aura_cli_flag path_flag;
 
 #endif

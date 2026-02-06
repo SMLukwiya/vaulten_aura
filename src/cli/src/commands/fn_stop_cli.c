@@ -43,15 +43,12 @@ struct aura_cli_flag fn_stop_flag = {
 };
 
 int aura_cli_fn_stop(void *opts_ptr, void *glob_opts) {
-    char *data;
     struct aura_msg_hdr hdr;
-    struct aura_msg msg;
     struct fn_stop_config *opts;
     int sock_fd, res;
     char *fn_name, *sep;
     uint32_t fn_verion;
     struct aura_fn_evt *evt;
-    bool ret;
 
     aura_try_connect_or_error(&sock_fd);
     if (sock_fd == -1)
@@ -135,7 +132,7 @@ struct aura_cli_cmd fn_stop_cli = {
   .usage = "aura function stop -f <function name>",
   .deprecated = NULL,
   .flags = fn_stop_flags,
-  .flag_count = ARRAY_SIZE(fn_stop_flags),
+  .flag_cnt = ARRAY_SIZE(fn_stop_flags),
   .args = NULL,
   .args_cnt = 0,
   .sub_cmds = NULL,

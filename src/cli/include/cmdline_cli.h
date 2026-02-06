@@ -14,19 +14,22 @@ struct aura_cli_ctx {
     struct aura_cli_cmd *root_cmd;
     struct aura_cli_cmd *current_cmd;
     char **argv_vec;
-    int args_count;
+    int args_cnt;
     uint32_t pos;
 };
 
 typedef enum {
     A_CLI_CMD_OK,
     A_CLI_CMD_ERR,
+    A_CLI_CMD_BAD_SYNTAX,
+    A_CLI_CMD_UNKNOWN_FLAG,
+    A_CLI_CMD_VALUE_MISSING,
     A_CLI_CMD_HELP,
     A_CLI_CMD_VERSION,
     A_CLI_CMD_UNKNOWN,
 } aura_cli_cmd_return_t;
 
-void parse_cli_command(int argc, char *argv[]);
+int aura_parse_and_execute(struct aura_cli_ctx *ctx);
 
 static inline void aura_cli_version_fn() {
     app_info(false, 0, "Vaulten aura version %s", "1.0.0");
@@ -41,6 +44,18 @@ static inline void aura_cli_cmd_help_fn(struct aura_cli_cmd *cmd) {
       cmd->name,
       cmd->description,
       cmd->usage);
+}
+
+static inline void aura_cli_cmd_bad_syntax(struct aura_cli_cmd *cmd) {
+    app_info(false, 0, "Bad syntax, Run help");
+}
+
+static inline void aura_cli_unknown_flag(struct aura_cli_cmd *cmd) {
+    app_info(false, 0, "Unknown flag");
+}
+
+static inline void aura_cli_cmd_value_missing(struct aura_cli_cmd *cmd) {
+    app_info(false, 0, "Value missing");
 }
 
 /* generic help function */
@@ -65,17 +80,17 @@ static void aura_cli_help_fn() {
       "\trace         Enable Tracing\n\n"
 
       "Global Options:\n"
-      "\t--config string      Location of config files (default \"/home/lukwiya/.docker\")\n"
-      "\t--tlscacert string   Trust certs signed only by this CA (default \"/home/lukwiya/.docker/ca.pem\")\n"
-      "\t--tlscert string     Path to TLS certificate file (default \"/home/lukwiya/.docker/cert.pem\")\n"
-      "\t--tlskey string      Path to TLS key file (default \"/home/lukwiya/.docker/key.pem\")\n");
+      "\t--config string      Location of config files (default \"/home/lukwiya/.aura\")\n"
+      "\t--tlscacert string   Trust certs signed only by this CA (default \"/home/lukwiya/.aura/ca.pem\")\n"
+      "\t--tlscert string     Path to TLS certificate file (default \"/home/lukwiya/.aura/cert.pem\")\n"
+      "\t--tlskey string      Path to TLS key file (default \"/home/lukwiya/.aura/key.pem\")\n");
 }
 
 static inline void aura_cli_command_unknown(struct aura_cli_ctx *ctx) {
     int cmd_len, i, len;
 
     cmd_len = 0;
-    for (i = 0; i < ctx->args_count && ctx->argv_vec[i]; ++i) {
+    for (i = 0; i < ctx->args_cnt && ctx->argv_vec[i]; ++i) {
         cmd_len += strlen(ctx->argv_vec[i]) + 1; /* space */
     }
 
@@ -84,7 +99,7 @@ static inline void aura_cli_command_unknown(struct aura_cli_ctx *ctx) {
 
     str_buf[0] = '\0';
     offset = 0;
-    for (i = 0; i < ctx->args_count; ++i) {
+    for (i = 0; i < ctx->args_cnt; ++i) {
         len = strlen(ctx->argv_vec[i]);
         strncat(str_buf + offset, ctx->argv_vec[i], len);
         strcat(str_buf + offset + len, " ");

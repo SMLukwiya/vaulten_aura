@@ -46,15 +46,13 @@ struct aura_cli_flag fn_deploy_flag = {
 };
 
 int aura_cli_run_fn_deploy(void *opts_ptr, void *glob_opts) {
-    char *data, *fn_dir, *conf_file;
+    char *fn_dir, *conf_file;
     DIR *dp;
     struct dirent *dirp;
     struct aura_msg_hdr hdr;
-    struct aura_msg msg;
     struct fn_deploy_config *opts;
     struct aura_fn_evt *evt;
-    int sock_fd, file_fd, dir_fd, res;
-    bool ret;
+    int sock_fd, file_fd, dir_fd;
 
     aura_try_connect_or_error(&sock_fd);
     if (sock_fd == -1)
@@ -86,8 +84,8 @@ int aura_cli_run_fn_deploy(void *opts_ptr, void *glob_opts) {
         app_exit(false, 0, "Failed to locate function configuration, ensure a function.yaml or function.yml exists in the funtion directory");
 
     /* do a simple check on the config file */
-    ret = openat(dir_fd, conf_file, O_RDONLY);
-    if (!ret)
+    file_fd = openat(dir_fd, conf_file, O_RDONLY);
+    if (file_fd < 0)
         sys_exit(false, errno, "Failed to open configuration file: %s\n", conf_file);
     close(file_fd);
 
@@ -97,16 +95,15 @@ int aura_cli_run_fn_deploy(void *opts_ptr, void *glob_opts) {
     if (aura_msg_send(sock_fd, &hdr, NULL, 0, dir_fd) != 0)
         sys_exit(false, errno, "Failed to send aura cli command");
 
-    bool terminate;
+    bool should_terminate;
     while (true) {
-        terminate = false;
+        should_terminate = false;
         evt = aura_recv_resp(sock_fd);
         if (!evt)
             break;
 
-        aura_fn_evt_cli_response_dump(evt);
         if (evt->state == A_FN_OP_STATE_DONE || evt->state == A_FN_OP_STATE_FAILED) {
-            terminate = true;
+            should_terminate = true;
         }
 
         if (evt->msg_len > 0)
@@ -134,7 +131,7 @@ int aura_cli_run_fn_deploy(void *opts_ptr, void *glob_opts) {
             }
         }
         free(evt);
-        if (terminate)
+        if (should_terminate)
             break;
     }
 
@@ -159,7 +156,7 @@ struct aura_cli_cmd fn_deploy_cli = {
   .usage = "aura function deploy -p <path to config file>",
   .deprecated = NULL,
   .flags = fn_deploy_flags,
-  .flag_count = ARRAY_SIZE(fn_deploy_flags),
+  .flag_cnt = ARRAY_SIZE(fn_deploy_flags),
   .args = NULL,
   .args_cnt = 0,
   .sub_cmds = NULL,
