@@ -541,6 +541,21 @@ struct aura_fn_evt {
     int error_code;
     size_t msg_len;
     char msg[4096];
+    char *_msg;
+};
+
+/* Function rep structure */
+struct aura_fn_rep {
+    char fn_name[A_FN_NAME_MAX_LEN];
+    uint32_t fn_version;
+    char checksum[64];
+    uint64_t deployed_at;
+};
+
+/* List function structure */
+struct aura_fn_list {
+    size_t cnt;
+    struct aura_fn_rep *fns;
 };
 
 /* Fn OP states */
@@ -665,14 +680,6 @@ static inline const struct aura_fn_oom_policy *aura_fn_oom_policy_get(const char
     }
 }
 
-static void aura_fn_evt_cli_response_dump(struct aura_fn_evt *evt) {
-    app_debug(true, 0, "AURA FN EVT RESPONSE");
-    app_debug(true, 0, "    State: %u", evt->state);
-    app_debug(true, 0, "    Error: %d", evt->error_code);
-    app_debug(true, 0, "    Msg Len: %d", evt->msg_len);
-    app_debug(true, 0, "    Message: %s", evt->msg);
-}
-
 /** Parse function meta data */
 int aura_fn_meta_parse(void *meta, struct aura_fn_meta *fn_meta);
 
@@ -697,6 +704,11 @@ void aura_fn_cron_trigger_destroy(const struct aura_fn_cron_trigger *cron_trigge
 /**/
 void aura_fn_networking_destroy(const void *networking);
 
+/**
+ * Free function
+ */
+void aura_fn_destroy(struct aura_fn *fn);
+
 /**/
 void aura_fn_meta_dump(struct aura_fn_meta *fn_meta);
 
@@ -704,13 +716,21 @@ void aura_fn_meta_dump(struct aura_fn_meta *fn_meta);
 void aura_fn_config_dump(struct aura_fn_config *fn_conf);
 
 /**/
-void aura_fn_evt_response_dump(struct aura_fn_evt *evt);
+static void aura_fn_evt_response_dump(struct aura_fn_evt *evt, bool daemon) {
+    app_debug(daemon, 0, "AURA FN EVT RESPONSE");
+    app_debug(daemon, 0, "    State: %u", evt->state);
+    app_debug(daemon, 0, "    Error: %d", evt->error_code);
+    app_debug(daemon, 0, "    Msg Len: %u", evt->msg_len);
+    if (evt->msg_len > 0)
+        app_debug(daemon, 0, "    Message: %p", evt->_msg);
+}
 
 /**
  * Get 'tiny' function meta data from
  * list of functions
  */
-struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version, int *error);
+struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, struct aura_memory_ctx *mc,
+                                            const char *fn_name, uint32_t fn_version, int *error);
 
 /** Get the list of functions deployed in the system */
 struct aura_functions *aura_fn_list_fetch(AURA_DBHANDLE db, int *error);

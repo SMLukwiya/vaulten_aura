@@ -29,8 +29,8 @@ void aura_cli_root_handler(void *opt, int argc, char *args[], void *glob_opt) {
  * Aura Root commanf subs
  */
 struct aura_cli_cmd *root_subs[] = {
-  &server_base_cmd,
   &system_base_cmd,
+  &server_base_cmd,
   &function_base_cmd,
 };
 

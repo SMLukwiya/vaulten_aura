@@ -62,7 +62,7 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
             return 0;
 
         case A_CMD_FN_STATUS:
-            aura_dmn_function_status(glob_conf.db_handle, &msg->data, cli_fd);
+            aura_dmn_function_status(glob_conf.db_handle, &glob_conf.mc, &msg->data, cli_fd);
             return 0;
 
         case A_CMD_FN_START:
@@ -73,18 +73,22 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
             aura_dmn_function_stop(glob_conf.db_handle, &glob_conf.mc, &msg->data, cli_fd);
             return 0;
 
+        case A_CMD_FN_LIST:
+            aura_dmn_function_list(glob_conf.db_handle, &msg->data, cli_fd);
+            return 0;
+
         case A_CMD_SERVER_VALIDATE_CONF:
             aura_dmn_server_config_validate(msg->fd, cli_fd);
             return 0;
 
         default:
-            app_debug(true, 0, "unknown cmd line %s", msg->hdr.cmd_type);
+            app_debug(true, 0, "unknown cmd line %u", msg->hdr.cmd_type);
             aura_send_resp(cli_fd, NULL, 0);
             return 0;
         }
         return 0;
     default:
-        app_info(true, 0, "unknown message %s", msg->hdr.type);
+        app_info(true, 0, "unknown message %u", msg->hdr.type);
     }
     return 1;
 }

@@ -154,7 +154,7 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
             *sep = '\0';
         }
 
-        fn_petite = aura_fn_petite_fetch(db, fn_name, fn_version, &error);
+        fn_petite = aura_fn_petite_fetch(db, &glob_conf.mc, fn_name, fn_version, &error);
         if (!fn_petite) {
             evt.state = A_FN_OP_STATE_FAILED;
             evt.msg_len = 0;
@@ -171,7 +171,7 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
         }
 
         fn_version = fn_petite->fn_version;
-        free(fn_petite);
+        aura_free(fn_petite);
 
         user_data.fn_name = fn_name;
         user_data.fn_version = fn_version;

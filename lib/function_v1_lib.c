@@ -96,18 +96,19 @@ size_t _fn_conf_tab_size = ARRAY_SIZE(_fn_conf_tab);
 
 struct aura_functions *aura_fn_list_fetch(AURA_DBHANDLE db, int *error) {
     struct aura_functions *fns;
-    struct aura_iovec key, data;
+    struct aura_db_rec rec;
+    struct aura_iovec key;
     int res;
 
     key = a_function_list_key;
-    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FNS, &key, &data);
+    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FNS, &key, &rec);
     if (res < 0 || res == A_DB_REC_NOT_FOUND) {
         *error = res;
         return NULL;
     }
 
-    fns = (struct aura_functions *)data.base;
-    fns->funcs = (struct aura_fn_petite *)(data.base + sizeof(*fns));
+    fns = (struct aura_functions *)rec.data.base;
+    fns->funcs = (struct aura_fn_petite *)((char *)fns + sizeof(*fns));
     return fns;
 }
 
@@ -195,7 +196,7 @@ int aura_fn_list_add(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *f
 
 out:
     if (fns)
-        free(fns);
+        aura_free(fns);
 
     return rv;
 }
@@ -275,7 +276,7 @@ int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char
     rv = 0;
 out:
     if (fns)
-        free(fns);
+        aura_free(fns);
     return rv;
 }
 
@@ -612,7 +613,13 @@ void aura_fn_networking_destroy(const void *networking) {
     /**/
 }
 
-struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version, int *error) {
+void aura_fn_destroy(struct aura_fn *fn) {
+    aura_fn_meta_destroy(&fn->meta);
+    aura_fn_config_destroy(&fn->config);
+    aura_free(fn->fn_code);
+}
+
+struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *fn_name, uint32_t fn_version, int *error) {
     struct aura_fn_petite *fn_petite;
     struct aura_functions *fns;
     struct aura_iovec key, data;
@@ -638,19 +645,20 @@ struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, const char *fn_nam
 
                 job = aura_db_job_fetch(db, fns->funcs[i].job_id, error);
                 if (!job) {
-                    free(fns);
+                    aura_free(fns);
                     return NULL;
                 }
 
                 job_state = job->state;
-                free(job);
+                /* Record no longer needed */
+                aura_free(job);
                 if (job_state != A_DB_JOB_DONE) {
-                    free(fns);
+                    aura_free(fns);
                     return NULL;
                 }
 
                 data.len = sizeof(struct aura_fn_petite);
-                data.base = malloc(data.len);
+                data.base = aura_alloc(mc, data.len);
                 memcpy(data.base, &fns->funcs[i], data.len);
                 break;
             }
@@ -665,32 +673,34 @@ struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, const char *fn_nam
 
                 job = aura_db_job_fetch(db, fns->funcs[i].job_id, error);
                 if (!job) {
-                    free(fns);
+                    aura_free(fns);
                     return NULL;
                 }
 
                 job_state = job->state;
-                free(job);
+                /* Record no longer needed */
+                aura_free(job);
                 if (job_state != A_DB_JOB_DONE) {
-                    free(fns);
+                    aura_free(fns);
                     return NULL;
                 }
 
                 data.len = sizeof(struct aura_fn_petite);
-                data.base = malloc(data.len);
+                data.base = aura_alloc(mc, data.len);
                 memcpy(data.base, &fns->funcs[i], data.len);
                 break;
             }
         }
     }
 
-    free(fns);
+    aura_free(fns);
     return (struct aura_fn_petite *)data.base;
 }
 
 struct aura_fn *aura_fn_load(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version) {
     struct aura_fn *fn;
-    struct aura_iovec key, data;
+    struct aura_iovec key;
+    struct aura_db_rec rec;
     struct aura_fn_petite *fn_petite;
     char buf[2000];
     int res;
@@ -706,77 +716,72 @@ struct aura_fn *aura_fn_load(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_
     snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_META);
     key.base = buf;
     key.len = strlen(buf);
-    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_META_V1, &key, &data);
+    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_META_V1, &key, &rec);
     if (res < 0 || res == A_DB_REC_NOT_FOUND) {
         return NULL;
     }
 
-    if (aura_fn_meta_parse(data.base, &fn->meta) < 0) {
-        free(data.base);
+    if (aura_fn_meta_parse(rec.data.base, &fn->meta) < 0) {
+        aura_free(rec.data.base);
         return NULL;
     }
-    free(data.base);
-    data.base = NULL;
+    aura_free(rec.data.base);
 
     /* Config */
     memset(buf, 0, sizeof(buf));
     snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_CONFIG);
     key.base = buf;
     key.len = strlen(buf);
-    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_CONFIG_V1, &key, &data);
+    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_CONFIG_V1, &key, &rec);
     if (res < 0 || res == A_DB_REC_NOT_FOUND) {
         return NULL;
     }
 
-    if (aura_fn_config_parse(data.base, &fn->config) < 0) {
-        free(data.base);
+    if (aura_fn_config_parse(rec.data.base, &fn->config) < 0) {
+        aura_free(rec.data.base);
         return NULL;
     }
-    free(data.base);
-    data.base = NULL;
+
+    aura_free(rec.data.base);
 
     /* Stats */
     memset(buf, 0, sizeof(buf));
     snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_STAT);
     key.base = buf;
     key.len = strlen(buf);
-    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_STAT_DELTA, &key, &data);
+    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_STAT_DELTA, &key, &rec);
     if (res < 0 || res == A_DB_REC_NOT_FOUND) {
         return NULL;
     }
 
-    memcpy(&fn->stats, data.base, sizeof(fn->stats));
-    free(data.base);
-    data.base = NULL;
+    memcpy(&fn->stats, rec.data.base, sizeof(fn->stats));
+    aura_free(rec.data.base);
 
     /* State */
     memset(buf, 0, sizeof(buf));
     snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_STATE);
     key.base = buf;
     key.len = strlen(buf);
-    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_STATE_V1, &key, &data);
+    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_STATE_V1, &key, &rec);
     if (res < 0 || res == A_DB_REC_NOT_FOUND) {
         return NULL;
     }
 
-    memcpy(&fn->state, data.base, sizeof(fn->state));
-    free(data.base);
-    data.base = NULL;
+    memcpy(&fn->state, rec.data.base, sizeof(fn->state));
+    aura_free(rec.data.base);
 
     /* Code */
-    struct aura_iovec code;
-
     memset(buf, 0, sizeof(buf));
     snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_CODE);
     key.base = buf;
     key.len = strlen(buf);
-    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_CODE_V1, &key, &code);
+    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_CODE_V1, &key, &rec);
     if (res < 0 || res == A_DB_REC_NOT_FOUND) {
         return NULL;
     }
     /* We transfer memory ownership to fn */
-    fn->fn_code = code.base;
-    fn->fn_code_len = code.len;
+    fn->fn_code = rec.data.base;
+    fn->fn_code_len = rec.data.len;
 
     return fn;
 }
@@ -804,12 +809,4 @@ void aura_fn_config_dump(struct aura_fn_config *fn_conf) {
     app_debug(true, 0, "            Enabled: %d", fn_conf->fn_observability.fn_tracing.enabled);
     app_debug(true, 0, "            Sample rate: %d", fn_conf->fn_observability.fn_tracing.sample_rate);
     app_debug(true, 0, "            Tail sampling rate: %d", fn_conf->fn_observability.fn_tracing.tail_sampling_target_ms);
-}
-
-void aura_fn_evt_response_dump(struct aura_fn_evt *evt) {
-    app_debug(true, 0, "AURA FN EVT RESPONSE");
-    app_debug(true, 0, "    State: %u", evt->state);
-    app_debug(true, 0, "    Error: %d", evt->error_code);
-    app_debug(true, 0, "    Msg Len: %d", evt->msg_len);
-    app_debug(true, 0, "    Message: %s", evt->msg);
 }

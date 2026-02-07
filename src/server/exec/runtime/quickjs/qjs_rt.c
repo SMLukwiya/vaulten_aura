@@ -37,6 +37,7 @@ int aura_qjs_init(st_aura_qjs_runtime *qjs, struct aura_fn *fn) {
     if (!res)
         goto err_object_class;
 
+    // bytecode = JS_ReadObject(qjs->ctx, fn->fn_code, fn->fn_code_len, JS_READ_OBJ_BYTECODE);
     bytecode = JS_ReadObject(qjs->ctx, fn->fn_code, fn->fn_code_len, JS_READ_OBJ_BYTECODE);
     if (JS_IsException(bytecode)) {
         js_std_dump_error(qjs->ctx);

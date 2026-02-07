@@ -285,20 +285,25 @@ static int a_parse_command_args(struct aura_cli_ctx *ctx) {
     cmd = ctx->current_cmd;
     sub = NULL;
     in_flag = false;
+
     /**
      *
      */
     for (i = 0; i < cmd->args_cnt; ++i) {
         curr_arg = cmd->args[i];
 
-        if (*curr_arg == '-') {
+        if (*curr_arg == '-' && !strchr(curr_arg, '=')) {
             in_flag = true;
             ctx->pos++;
             continue;
-        };
+        } else if (*curr_arg == '-') {
+            ctx->pos++;
+            continue;
+        }
 
         if (in_flag) {
             in_flag = false;
+            continue;
         }
 
         sub = find_command(cmd->sub_cmds, cmd->sub_cmd_cnt, curr_arg);

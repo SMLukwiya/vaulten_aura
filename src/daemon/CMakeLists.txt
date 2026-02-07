@@ -34,6 +34,7 @@ add_executable(aura_daemon
     src/command/fn_deploy_dmn.c
     src/command/fn_delete_dmn.c
     src/command/fn_status_dmn.c
+    src/command/fn_list_dmn.c
     src/command/sys_dmn.c
     ${lib_sources}
 )

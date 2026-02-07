@@ -67,6 +67,7 @@ typedef enum {
     A_CMD_FN_LIST,
 } aura_cmd_t;
 
+/* Message header structure */
 struct aura_msg_hdr {
     uint32_t len;
     aura_msg_t type;
@@ -81,6 +82,7 @@ struct aura_socket_cred {
     gid_t gid;
 };
 
+/* Request message structure */
 struct aura_msg {
     struct aura_msg_hdr hdr;
     struct aura_socket_cred cred;

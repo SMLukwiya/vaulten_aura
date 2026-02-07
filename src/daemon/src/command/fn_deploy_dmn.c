@@ -418,7 +418,8 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
         }
 
         entry_script = aura_load_file(entry_file_fd, &entry_file_len);
-        close(entry_file_fd); /* No longer useful */
+        /* close fd, no longer useful */
+        close(entry_file_fd);
         if (!entry_script) {
             error = A_FN_ERROR_CONFIG;
             msg_len = sizeof(entry_file_error) - 1;
@@ -463,7 +464,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
         user_data.fn_version = fn_version;
 
         /* Check if we have duplicate */
-        fn_petite = aura_fn_petite_fetch(glob_conf.db_handle, fn_name, fn_version, &error);
+        fn_petite = aura_fn_petite_fetch(glob_conf.db_handle, &glob_conf.mc, fn_name, fn_version, &error);
         if (!fn_petite) {
             if (error < 0) {
                 evt.state = A_FN_OP_STATE_FAILED;
@@ -477,6 +478,8 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
         }
 
         if (fn_petite) {
+            /* Record no longer needed */
+            aura_free(fn_petite);
             evt.state = A_FN_OP_STATE_FAILED;
             evt.error_code = A_FN_ERROR_DUPLICATE;
             evt.msg_len = 0;
@@ -508,6 +511,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
             goto out;
         }
 
+        /* make a copy of key and data for now */
         memcpy(meta_key->base, buf, meta_key->len);
         memcpy(meta_data->base, fn_meta, meta_data->len);
 

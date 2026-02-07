@@ -27,6 +27,7 @@ static void a_test_put_get_delete(void) {
     AURA_DBHANDLE *db;
     char db_path[512];
     struct aura_iovec key, key1, data, data1;
+    struct aura_db_rec rec, rec1;
     ssize_t res;
 
     snprintf(db_path, sizeof(db_path), "%s/aura.db", test_dir);
@@ -50,15 +51,15 @@ static void a_test_put_get_delete(void) {
     assert(res > 0);
 
     /* FETCH */
-    res = aura_db_record_fetch(db, 1, 1, &key, &data);
+    res = aura_db_record_fetch(db, 1, 1, &key, &rec);
     assert(res == 0);
-    assert(data.len == sizeof("World") - 1);
-    assert(strncmp(data.base, "World", data.len) == 0);
+    assert(rec.data.len == sizeof("World") - 1);
+    assert(strncmp(rec.data.base, "World", data.len) == 0);
 
-    res = aura_db_record_fetch(db, 1, 1, &key1, &data1);
+    res = aura_db_record_fetch(db, 1, 1, &key1, &rec1);
     assert(res == 0);
-    assert(data1.len == sizeof("World_2") - 1);
-    assert(strncmp(data1.base, "World_2", data1.len) == 0);
+    assert(rec1.data.len == sizeof("World_2") - 1);
+    assert(strncmp(rec1.data.base, "World_2", data1.len) == 0);
 
     /* DELETE */
     res = aura_db_record_delete(db, 1, 1, 0, &key, A_DB_EXEC_DIRECT, NULL);
@@ -67,15 +68,15 @@ static void a_test_put_get_delete(void) {
     assert(res == 0);
 
     /* FETCH AGAIN */
-    res = res = aura_db_record_fetch(db, 1, 1, &key, &data);
+    res = aura_db_record_fetch(db, 1, 1, &key, &rec);
     assert(res == A_DB_REC_NOT_FOUND);
-    assert(data.base == NULL);
-    assert(data.len == 0);
+    assert(rec.data.base == NULL);
+    assert(rec.data.len == 0);
 
-    res = res = aura_db_record_fetch(db, 1, 1, &key1, &data1);
+    res = aura_db_record_fetch(db, 1, 1, &key1, &rec1);
     assert(res == A_DB_REC_NOT_FOUND);
-    assert(data1.base == NULL);
-    assert(data1.len == 0);
+    assert(rec1.data.base == NULL);
+    assert(rec1.data.len == 0);
 
     aura_db_close(db);
 }
@@ -168,6 +169,7 @@ static void a_test_wal_replay(void) {
     char db_path[512];
     ssize_t res;
     struct aura_iovec key, data, key1, data1, key2, data2, key3, data3, key4, data4, key5, data5;
+    struct aura_db_rec rec, rec1, rec2, rec3, rec4, rec5;
     uint64_t job_id;
     off_t prev_job_rec;
 
@@ -249,30 +251,29 @@ static void a_test_wal_replay(void) {
     aura_db_clear_record_cache(db);
 
     /* First record with no job id */
-    res = aura_db_record_fetch(db, 1, 1, &key, &data);
+    res = aura_db_record_fetch(db, 1, 1, &key, &rec);
     assert(res == 0);
-    assert(data.len == sizeof("Shizzy World_1") - 1);
-    assert(strncmp(data.base, "Shizzy World_1", data.len) == 0);
+    assert(rec.data.len == sizeof("Shizzy World_1") - 1);
+    assert(strncmp(rec.data.base, "Shizzy World_1", data.len) == 0);
 
     /* Fetch first record of job one: Job failed */
-    res = aura_db_record_fetch(db, 1, 1, &key1, &data1);
+    res = aura_db_record_fetch(db, 1, 1, &key1, &rec1);
     assert(res == A_DB_REC_NOT_FOUND);
 
     /* Fetch second job recodes, job succeeded */
-    data2.base = NULL;
-    res = aura_db_record_fetch(db, 1, 1, &key2, &data2);
+    res = aura_db_record_fetch(db, 1, 1, &key2, &rec2);
     assert(res == 0);
-    assert(data2.len == sizeof("Job two first associated record") - 1);
-    assert(strncmp(data2.base, "Job two first associated record", data2.len) == 0);
+    assert(rec2.data.len == sizeof("Job two first associated record") - 1);
+    assert(strncmp(rec2.data.base, "Job two first associated record", data2.len) == 0);
 
-    data3.base = NULL;
-    res = aura_db_record_fetch(db, 1, 1, &key3, &data3);
+    // data3.base = NULL;
+    res = aura_db_record_fetch(db, 1, 1, &key3, &rec3);
     assert(res == 0);
-    assert(data3.len == sizeof("Job two second associated record") - 1);
-    assert(strncmp(data3.base, "Job two second associated record", data3.len) == 0);
+    assert(rec3.data.len == sizeof("Job two second associated record") - 1);
+    assert(strncmp(rec3.data.base, "Job two second associated record", data3.len) == 0);
 
     /* Third job record (job pending) */
-    res = aura_db_record_fetch(db, 1, 1, &key4, &data4);
+    res = aura_db_record_fetch(db, 1, 1, &key4, &rec4);
     assert(res == A_DB_REC_NOT_FOUND);
 
     /* Add second record for job three */
@@ -291,17 +292,15 @@ static void a_test_wal_replay(void) {
     aura_db_clear_record_cache(db);
 
     /* Fetch job three records */
-    data4.base = NULL;
-    res = aura_db_record_fetch(db, 1, 1, &key4, &data4);
+    res = aura_db_record_fetch(db, 1, 1, &key4, &rec4);
     assert(res == 0);
-    assert(data4.len == sizeof("Job three first associated record") - 1);
-    assert(strncmp(data4.base, "Job three first associated record", data4.len) == 0);
+    assert(rec4.data.len == sizeof("Job three first associated record") - 1);
+    assert(strncmp(rec4.data.base, "Job three first associated record", data4.len) == 0);
 
-    data5.base = NULL;
-    res = aura_db_record_fetch(db, 1, 1, &key5, &data5);
+    res = aura_db_record_fetch(db, 1, 1, &key5, &rec5);
     assert(res == 0);
-    assert(data5.len == sizeof("Job three second associated record") - 1);
-    assert(strncmp(data5.base, "Job three second associated record", data5.len) == 0);
+    assert(rec5.data.len == sizeof("Job three second associated record") - 1);
+    assert(strncmp(rec5.data.base, "Job three second associated record", rec5.data.len) == 0);
 
     /* Delete job three assets */
     job_id = aura_db_job_insert(db, A_DB_JOB_OP_CREATE, A_DB_JOB_START, 0, 0, A_DB_EXEC_DIRECT, NULL);
@@ -317,15 +316,15 @@ static void a_test_wal_replay(void) {
     aura_db_force_wal_replay(db);
     aura_db_clear_record_cache(db);
 
-    res = aura_db_record_fetch(db, 1, 1, &key4, &data4);
+    res = aura_db_record_fetch(db, 1, 1, &key4, &rec4);
     assert(res == A_DB_REC_NOT_FOUND);
-    assert(data4.len == 0);
-    assert(data4.base == NULL);
+    assert(rec4.data.len == 0);
+    assert(rec4.data.base == NULL);
 
-    res = aura_db_record_fetch(db, 1, 1, &key5, &data5);
+    res = aura_db_record_fetch(db, 1, 1, &key5, &rec5);
     assert(res == A_DB_REC_NOT_FOUND);
-    assert(data5.len == 0);
-    assert(data5.base == NULL);
+    assert(rec5.data.len == 0);
+    assert(rec5.data.base == NULL);
 
     aura_db_close(db);
 }
@@ -336,6 +335,7 @@ static void a_test_db_compaction(void) {
     AURA_DBHANDLE db;
     char db_path[512];
     struct aura_iovec key, key1, data, data1;
+    struct aura_db_rec rec, rec1;
     int res;
     struct stat statbuf;
     size_t old_file_size, new_file_size;
@@ -379,15 +379,15 @@ static void a_test_db_compaction(void) {
     assert(record_cnt == new_record_cnt);
 
     /* FETCH */
-    res = aura_db_record_fetch(db, 1, 1, &key, &data);
+    res = aura_db_record_fetch(db, 1, 1, &key, &rec);
     assert(res == A_DB_REC_NOT_FOUND);
-    assert(data.len == 0);
-    assert(data.base == NULL);
+    assert(rec.data.len == 0);
+    assert(rec.data.base == NULL);
 
-    res = aura_db_record_fetch(db, 1, 1, &key1, &data);
+    res = aura_db_record_fetch(db, 1, 1, &key1, &rec1);
     assert(res == A_DB_REC_NOT_FOUND);
-    assert(data.len == 0);
-    assert(data.base == NULL);
+    assert(rec1.data.len == 0);
+    assert(rec.data.base == NULL);
 
     aura_db_close(db);
 }

@@ -519,11 +519,11 @@ void aura_db_close(AURA_DBHANDLE _db) {
     a_db_free(db);
 }
 
-void aura_db_record_free(void *record) {
-    if (!record)
+void aura_db_record_free(struct aura_db_rec *rec) {
+    if (!rec)
         return;
 
-    free(record);
+    aura_free(rec->data.base);
 }
 
 static inline off_t a_db_record_append(int fd, struct aura_db_rec_hdr *rec_hdr,
@@ -840,6 +840,8 @@ int aura_db_job_update(AURA_DBHANDLE _db, uint64_t job_id, uint16_t state, int e
         data.len = sizeof(*job_rec);
 
         offset = a_db_record_insert_core(db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_V1, 0, 0, A_DB_FLAG_NONE, A_DB_JOB_OP_STEP, &key, &data);
+        /* No longer needed */
+        aura_free(job_rec);
         if (offset < 0)
             return offset;
         return 0;
@@ -859,7 +861,7 @@ int aura_db_job_update(AURA_DBHANDLE _db, uint64_t job_id, uint16_t state, int e
         memcpy(key_ptr->base, buf, key_ptr->len);
         memcpy(data_ptr->base, job_rec, data_ptr->len);
         /* No need for this record anymore */
-        aura_db_record_free(job_rec);
+        aura_free(job_rec);
         res = a_db_enqueue_request(db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_V1, 0, 0, A_DB_FLAG_NONE, A_DB_JOB_OP_STEP, key_ptr, data_ptr, comp);
         if (res != 0) {
             aura_iovec_destroy(key_ptr);
@@ -873,20 +875,21 @@ int aura_db_job_update(AURA_DBHANDLE _db, uint64_t job_id, uint16_t state, int e
 struct aura_db_job_rec *aura_db_job_fetch(AURA_DBHANDLE _db, uint64_t job_id, int *error) {
     AURA_DB *db;
     struct aura_db_job_rec *job;
-    struct aura_iovec key, data;
+    struct aura_db_rec rec;
+    struct aura_iovec key;
     char key_buf[2046];
-    // int res;
 
     db = (AURA_DB *)_db;
     if (job_id) {
         snprintf(key_buf, sizeof(key_buf) - 1, "job:%lu", job_id);
         key.base = key_buf;
         key.len = strlen(key_buf);
-        *error = aura_db_record_fetch(_db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_V1, &key, &data);
-        if (!data.base) {
+        *error = aura_db_record_fetch(_db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_V1, &key, &rec);
+        if (!rec.data.base) {
             return NULL;
         }
-        return (struct aura_db_job_rec *)data.base;
+
+        return (struct aura_db_job_rec *)rec.data.base;
     }
     return NULL;
 }
@@ -952,7 +955,8 @@ int aura_db_job_step_insert(AURA_DBHANDLE _db, uint64_t job_id, uint32_t job_typ
 
 struct aura_db_job_step_rec *aura_db_job_step_fetch(AURA_DBHANDLE _db, uint16_t job_type, struct aura_iovec *target) {
     struct aura_db_job_step_rec *job_step;
-    struct aura_iovec key, data;
+    struct aura_db_rec rec;
+    struct aura_iovec key;
     char key_buf[2046];
     int res;
 
@@ -960,13 +964,13 @@ struct aura_db_job_step_rec *aura_db_job_step_fetch(AURA_DBHANDLE _db, uint16_t 
     snprintf(key_buf, sizeof(key_buf), "%s:job:%u", target->base, job_type);
     key.base = key_buf;
     key.len = strlen(key_buf);
-    res = aura_db_record_fetch(_db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_STEP_V1, &key, &data);
-    if (!data.base) {
+    res = aura_db_record_fetch(_db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_STEP_V1, &key, &rec);
+    if (!rec.data.base) {
         /* First step was never created: @todo: should create one and return it */
         return NULL;
     }
 
-    return (struct aura_db_job_step_rec *)data.base;
+    return (struct aura_db_job_step_rec *)rec.data.base;
 }
 
 static inline int a_db_construct_header(struct aura_db_rec_hdr *rec_hdr, aura_db_namespace namespace, aura_db_schema_id schema_id,
@@ -995,7 +999,6 @@ bool aura_db_record_exists(AURA_DBHANDLE _db, uint16_t namespace, uint16_t job_t
                            uint16_t schema_id, struct aura_iovec *key, bool is_transaction) {
     struct aura_db_job_rec *job_rec;
     struct aura_db_job_step_rec *job_step_rec;
-    uint32_t hash;
     AURA_DB *db;
     ssize_t res;
     int error;
@@ -1014,18 +1017,18 @@ bool aura_db_record_exists(AURA_DBHANDLE _db, uint16_t namespace, uint16_t job_t
         /* Get commit canonical job record as confirmation */
         job_rec = aura_db_job_fetch(db, job_step_rec->job_id, &error);
         if (!job_rec) {
-            free(job_step_rec);
+            aura_free(job_step_rec);
             return false;
         }
 
         if (job_rec->state != A_DB_JOB_DONE) {
-            free(job_step_rec);
-            free(job_rec);
+            aura_free(job_step_rec);
+            aura_free(job_rec);
             return false;
         }
 
-        free(job_step_rec);
-        free(job_rec);
+        aura_free(job_step_rec);
+        aura_free(job_rec);
         return true;
     } else {
         res = aura_db_record_fetch(db, namespace, schema_id, key, NULL);
@@ -1036,45 +1039,12 @@ bool aura_db_record_exists(AURA_DBHANDLE _db, uint16_t namespace, uint16_t job_t
     }
 }
 
-static inline int a_db_record_fetch(int fd, off_t offset, struct aura_db_rec_hdr *rec_hdr,
-                                    struct aura_iovec *key, struct aura_iovec *data_out) {
-    ssize_t res;
-    void *record;
-    char key_buf[2000];
-
-    res = pread(fd, key_buf, rec_hdr->key_len, offset + sizeof(rec_hdr));
-    if (res < 0)
-        return -1;
-
-    if (aura_mem_is_eq(key_buf, strlen(key_buf), key->base, key->len)) {
-        if (rec_hdr->flags & A_DB_FLAG_REC_TOMBSTONE)
-            return A_DB_REC_NOT_FOUND;
-
-        if (data_out) {
-            record = calloc(1, rec_hdr->data_len);
-            if (!record)
-                return -1;
-
-            res = pread(fd, record, rec_hdr->data_len, offset + sizeof(rec_hdr) + rec_hdr->key_len);
-            if (res < 0) {
-                free(record); /* probably no need to free record, since I am exiting for now */
-                return -1;
-            }
-            data_out->base = record;
-            data_out->len = rec_hdr->data_len;
-        }
-
-        return 0;
-    }
-}
-
 int aura_db_record_fetch(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id,
-                         struct aura_iovec *key, struct aura_iovec *data_out) {
+                         struct aura_iovec *key, struct aura_db_rec *data_out) {
     struct aura_db_rec_hdr rec_hdr, *hdr;
     uint32_t hash;
     off_t offset;
     ssize_t res;
-    char *record;
     char key_buf[2000];
     AURA_DB *db;
 
@@ -1082,15 +1052,14 @@ int aura_db_record_fetch(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_
     hash = a_fnv1a_hash(db->db_file_hdr.bucket_cnt, namespace, key);
     offset = db->buckets[hash].head_off;
 
-    record = NULL;
     if (data_out) {
-        data_out->base = NULL;
-        data_out->len = 0;
+        memset(data_out, 0, sizeof(*data_out));
     }
 
     /* Value possible in cache */
     pthread_mutex_lock(&db->db_lock);
     if (offset >= db->curr_file_size) {
+
         hdr = a_db_record_cache_fetch(db, namespace, schema_id, key, offset, hash);
         if (hdr) {
             if (hdr->flags & A_DB_FLAG_REC_TOMBSTONE) {
@@ -1099,14 +1068,17 @@ int aura_db_record_fetch(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_
             }
 
             if (data_out) {
-                record = calloc(1, hdr->data_len);
-                if (!record) {
+                data_out->data.len = hdr->data_len;
+                data_out->data.base = aura_alloc(db->mc, data_out->data.len);
+                if (!data_out->data.base) {
                     pthread_mutex_unlock(&db->db_lock);
                     goto exception;
                 }
-                memcpy(record, (char *)hdr + sizeof(*hdr) + hdr->key_len, hdr->data_len);
-                data_out->base = record;
-                data_out->len = hdr->data_len;
+
+                data_out->rec_meta.timestamp = hdr->timestamp;
+                memcpy(data_out->rec_meta.check_sum, hdr->check_sum, DIGEST_LEN);
+
+                memcpy(data_out->data.base, (char *)hdr + sizeof(*hdr) + hdr->key_len, hdr->data_len);
                 pthread_mutex_unlock(&db->db_lock);
             }
 
@@ -1137,19 +1109,22 @@ int aura_db_record_fetch(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_
                     return A_DB_REC_NOT_FOUND;
 
                 if (data_out) {
-                    record = calloc(1, rec_hdr.data_len);
-                    if (!record)
-                        goto exception;
-
-                    res = pread(db->db_fd, record, rec_hdr.data_len, offset + sizeof(rec_hdr) + rec_hdr.key_len);
-                    if (res < 0) {
-                        free(record);
+                    data_out->data.len = rec_hdr.data_len;
+                    data_out->data.base = aura_alloc(db->mc, data_out->data.len);
+                    if (!data_out->data.base) {
                         goto exception;
                     }
-                    data_out->base = record;
-                    data_out->len = rec_hdr.data_len;
 
-                    res = a_db_record_cache_append(db, &rec_hdr, key, data_out, hash);
+                    res = pread(db->db_fd, data_out->data.base, rec_hdr.data_len, offset + sizeof(rec_hdr) + rec_hdr.key_len);
+                    if (res != rec_hdr.data_len) {
+                        aura_free(data_out->data.base);
+                        goto exception;
+                    }
+
+                    data_out->rec_meta.timestamp = rec_hdr.timestamp;
+                    memcpy(data_out->rec_meta.check_sum, rec_hdr.check_sum, DIGEST_LEN);
+
+                    res = a_db_record_cache_append(db, &rec_hdr, key, &data_out->data, hash);
                     if (res < 0) {
                         /**/
                     }
@@ -1165,8 +1140,6 @@ int aura_db_record_fetch(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_
     if (a_unlock(db->db_fd, 0, SEEK_SET, 0) < 0)
         sys_exit(true, errno, "aura_db_record_fetch: a_unlock error:");
 
-    if (record)
-        aura_db_record_free(record);
     return A_DB_REC_NOT_FOUND;
 
 exception:

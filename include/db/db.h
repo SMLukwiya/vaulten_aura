@@ -73,14 +73,6 @@ typedef enum {
     A_DB_EXEC_ASYNC
 } aura_db_exec_mode;
 
-/** Bulk insert structure */
-struct aura_db_record_insert {
-    aura_db_namespace namespace;
-    aura_db_schema_id schema_id;
-    struct aura_iovec key;
-    struct aura_iovec data;
-};
-
 typedef enum {
     A_DB_OP_INSERT = 1,
     A_DB_OP_DELETE,
@@ -97,6 +89,16 @@ typedef enum {
     A_DB_JOB_DONE,
     A_DB_JOB_FAILED
 } aura_db_job_step;
+
+/* Fetched DB Record structure */
+struct aura_db_rec {
+    struct {
+        char check_sum[DIGEST_LEN];
+        uint64_t timestamp;
+    } rec_meta;
+    // struct aura_iovec key;
+    struct aura_iovec data;
+};
 
 struct aura_db_completion {
     uint64_t req_id;
@@ -164,7 +166,7 @@ bool aura_db_record_exists(AURA_DBHANDLE _db, uint16_t namespace, uint16_t job_t
                            uint16_t schema_id, struct aura_iovec *key, bool is_transaction);
 
 /** Retrieve a record */
-int aura_db_record_fetch(AURA_DBHANDLE db, uint16_t namespace, uint16_t schema_id, struct aura_iovec *key, struct aura_iovec *data_out);
+int aura_db_record_fetch(AURA_DBHANDLE db, uint16_t namespace, uint16_t schema_id, struct aura_iovec *key, struct aura_db_rec *data_out);
 
 /** Delete a record */
 int aura_db_record_delete(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id, uint64_t job_id,
