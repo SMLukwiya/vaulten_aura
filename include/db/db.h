@@ -77,6 +77,7 @@ typedef enum {
     A_DB_OP_INSERT = 1,
     A_DB_OP_DELETE,
     A_DB_OP_COMPACT,
+    A_DB_JOB_OP_EVENT,
     A_DB_JOB_OP_CREATE,
     A_DB_JOB_OP_STEP,
     A_DB_JOB_OP_FINAL,
@@ -160,10 +161,6 @@ ssize_t aura_db_record_insert(AURA_DBHANDLE _db, uint16_t namespace, uint16_t sc
 
 /** Close db release associated resources */
 void aura_db_close(AURA_DBHANDLE);
-
-/** Check if record with given key exists */
-bool aura_db_record_exists(AURA_DBHANDLE _db, uint16_t namespace, uint16_t job_type,
-                           uint16_t schema_id, struct aura_iovec *key, bool is_transaction);
 
 /** Retrieve a record */
 int aura_db_record_fetch(AURA_DBHANDLE db, uint16_t namespace, uint16_t schema_id, struct aura_iovec *key, struct aura_db_rec *data_out);

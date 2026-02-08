@@ -191,7 +191,7 @@ int aura_fn_list_add(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *f
         rv = -1;
         goto out;
     }
-    comp->proceed = true;
+
     rv = 0;
 
 out:
@@ -201,8 +201,8 @@ out:
     return rv;
 }
 
-int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *fn_name,
-                        uint32_t fn_version, struct aura_db_completion *comp) {
+int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_memory_ctx *mc, uint64_t job_id,
+                        const char *fn_name, uint32_t fn_version, struct aura_db_completion *comp) {
     struct aura_functions *fns;
     struct aura_iovec key;
     int res, del_idx;
@@ -265,7 +265,7 @@ int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char
     }
     fns_ptr->func_cnt = fns->func_cnt - 1;
 
-    res = aura_db_record_insert(db, A_DB_NS_FN, A_DB_SCHEMA_FNS, 0, 0, A_DB_OP_INSERT, key_ptr, data_ptr, A_DB_EXEC_ASYNC, comp);
+    res = aura_db_record_insert(db, A_DB_NS_FN, A_DB_SCHEMA_FNS, job_id, 0, A_DB_OP_INSERT, key_ptr, data_ptr, A_DB_EXEC_ASYNC, comp);
     if (res != 0) {
         aura_iovec_destroy(key_ptr);
         aura_iovec_destroy(data_ptr);
@@ -697,18 +697,18 @@ struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, struct aura_memory
     return (struct aura_fn_petite *)data.base;
 }
 
-struct aura_fn *aura_fn_load(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version) {
+struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *fn_name, uint32_t fn_version) {
     struct aura_fn *fn;
     struct aura_iovec key;
     struct aura_db_rec rec;
     struct aura_fn_petite *fn_petite;
     char buf[2000];
-    int res;
+    int res, error;
 
-    /* Fn available */
-    snprintf(buf, sizeof(buf), "%s:%s:v%u", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version);
-    key.base = buf;
-    if (!aura_db_record_exists(db, A_DB_NS_FN, A_FN_DEPLOY, A_DB_SCHEMA_FN_META_V1, &key, true))
+    /* Check if fn available */
+    /* @todo, check and respect function state and policy */
+    fn_petite = aura_fn_petite_fetch(db, mc, fn_name, fn_version, &error);
+    if (!fn_petite)
         return NULL;
 
     /* Meta */

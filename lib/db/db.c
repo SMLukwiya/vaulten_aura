@@ -49,6 +49,7 @@ struct aura_db_wal_hdr {
     uint64_t last_replay_ts;
     uint64_t last_file_offset;
     uint64_t record_cnt;
+    uint64_t file_size;
 };
 
 struct aura_db_writer_queue {
@@ -62,7 +63,7 @@ struct aura_db_writer_queue {
 #define A_DB_WAL_MAGIC 0xED3A1001
 #define A_BUCKET_TAB_OFFSET sizeof(struct aura_db_hdr)
 #define A_DB_BUF_SIZE 4096
-#define A_DB_REC_BUF_SIZE (32 * 1024) /* 32KB */
+#define A_DB_REC_BUF_SIZE (128 * 1024) /* 128KB */
 #define A_DB_VERSION 0x10000U
 #define A_DB_CHK_PNT_MAGIC 0xC3C3C3C3
 #define A_DB_CHECK_PNT_RECORD_KEY "replay_checkpt"
@@ -115,9 +116,8 @@ typedef struct {
     int wal_fd; /* fd for WAL file */
     char *name; /* database file name */
     struct aura_memory_ctx *mc;
-    struct aura_db_hdr db_file_hdr;      /* database header */
-    struct aura_db_wal_hdr wal_file_hdr; /* WAL file header */
-    // struct aura_db_shared_hdr *sh_hdr;        /* process shared database header */
+    struct aura_db_hdr db_file_hdr;           /* database header */
+    struct aura_db_wal_hdr wal_file_hdr;      /* WAL file header */
     struct aura_db_bucket_entry *buckets;     /* hash buckets */
     void *record_buf;                         /* In memory record buffer */
     size_t record_buf_size;                   /* Size of record buffer */
@@ -268,13 +268,6 @@ static inline ssize_t a_db_meta_write(int fd, struct iovec *hdr, struct iovec *b
     return writev(fd, iov, 2);
 }
 
-static inline ssize_t a_db_read_hash_table(int fd, struct iovec *bucket) {
-    if (lseek(fd, 0, SEEK_SET) < 0)
-        return -1;
-
-    return write(fd, bucket->iov_base, bucket->iov_len);
-}
-
 /**
  * Read db meta data
  * This is called only on startup for now
@@ -294,6 +287,11 @@ static inline ssize_t a_db_meta_read(int fd, struct iovec *hdr, struct iovec *bu
     return readv(fd, iov, 2);
 }
 
+/**
+ * Open a database file with the defined flags
+ * and defined modes. Taking into account EEXIST
+ * error if the file was already created
+ */
 static inline int a_db_file_open(int dir_fd, const char *filename, int *flags, int mode) {
     int fd;
 
@@ -317,6 +315,9 @@ static inline int a_db_file_open(int dir_fd, const char *filename, int *flags, i
     return fd;
 }
 
+/**
+ * Initialize the database header structure
+ */
 static inline int a_db_headers_init(AURA_DB *db, size_t file_size) {
     uint64_t created_ts;
 
@@ -343,12 +344,13 @@ static inline int a_db_headers_init(AURA_DB *db, size_t file_size) {
     db->wal_file_hdr.last_file_offset = 0;
     db->wal_file_hdr.last_replay_ts = created_ts;
     db->wal_file_hdr.record_cnt = 0;
+    db->wal_file_hdr.file_size = sizeof(struct aura_db_wal_hdr);
 
     return 0;
 }
 
 /*
- * Open or create a database.  Structured similar to open(2).
+ * Open or create a database.  Structured kind of similar to open(2).
  */
 AURA_DBHANDLE aura_db_open(struct aura_memory_ctx *mc, const char *app_path, const char *db_pathname, int oflag, ...) {
     AURA_DB *db;
@@ -470,6 +472,12 @@ AURA_DBHANDLE aura_db_open(struct aura_memory_ctx *mc, const char *app_path, con
 
     closedir(dp);
     a_db_rewind(db->db_fd);
+    app_debug(true, 0, "DB START ==============================================");
+    aura_db_wal_scan((void *)db);
+    app_debug(true, 0, " DB START ==============================================");
+    app_debug(true, 0, "DB START ---------------------------------------------");
+    aura_db_scan((void *)db);
+    app_debug(true, 0, "DB START ---------------------------------------------");
     return db;
 
 err_close:
@@ -600,10 +608,7 @@ static inline int a_db_record_cache_append(AURA_DB *db, struct aura_db_rec_hdr *
 
     /* If single record can't fit in cache */
     if (rec_hdr->rec_len.aligned_len > db->record_buf_size) {
-        /* Do nothing but update in memory file size */
-        pthread_mutex_lock(&db->db_lock);
-        db->db_file_hdr.file_size += rec_hdr->rec_len.aligned_len;
-        pthread_mutex_unlock(&db->db_lock);
+        /* Do nothing */
         return 0;
     }
 
@@ -611,8 +616,15 @@ static inline int a_db_record_cache_append(AURA_DB *db, struct aura_db_rec_hdr *
     file_offset = db->curr_file_size + db->append_off;
     new_append_off = db->append_off + rec_hdr->rec_len.aligned_len;
 
-    /* If cummulative records can't fit in cache */
+    /**
+     * If cummulative records can't fit in cache
+     * Cache is nearing full capacity if not already full
+     * Replay WAL and reset cache
+     */
     if (new_append_off > db->record_buf_size) {
+
+        if (a_db_wal_replay(db) < 0)
+            return -1;
 
         /* update new current db file size */
         db->curr_file_size = db->db_file_hdr.file_size;
@@ -624,7 +636,12 @@ static inline int a_db_record_cache_append(AURA_DB *db, struct aura_db_rec_hdr *
         memcpy(write_ptr + sizeof(*rec_hdr), key->base, rec_hdr->key_len);
         if (data)
             memcpy(write_ptr + sizeof(*rec_hdr) + rec_hdr->key_len, data->base, data->len);
-        db->append_off = rec_hdr->rec_len.aligned_len;
+        /**
+         * Update the file offset for the hash chain
+         */
+        db->append_off = 0;
+        file_offset = db->curr_file_size + db->append_off;
+        db->append_off += rec_hdr->rec_len.aligned_len;
     } else {
         char *write_ptr = (char *)db->record_buf + db->append_off;
         memcpy(write_ptr, rec_hdr, sizeof(*rec_hdr));
@@ -705,7 +722,10 @@ static off_t a_db_record_insert_core(AURA_DBHANDLE _db, uint16_t namespace, uint
         return -1;
 
     pthread_mutex_lock(&db->db_lock);
+    db->wal_file_hdr.record_cnt++;
     db->db_file_hdr.record_cnt++;
+    db->wal_file_hdr.file_size += rec_hdr.rec_len.aligned_len;
+    db->db_file_hdr.file_size += rec_hdr.rec_len.aligned_len;
     if (op == A_DB_OP_DELETE)
         db->db_file_hdr.wasted_bytes += rec_hdr.rec_len.aligned_len;
     pthread_mutex_unlock(&db->db_lock);
@@ -924,7 +944,7 @@ int aura_db_job_step_insert(AURA_DBHANDLE _db, uint64_t job_id, uint32_t job_typ
         data.base = (void *)&job_step;
         data.len = sizeof(job_step);
 
-        offset = a_db_record_insert_core(_db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_STEP_V1, 0, 0, A_DB_FLAG_NONE, A_DB_JOB_OP_STEP, &key, &data);
+        offset = a_db_record_insert_core(_db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_STEP_V1, job_id, 0, A_DB_FLAG_NONE, A_DB_JOB_OP_EVENT, &key, &data);
         if (offset < 0)
             return -1;
         return 0;
@@ -943,7 +963,7 @@ int aura_db_job_step_insert(AURA_DBHANDLE _db, uint64_t job_id, uint32_t job_typ
         /* Copy over contents for queueing */
         memcpy(key_ptr->base, job_step_key, key_ptr->len);
         memcpy(data_ptr->base, &job_step, data_ptr->len);
-        res = a_db_enqueue_request(_db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_STEP_V1, 0, 0, A_DB_FLAG_NONE, A_DB_JOB_OP_STEP, key_ptr, data_ptr, comp);
+        res = a_db_enqueue_request(_db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_STEP_V1, job_id, 0, A_DB_FLAG_NONE, A_DB_JOB_OP_EVENT, key_ptr, data_ptr, comp);
         if (res != 0) {
             aura_iovec_destroy(key_ptr);
             aura_iovec_destroy(data_ptr);
@@ -993,50 +1013,6 @@ static inline int a_db_construct_header(struct aura_db_rec_hdr *rec_hdr, aura_db
     rec_hdr->key_len = key->len;
     rec_hdr->data_len = data->len;
     memcpy(rec_hdr->check_sum, data_checksum.base, DIGEST_LEN);
-}
-
-bool aura_db_record_exists(AURA_DBHANDLE _db, uint16_t namespace, uint16_t job_type,
-                           uint16_t schema_id, struct aura_iovec *key, bool is_transaction) {
-    struct aura_db_job_rec *job_rec;
-    struct aura_db_job_step_rec *job_step_rec;
-    AURA_DB *db;
-    ssize_t res;
-    int error;
-
-    db = (AURA_DB *)_db;
-
-    if (is_transaction) {
-        /* Fetch latest job step record */
-        /* @todo: is this reliable? do all jobs create job steps */
-        job_step_rec = aura_db_job_step_fetch(db, job_type, key);
-        if (!job_step_rec)
-            return false;
-
-        /** @todo: do more sanity checks on the job step */
-
-        /* Get commit canonical job record as confirmation */
-        job_rec = aura_db_job_fetch(db, job_step_rec->job_id, &error);
-        if (!job_rec) {
-            aura_free(job_step_rec);
-            return false;
-        }
-
-        if (job_rec->state != A_DB_JOB_DONE) {
-            aura_free(job_step_rec);
-            aura_free(job_rec);
-            return false;
-        }
-
-        aura_free(job_step_rec);
-        aura_free(job_rec);
-        return true;
-    } else {
-        res = aura_db_record_fetch(db, namespace, schema_id, key, NULL);
-        if (res == 0)
-            return true;
-
-        return false;
-    }
 }
 
 int aura_db_record_fetch(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id,
@@ -1176,7 +1152,7 @@ int aura_db_record_delete(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema
 }
 
 /* Append to WAL file */
-static inline off_t a_db_wal_append(int wal_fd, struct aura_db_wal_rec_hdr *wal_hdr,
+static inline off_t a_db_wal_append(int wal_fd, struct aura_db_wal_rec_hdr *wal_rec_hdr,
                                     struct aura_db_rec_hdr *rec_hdr, struct aura_iovec *key, struct aura_iovec *data) {
     off_t offset;
     struct iovec iov[5];
@@ -1188,10 +1164,10 @@ static inline off_t a_db_wal_append(int wal_fd, struct aura_db_wal_rec_hdr *wal_
         sys_exit(true, errno, "a_db_wal_append: lseek error:");
 
     /* Update lsn */
-    wal_hdr->lsn = offset;
+    wal_rec_hdr->lsn = offset;
 
-    iov[0].iov_base = wal_hdr;
-    iov[0].iov_len = sizeof(*wal_hdr);
+    iov[0].iov_base = wal_rec_hdr;
+    iov[0].iov_len = sizeof(*wal_rec_hdr);
     iov[1].iov_base = (void *)rec_hdr;
     iov[1].iov_len = sizeof(*rec_hdr);
     iov[2].iov_base = key->base;
@@ -1273,7 +1249,7 @@ int a_db_replay_tab_add(struct aura_db_replay_tab *tab, uint64_t job_id, uint32_
 
         if (tab->jobs.cnt >= tab->jobs.cap) {
             tab->jobs.cap = tab->jobs.cap >= 16 ? tab->jobs.cap * 2 : 16;
-            tab->jobs.visited = realloc(tab->jobs.visited, tab->jobs.cap * sizeof(tab->jobs.visited));
+            tab->jobs.visited = realloc(tab->jobs.visited, tab->jobs.cap * sizeof(*tab->jobs.visited));
             if (!tab->jobs.visited)
                 return -1;
         }
@@ -1285,7 +1261,7 @@ int a_db_replay_tab_add(struct aura_db_replay_tab *tab, uint64_t job_id, uint32_
         /* Insert into Record table */
         if (tab->records.cnt >= tab->records.cap) {
             tab->records.cap = tab->records.cap >= 16 ? tab->records.cap * 2 : 16;
-            tab->records.visited = realloc(tab->records.visited, tab->records.cap * sizeof(tab->records.visited));
+            tab->records.visited = realloc(tab->records.visited, tab->records.cap * sizeof(*tab->records.visited));
             if (!tab->records.visited)
                 return -1;
         }
@@ -1407,8 +1383,6 @@ static int a_db_wal_replay(AURA_DB *db) {
             goto out;
         }
 
-        a_db_dump_wal_header(&chk_pnt_wal_rec_hdr);
-
         chk_pnt_rec_data_len = chk_pnt_wal_rec_hdr.rec_len - sizeof(chk_pnt_wal_rec_hdr);
         ch_pnt_data = malloc(chk_pnt_rec_data_len);
         if (!ch_pnt_data) {
@@ -1465,8 +1439,6 @@ static int a_db_wal_replay(AURA_DB *db) {
         res = pread(db->wal_fd, &wal_rec_hdr, sizeof(wal_rec_hdr), read_off);
         /* EOF */
         if (res == 0) {
-            // __atomic_store_n(&db->is_busy, false, __ATOMIC_RELEASE);
-
             uint32_t state, chk_pnt_data_len;
             uint64_t job_id;
             struct aura_db_checkpoint_rec *chk_pnt_rec;
@@ -1571,6 +1543,7 @@ static int a_db_wal_replay(AURA_DB *db) {
             }
 
             wal_db_hdr.last_replay_ts = aura_now_ms(CLOCK_REALTIME);
+            wal_db_hdr.record_cnt++; /* +1 for check pnt record */
 
             hdr_iov.iov_base = &wal_db_hdr;
             hdr_iov.iov_len = sizeof(wal_db_hdr);
@@ -1652,6 +1625,7 @@ static int a_db_wal_replay(AURA_DB *db) {
         switch (wal_rec_hdr.op) {
         case A_DB_OP_INSERT:
         case A_DB_OP_DELETE:
+        case A_DB_JOB_OP_EVENT:
             if (rec_hdr->magic != A_DB_REC_MAGIC) {
                 rv = -1;
                 goto out;
@@ -1662,6 +1636,7 @@ static int a_db_wal_replay(AURA_DB *db) {
              * Not part of any job scope atomic group
              * Append immediately to db
              */
+            app_debug(true, 0, "A_DB_REPLAY_APPENDED ---->>>> A");
             if (rec_hdr->job_id == 0) {
                 rec_hdr->prev_off = prev_off;
                 write_offset = a_db_record_append(db->db_fd, rec_hdr, key, data, 0);
@@ -1675,7 +1650,30 @@ static int a_db_wal_replay(AURA_DB *db) {
              * Append record to record table
              */
             if (rec_hdr->job_id > 0) {
-                a_db_replay_tab_add(replay_tab, rec_hdr->job_id, 0, read_off + sizeof(wal_rec_hdr), rec_hdr->rec_len.aligned_len);
+                /**
+                 * Check if job already submitted, this is required to write events correctly
+                 * as some event get appended after the job is committed
+                 */
+                bool job_committed;
+
+                job_committed = false;
+                for (int i = 0; i < replay_tab->jobs.cnt; ++i) {
+                    if (replay_tab->jobs.visited[i].job_id == rec_hdr->job_id && replay_tab->jobs.visited[i].state == A_DB_JOB_DONE) {
+                        job_committed = true;
+                        break;
+                    }
+                }
+                if (job_committed) {
+                    rec_hdr->prev_off = prev_off;
+                    write_offset = a_db_record_append(db->db_fd, rec_hdr, key, data, 0);
+                    prev_off = write_offset;
+                    hdr.lsn = wal_rec_hdr.lsn;
+                } else {
+                    if (a_db_replay_tab_add(replay_tab, rec_hdr->job_id, 0, read_off + sizeof(wal_rec_hdr), rec_hdr->rec_len.aligned_len) != 0) {
+                        rv = -1;
+                        goto out;
+                    }
+                }
             }
 
             break;
@@ -1771,6 +1769,9 @@ static int a_db_wal_replay(AURA_DB *db) {
 
         hdr.last_rec_off = write_offset;
         hdr.file_size += rec_hdr->rec_len.aligned_len;
+        hdr.record_cnt++;
+        wal_db_hdr.file_size += wal_rec_hdr.rec_len;
+        wal_db_hdr.record_cnt++;
 
         a_db_update_hash_bucket(rec_hdr, bucket_buf, hdr.bucket_cnt, key, write_offset);
 
@@ -2056,6 +2057,7 @@ static void *a_db_writer_routine(void *arg) {
             switch (req->op) {
             case A_DB_OP_INSERT:
             case A_DB_JOB_OP_CREATE:
+            case A_DB_JOB_OP_EVENT:
             case A_DB_JOB_OP_STEP:
                 rv = a_db_record_insert_core((void *)db, req->namespace, req->schema_id, req->job_id, req->prev_job_rec, req->flags, req->op, req->key, req->data);
                 aura_iovec_destroy(req->key);
@@ -2248,6 +2250,8 @@ char *a_db_get_schema_str(uint16_t schema_id) {
         return "Schema Job step";
     case A_DB_SCHEMA_FN_PETITE_V1:
         return "Schema Fn Petite";
+    case A_DB_SCHEMA_FN_STATE_V1:
+        return "Schema Fn State";
     case A_DB_SCHEMA_FNS:
         return "Schema Function List";
     default:
@@ -2280,6 +2284,8 @@ static char *a_db_get_op(uint16_t op) {
         return "OP Delete";
     case A_DB_JOB_OP_CREATE:
         return "OP Job create";
+    case A_DB_JOB_OP_EVENT:
+        return "OP Job event";
     case A_DB_JOB_OP_STEP:
         return "OP Job Step";
     default:
@@ -2361,7 +2367,15 @@ void aura_db_wal_scan(AURA_DBHANDLE _db) {
     db = (AURA_DB *)_db;
     offset = sizeof(struct aura_db_wal_hdr);
 
-    app_debug(true, 0, "wal DB file size: %u", db->db_file_hdr.file_size);
+    app_debug(true, 0, "WAL FILE HEADER");
+    app_debug(true, 0, "    Version: %u", db->wal_file_hdr.version);
+    app_debug(true, 0, "    Magic: %u", db->wal_file_hdr.magic);
+    app_debug(true, 0, "    Flags: %u", db->wal_file_hdr.flags);
+    app_debug(true, 0, "    Created: %lu", db->wal_file_hdr.created_ts);
+    app_debug(true, 0, "    Last replay: %lu", db->wal_file_hdr.last_replay_ts);
+    app_debug(true, 0, "    Record cnt: %lu", db->wal_file_hdr.record_cnt);
+    app_debug(true, 0, "    File size: %lu", db->wal_file_hdr.file_size);
+
     while (true) {
         app_debug(true, 0, "wal DB read offset: %u", offset);
         res = pread(db->wal_fd, &wal_hdr, sizeof(wal_hdr), offset);

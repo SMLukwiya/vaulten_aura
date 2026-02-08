@@ -149,13 +149,14 @@ void aura_fn_deploy_start_cb(struct aura_db_completion *comp, ssize_t result) {
     user_data = comp->user_data;
 
     if (result < 0) {
-        /* update job as failed, don't wait */
-        aura_db_job_update(
-          glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, 0,
-          A_FN_ERROR_GENERIC, A_DB_EXEC_ASYNC, NULL);
         evt.state = A_FN_OP_STATE_FAILED;
         evt.error_code = A_FN_ERROR_GENERIC;
         evt.msg_len = 0;
+
+        /* update job as failed, don't wait */
+        aura_db_job_update(glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
+
+        /* Send response */
         aura_send_resp(comp->client_fd, (void *)&evt, sizeof(evt));
     }
 
@@ -178,12 +179,13 @@ void aura_fn_deploy_artifacts_insert_cb(struct aura_db_completion *comp, ssize_t
     user_data = comp->user_data;
 
     if (result < 0) {
-        /* Update job failed */
-        aura_db_job_update(glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, 0,
-                           A_FN_ERROR_CONFIG, A_DB_EXEC_ASYNC, NULL);
         evt.state = A_FN_OP_STATE_FAILED;
         evt.error_code = A_FN_ERROR_CONFIG;
         evt.msg_len = 0;
+
+        /* Update job failed */
+        aura_db_job_update(glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
+
         aura_send_resp(comp->client_fd, (void *)&evt, sizeof(evt));
 
         comp->status = result;
@@ -259,11 +261,14 @@ void aura_fn_deploy_artifacts_insert_cb(struct aura_db_completion *comp, ssize_t
     }
 
     if (res != 0) {
-        aura_db_job_update(glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, 0,
-                           A_FN_ERROR_CONFIG, A_DB_EXEC_ASYNC, NULL);
         evt.state = A_FN_OP_STATE_FAILED;
         evt.error_code = A_FN_ERROR_CONFIG;
         evt.msg_len = 0;
+
+        /* Update job failed */
+        aura_db_job_update(glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
+
+        /* Send response */
         aura_send_resp(comp->client_fd, (void *)&evt, sizeof(evt));
         comp->status = res;
         comp->proceed = true;
@@ -701,9 +706,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
             evt.msg[0] = '\0';
 
             /* Don't wait for async op */
-            aura_db_job_update(
-              glob_conf.db_handle, user_data.job_id, A_DB_JOB_FAILED,
-              A_FN_ERROR_DUPLICATE, 0, A_DB_EXEC_ASYNC, NULL);
+            aura_db_job_update(glob_conf.db_handle, user_data.job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
             aura_send_resp(cli_fd, (void *)&evt, sizeof(evt));
             goto out;
         }

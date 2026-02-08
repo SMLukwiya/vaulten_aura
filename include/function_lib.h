@@ -740,8 +740,8 @@ int aura_fn_list_add(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *f
                      uint32_t fn_version, uint64_t job_id, struct aura_db_completion *comp);
 
 /** Remove a function from the list of deployed functions */
-int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *fn_name,
-                        uint32_t fn_version, struct aura_db_completion *comp);
+int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_memory_ctx *mc, uint64_t job_id,
+                        const char *fn_name, uint32_t fn_version, struct aura_db_completion *comp);
 
 struct aura_rollback_detector *rollback_detector_create(aura_rollback_cb cb);
 void rollback_detector_add_deployment(struct aura_rollback_detector *rbd, uint64_t fn_id, const char *version /* create a struct to pass error threshold stuff */);
