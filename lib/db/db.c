@@ -472,12 +472,6 @@ AURA_DBHANDLE aura_db_open(struct aura_memory_ctx *mc, const char *app_path, con
 
     closedir(dp);
     a_db_rewind(db->db_fd);
-    app_debug(true, 0, "DB START ==============================================");
-    aura_db_wal_scan((void *)db);
-    app_debug(true, 0, " DB START ==============================================");
-    app_debug(true, 0, "DB START ---------------------------------------------");
-    aura_db_scan((void *)db);
-    app_debug(true, 0, "DB START ---------------------------------------------");
     return db;
 
 err_close:
@@ -1636,7 +1630,6 @@ static int a_db_wal_replay(AURA_DB *db) {
              * Not part of any job scope atomic group
              * Append immediately to db
              */
-            app_debug(true, 0, "A_DB_REPLAY_APPENDED ---->>>> A");
             if (rec_hdr->job_id == 0) {
                 rec_hdr->prev_off = prev_off;
                 write_offset = a_db_record_append(db->db_fd, rec_hdr, key, data, 0);
