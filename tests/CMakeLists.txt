@@ -107,7 +107,7 @@ set_tests_properties(codegen_test PROPERTIES
     TIMEOUT 10
 )
 
-# # -------------------- CLI TESTS -------------------- #
+# -------------------- CLI TESTS -------------------- #
 add_executable(test_aura_cli
     cli/basic.c
     ${common_sources}
@@ -126,5 +126,27 @@ add_test(
 
 set_tests_properties(cli_test PROPERTIES
     LABELS "cli"
+    TIMEOUT 10
+)
+
+# ----------------------- HEAP TEST ---------------------- #
+add_executable(test_aura_heap
+    heap/basic.c
+    ${vaulten_aura_SOURCE_DIR}/lib/heap_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/error_lib.c
+)
+
+target_include_directories(test_aura_heap
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${PROJECT_INCLUDE_DIR}
+)
+
+add_test(
+    NAME heap_test
+    COMMAND test_aura_heap
+)
+
+set_tests_properties(heap_test PROPERTIES
+    LABELS "heap"
     TIMEOUT 10
 )
