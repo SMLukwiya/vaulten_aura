@@ -27,6 +27,7 @@
 
 #define a_is_power_of_two(x) ((x) != 0 && (((x) & ((x) - 1)) == 0))
 
+/* WARNING: only use for static character, and character arrays, not character pointers */
 #define a_str_lit_static(str) (str), sizeof(str) - 1
 
 /* Read size bytes from fd to buf */
@@ -104,7 +105,7 @@ int aura_install_signal_handler(int signo, void (*handler)(int signo));
 
 /*------------------------------------------------------- */
 /**
- * Some Lousy parent child sync stuff
+ * Some Half-assed parent child sync stuff
  */
 
 #define A_PARENT_SYNC_CHAR "w"
@@ -115,38 +116,5 @@ int aura_parent_wait(void);
 int aura_child_wait(void);
 int aura_parent_proceed(pid_t pid);
 int aura_child_proceed(pid_t pid);
-
-/**
- * Some Lousy ass vector impl
- */
-/**@todo: remove the base from the name */
-typedef struct aura_vector {
-    void *data;
-    size_t cnt;
-    size_t cap;
-    size_t elem_size;
-} aura_vec_base_st;
-
-void aura_vec_base_init(aura_vec_base_st *v, size_t es);
-int aura_vec_base_push(aura_vec_base_st *v, void *el, size_t ec);
-void aura_vec_base_free(aura_vec_base_st *v);
-
-/* Macro wrapper *@todo: remove if not used */
-#define A_VEC_DEFINE(type)                                                                            \
-    typedef struct {                                                                                  \
-        aura_vec_base_st base;                                                                        \
-    } aura_vec_##type##_st;                                                                           \
-                                                                                                      \
-    static inline void aura_vec_##type##_init(aura_vec_##type##_st *v) {                              \
-        aura_vec_base_init(&v->base, sizeof(type));                                                   \
-    }                                                                                                 \
-                                                                                                      \
-    static inline void aura_vec_##type##_free(aura_vec_##type##_st *v) {                              \
-        aura_vec_base_free(&v->base);                                                                 \
-    }                                                                                                 \
-                                                                                                      \
-    static inline int aura_vec_##type##_push(aura_vec_##type##_st *v, const type *value, size_t ec) { \
-        aura_vec_base_push(&v->base, value, ec);                                                      \
-    }
 
 #endif

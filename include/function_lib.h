@@ -494,6 +494,17 @@ struct aura_fn_stat {
     uint64_t last_execution;
 };
 
+/**
+ * Function stat wrapper structure
+ * Used when loading top k busy functions
+ * in server
+ */
+struct aura_fn_stat_wrapper {
+    struct aura_fn_stat *fn_stat;
+    const char *fn_name;
+    uint32_t fn_version;
+};
+
 /** Function state */
 struct aura_fn_state {
     bool is_active; /* Fn can be invoked */
@@ -742,6 +753,17 @@ int aura_fn_list_add(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *f
 /** Remove a function from the list of deployed functions */
 int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_memory_ctx *mc, uint64_t job_id,
                         const char *fn_name, uint32_t fn_version, struct aura_db_completion *comp);
+
+/**
+ * Load a function to memory
+ */
+struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *fn_name, uint32_t fn_version);
+
+/** Fetch function stats */
+struct aura_fn_stat *aura_fn_stat_fetch(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version);
+
+/* Compare function stats */
+int aura_fn_stat_compare(const void *s1, const void *s2);
 
 struct aura_rollback_detector *rollback_detector_create(aura_rollback_cb cb);
 void rollback_detector_add_deployment(struct aura_rollback_detector *rbd, uint64_t fn_id, const char *version /* create a struct to pass error threshold stuff */);

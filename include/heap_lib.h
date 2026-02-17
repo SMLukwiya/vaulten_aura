@@ -34,9 +34,7 @@ bool aura_max_heap_push(struct aura_heap *hp, void *element);
 
 bool aura_min_heap_push(struct aura_heap *hp, void *element);
 
-void *aura_max_heap_peek(struct aura_heap *hp);
-
-void *aura_min_heap_peak(struct aura_heap *hp);
+void *aura_heap_peek(struct aura_heap *hp);
 
 void *aura_max_heap_delete(struct aura_heap *hp);
 

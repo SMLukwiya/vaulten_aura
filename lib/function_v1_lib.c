@@ -786,6 +786,34 @@ struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const
     return fn;
 }
 
+struct aura_fn_stat *aura_fn_stat_fetch(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version) {
+    struct aura_fn_stat *fn_stat;
+    struct aura_iovec key;
+    struct aura_db_rec rec;
+    char buf[2000];
+    int res;
+
+    snprintf(buf, sizeof(buf), "%s:%s:%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_STAT);
+    key.base = buf;
+    key.len = strlen(buf);
+
+    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_STAT_DELTA, &key, &rec);
+    if (res != 0)
+        return NULL;
+
+    return (struct aura_fn_stat *)rec.data.base;
+}
+
+int aura_fn_stat_compare(const void *s1, const void *s2) {
+    struct aura_fn_stat_wrapper *_s1;
+    struct aura_fn_stat_wrapper *_s2;
+
+    _s1 = (struct aura_fn_stat_wrapper *)s1;
+    _s2 = (struct aura_fn_stat_wrapper *)s2;
+
+    return _s1->fn_stat->invocations - _s2->fn_stat->invocations;
+}
+
 void aura_fn_meta_dump(struct aura_fn_meta *fn_conf) {
     /**/
 }

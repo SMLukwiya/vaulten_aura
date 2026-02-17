@@ -54,7 +54,7 @@ static inline void swap(void **a, void **b) {
 }
 
 /* Build max heap by insertion */
-static void aura_max_heap_insert(struct aura_heap *hp, size_t i) {
+static void a_max_heap_insert(struct aura_heap *hp, size_t i) {
     int _parent;
 
     /**
@@ -76,11 +76,11 @@ bool aura_max_heap_push(struct aura_heap *hp, void *element) {
 
     hp->size++;
     hp->data[hp->size] = element;
-    aura_max_heap_insert(hp, hp->size);
+    a_max_heap_insert(hp, hp->size);
     return true;
 }
 
-static void aura_max_heapify(struct aura_heap *hp, size_t i) {
+static void a_max_heapify(struct aura_heap *hp, size_t i) {
     int child;
 
     while (i < hp->size) {
@@ -105,20 +105,20 @@ void *aura_max_heap_delete(struct aura_heap *hp) {
     item = hp->data[1];
     swap(&hp->data[1], &hp->data[hp->size]);
     --(hp->size);
-    aura_max_heapify(hp, 1);
+    a_max_heapify(hp, 1);
 
     return item;
 }
 
-void *aura_max_heap_peek(struct aura_heap *hp) {
-    if (hp->size == 1)
+void *aura_heap_peek(struct aura_heap *hp) {
+    if (aura_heap_is_empty(hp))
         return NULL;
 
-    return hp->data[hp->size];
+    return hp->data[1];
 }
 
 /* Build min heap by insertion */
-static void aura_min_heap_insert(struct aura_heap *hp, size_t i) {
+static void a_min_heap_insert(struct aura_heap *hp, size_t i) {
     int _parent;
 
     while (i > 1) {
@@ -137,18 +137,11 @@ bool aura_min_heap_push(struct aura_heap *hp, void *element) {
 
     hp->size++;
     hp->data[hp->size] = element;
-    aura_min_heap_insert(hp, hp->size);
+    a_min_heap_insert(hp, hp->size);
     return true;
 }
 
-void *aura_min_heap_peak(struct aura_heap *hp) {
-    if (hp->size == 1)
-        return NULL;
-
-    return hp->data[1];
-}
-
-static void aura_min_heapify(struct aura_heap *hp, size_t i) {
+static void a_min_heapify(struct aura_heap *hp, size_t i) {
     int child;
 
     while (i < hp->size) {
@@ -173,7 +166,7 @@ void *aura_min_heap_delete(struct aura_heap *hp) {
     item = hp->data[1];
     swap(&hp->data[1], &hp->data[hp->size]);
     --(hp->size);
-    aura_min_heapify(hp, 1);
+    a_min_heapify(hp, 1);
 
     return item;
 }
