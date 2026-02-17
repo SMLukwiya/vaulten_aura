@@ -1,6 +1,8 @@
 #ifndef AURA_STRING_H
 #define AURA_STRING_H
 
+#include "memory_lib.h"
+
 #include <ctype.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -11,5 +13,7 @@
 
 size_t _strlcpy(char *dest, const char *src, size_t size);
 size_t _strlcat(char *dest, const char *src, size_t size);
+
+char *aura_strdup(struct aura_memory_ctx *mc, const char *str);
 
 #endif

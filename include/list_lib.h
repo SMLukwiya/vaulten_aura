@@ -38,6 +38,7 @@ static inline void a_list_add_tail(struct aura_list_head *head, struct aura_list
 static inline void a_list_delete(struct aura_list_head *entry) {
     entry->next->prev = entry->prev;
     entry->prev->next = entry->next;
+    a_list_head_init(entry);
 }
 
 static inline void a_list_replace(struct aura_list_head *new_, struct aura_list_head *old) {
@@ -58,7 +59,7 @@ static inline void a_list_move_tail(struct aura_list_head *head, struct aura_lis
 }
 
 static inline bool a_list_is_empty(struct aura_list_head *head) {
-    return head->next == head; /** @todo: use likely collection here */
+    return head->next == head;
 }
 
 static inline bool a_entry_is_last(struct aura_list_head *head, struct aura_list_head *entry) {

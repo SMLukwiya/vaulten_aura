@@ -1,4 +1,5 @@
 #include "string_lib.h"
+#include "slab_lib.h"
 
 /**
  * Internal 'strlcpy' implementation
@@ -105,4 +106,14 @@ bool is_valid_utf_8_string(const unsigned char *str) {
                 return 0;
     }
     return 1;
+}
+
+char *aura_strdup(struct aura_memory_ctx *mc, const char *str) {
+    char *copy;
+    size_t len;
+
+    len = strlen(str) + 1; /* +1 Null terminated */
+    copy = aura_alloc(mc, len);
+    strcpy(copy, str);
+    return copy;
 }
