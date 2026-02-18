@@ -7,9 +7,12 @@
 
 #define a_time_ms_to_ns(ms) ((ms) * 1000000ULL)
 #define a_time_s_to_ns(s) ((s) * 1000000000ULL)
+#define a_time_s_to_us(s) ((s) * 1000000ULL)
 #define a_time_s_to_ms(s) ((s) * 1000ULL)
 #define a_time_ns_to_ms(ns) ((ns) * 1e-6)
+#define a_time_ns_to_us(ns) ((ns) * 1e-3)
 #define a_time_ms_to_s(ms) ((ms) * 1e-3)
+#define a_time_us_to_s(us) ((us) * 1e-6)
 
 /* Returns true if time a is after time b */
 #define a_time_after(a, b) ((long)((b) - (a)) < 0)
@@ -32,7 +35,7 @@ static inline uint64_t aura_now_ns(int clock_id) {
     return (uint64_t)(a_time_s_to_ns(ts.tv_sec) + ts.tv_nsec);
 }
 
-/* Get current time in microseconds */
+/* Get current time in milliseconds */
 static inline uint64_t aura_now_ms(int clock_id) {
     int res;
     struct timespec ts;
@@ -40,6 +43,16 @@ static inline uint64_t aura_now_ms(int clock_id) {
     if (res != 0)
         return 0;
     return (uint64_t)(a_time_s_to_ms(ts.tv_sec) + a_time_ns_to_ms(ts.tv_nsec));
+}
+
+/* Get current time in microseconds */
+static inline uint64_t aura_now_us(int clock_id) {
+    int res;
+    struct timespec ts;
+    res = clock_gettime(clock_id, &ts);
+    if (res != 0)
+        return 0;
+    return (uint64_t)(a_time_s_to_us(ts.tv_sec) + a_time_ns_to_us(ts.tv_nsec));
 }
 
 /* Get current time time provided timespec */

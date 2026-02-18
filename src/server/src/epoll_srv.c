@@ -18,19 +18,18 @@ static void aura_epoll_init(struct aura_evt_loop *evt_loop) {
 
     epoll = malloc(sizeof(*epoll));
     if (!epoll)
-        sys_exit(true, errno, "Epoll init failed, no memory");
+        sys_exit(true, errno, "aura_epoll_init error:");
     memset(epoll, 0, sizeof(*epoll));
 
     epoll->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
     if (epoll->epoll_fd < 0)
-        sys_exit(true, errno, "epoll_create1() fd creation failed");
+        sys_exit(true, errno, "aura_epoll_init: epoll_create1() error:");
 
     epoll->ep_events = malloc(evt_loop->max_fds * sizeof(struct epoll_event));
     if (!epoll->ep_events)
-        sys_exit(true, errno, "Epoll init failed, no memory");
+        sys_exit(true, errno, "aura_epoll_init: ep_events error:");
 
     evt_loop->backend = epoll;
-    app_info(true, 0, "-> aura_epoll_init()");
 }
 
 /**
@@ -54,7 +53,7 @@ int aura_epoll_add(struct aura_evt_loop *evt_loop, int fd, int events) {
     int res;
 
     if (!epoll) {
-        app_alert(true, 0, "Trying to add fd %d to uninitialized epoll loop", fd);
+        app_alert(true, 0, "aura_epoll_add: adding %d to uninitialized epoll loop", fd);
         return 1;
     }
     memset(&ep_ev, 0, sizeof(ep_ev));
@@ -80,7 +79,7 @@ static int aura_epoll_modify(struct aura_evt_loop *evt_loop, int fd, int events)
     int res;
 
     if (!epoll) {
-        app_alert(true, 0, "Trying to modify fd %d to uninitialized epoll loop", fd);
+        app_alert(true, 0, "aura_epoll_modify: modifying fd %d in uninitialized epoll loop", fd);
         return 1;
     }
     memset(&ep_ev, 0, sizeof(ep_ev));
@@ -106,7 +105,7 @@ int aura_epoll_remove(struct aura_evt_loop *evt_loop, int fd) {
     int res;
 
     if (!epoll) {
-        app_alert(true, 0, "Trying to delete fd %d to uninitialized epoll loop", fd);
+        app_alert(true, 0, "aura_epoll_remove: deleting fd %d to uninitialized epoll loop", fd);
         return 1;
     }
 
@@ -126,14 +125,13 @@ int aura_epoll_poll(struct aura_evt_loop *evt_loop, int64_t timeout_ms, uint32_t
     struct aura_epoll_data *epoll = evt_loop->backend;
 
     num_of_events = epoll_wait(epoll->epoll_fd, epoll->ep_events, evt_loop->max_fds, timeout_ms);
-    if (num_of_events < 0)
-        sys_exit(true, errno, "epoll_wait() server wait failed");
+    if (num_of_events < 0 && errno != EINTR)
+        sys_exit(true, errno, "aura_epoll_poll: epoll_wait error:");
 
     for (i = 0; i < num_of_events; ++i) {
         fd = epoll->ep_events[i].data.fd;
 
         if (fd == evt_loop->dmn_fd && (epoll->ep_events[i].events & EPOLLIN)) {
-            app_debug(true, 0, "Internal message: %d", fd);
             evt_loop->srv_ctx->batches.internal = true;
             evt_loop->ops->remove(evt_loop, fd);
             continue;
