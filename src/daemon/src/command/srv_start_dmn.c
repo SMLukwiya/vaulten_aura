@@ -90,7 +90,7 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, struct srv_start_arg
      */
     res = socketpair(AF_UNIX, SOCK_STREAM, 0, sock_fds);
     if (res < 0)
-        sys_exit(true, errno, "Failed to setup server socket");
+        sys_exit(true, errno, "aura_dmn_start_server: socketpair error;");
 
     aura_clear_fd_flag(sock_fds[0], SOCK_CLOEXEC);
     aura_clear_fd_flag(sock_fds[1], SOCK_CLOEXEC);
@@ -99,7 +99,7 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, struct srv_start_arg
     // check if server already running using its pid
     pid = fork();
     if (pid < 0) {
-        sys_alert(true, errno, "Error starting server");
+        sys_alert(true, errno, "aura_dmn_start_server: fork error:");
         goto out;
     }
 
@@ -111,9 +111,9 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, struct srv_start_arg
         /* wait for daemon to set things up */
         res = aura_child_wait();
         if (res == -1)
-            sys_exit(true, errno, "Server start failed");
+            sys_exit(true, errno, "aura_dmn_start_server: aura_child_wait error:");
         execlp("aura_server", "aura_server", fd_str, (char *)0);
-        sys_alert(true, errno, "Error starting server");
+        sys_alert(true, errno, "aura_dmn_start_server: Error starting server");
     } else {
         /* callback to register fds[0] with poll */
         close(sock_fds[1]);
@@ -124,12 +124,12 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, struct srv_start_arg
         /* alert server things are set */
         res = aura_child_proceed(pid);
         if (res == -1)
-            app_alert(true, errno, "Server start failed");
+            app_alert(true, errno, "aura_dmn_start_server: aura_child_proceed error:");
 
         struct aura_msg res_msg;
         res = aura_recv_msg(sock_fds[0], &res_msg);
         if (res_msg.hdr.type != A_MSG_PING) {
-            app_debug(true, 0, "Incorrect message format, something weird going on");
+            app_debug(true, 0, "aura_dmn_start_server: Incorrect msg hdr type: %d", res_msg.hdr.type);
             goto out;
         }
 
@@ -149,7 +149,7 @@ out:
 /**
  *
  */
-int aura_dmn_stop_server(struct aura_msg *msg, int sock_fd, int cli_fd, pid_t srv_pid) {
+int aura_dmn_server_stop(struct aura_msg *msg, int sock_fd, int cli_fd, pid_t srv_pid) {
     struct aura_msg_hdr hdr;
     int res, status;
     pid_t pid;
@@ -165,7 +165,6 @@ int aura_dmn_stop_server(struct aura_msg *msg, int sock_fd, int cli_fd, pid_t sr
     a_init_msg_hdr(hdr, 0, A_MSG_CMD_EXECUTE, A_CMD_SERVER_STOP);
     res = aura_msg_send(sock_fd, &hdr, NULL, 0, -1);
     if (res != 0) {
-        app_debug(true, 0, "aura_dmn_stop_server: aura_msg_send error");
         res = aura_send_resp(cli_fd, (void *)server_stopped_failed, sizeof(server_stopped_failed) - 1);
         return 1;
     }
@@ -185,19 +184,19 @@ int aura_dmn_server_status(int srv_fd, int cli_fd) {
     a_init_msg_hdr(hdr, 0, A_MSG_PING, 0);
     res = aura_msg_send(srv_fd, &hdr, NULL, 0, -1);
     if (res != 0) {
-        sys_debug(true, errno, "server down");
+        sys_debug(true, errno, "aura_dmn_server_status: aura_msg_send error:");
         goto out;
     }
 
     res = aura_recv_msg(srv_fd, &res_msg);
     if (res != 1) {
-        app_debug(true, errno, "aura_dmn_server_status() failed");
+        app_debug(true, errno, "aura_dmn_server_status: aura_recv_msg error:");
         goto out;
     }
 
     hdr = res_msg.hdr;
     if (hdr.type != A_MSG_PING) {
-        app_debug(true, 0, "Incorrect status format, some weird ass stuff going on!");
+        app_debug(true, 0, "aura_dmn_server_status: Incorrect msg hdr type: %d!", hdr.type);
         goto out;
     }
 
