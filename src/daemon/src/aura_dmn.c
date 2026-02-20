@@ -41,8 +41,7 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
             return 0;
 
         case A_CMD_SERVER_STOP:
-            aura_dmn_stop_server(msg, glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd, cli_fd, glob_conf.server_pid);
-            glob_conf.server_pid = 0;
+            aura_dmn_server_stop(msg, glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd, cli_fd, glob_conf.server_pid);
             return 0;
 
         case A_CMD_SERVER_STATUS:
@@ -93,9 +92,10 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
     return 1;
 }
 
-/** */
+/**
+ * Clean up server connection
+ */
 static void a_sig_ch_handler(int signo) {
-    /* kill the registered socket pair */
     if (waitpid(glob_conf.server_pid, NULL, 0) != glob_conf.server_pid) {
         sys_exit(true, errno, "a_sig_ch_handler: waitpid error: %d", glob_conf.server_pid);
     }
