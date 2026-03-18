@@ -6,6 +6,7 @@
 #include "command/server_dmn.h"
 #include "command/sys_dmn.h"
 #include "daemon_lib.h"
+#include "db_broker.h"
 #include "ipc_lib.h"
 #include "unix_socket_lib.h"
 #include "utils_lib.h"
@@ -26,7 +27,7 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
 
     switch (msg->hdr.type) {
     case A_MSG_PING:
-        aura_send_resp(cli_fd, NULL, 0);
+        aura_resp_send(cli_fd, NULL, 0);
         close(cli_fd);
         return 0;
 
@@ -80,9 +81,16 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
             aura_dmn_server_config_validate(msg->fd, cli_fd);
             return 0;
 
+        case A_CMD_DB_FETCH_REQUEST:
+            aura_dmn_fetch_request(glob_conf.db_handle, &msg->data, cli_fd);
+            return 0;
+
+        case A_CMD_DB_INSERT_REQUEST:
+            return 0;
+
         default:
             app_debug(true, 0, "unknown cmd line %u", msg->hdr.cmd_type);
-            aura_send_resp(cli_fd, NULL, 0);
+            aura_resp_send(cli_fd, NULL, 0);
             return 0;
         }
         return 0;
@@ -228,11 +236,11 @@ int aura_daemon() {
                 case A_SOCKET_PAIR_FD_INDEX:
                 // fallthrough
                 default:
-                    res = aura_recv_msg(glob_conf.poll_fds[i].fd, &aura_msg);
+                    res = aura_msg_recv(glob_conf.poll_fds[i].fd, &aura_msg);
                     if (res > 0) {
                         if (i == A_SOCKET_PAIR_FD_INDEX) {
                             /* aura_server request */
-                            aura_dump_msg(&aura_msg, true);
+                            a_handle_client_request(&aura_msg, glob_conf.poll_fds[i].fd, NULL);
                         } else {
                             /* aura_cli request */
                             a_handle_client_request(&aura_msg, glob_conf.poll_fds[i].fd, (void *)&srv_arg);

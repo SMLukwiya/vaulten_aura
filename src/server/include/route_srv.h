@@ -32,7 +32,7 @@ struct aura_http_req {
     struct aura_iovec scheme;
     struct aura_iovec path;
     struct aura_iovec authority;
-    struct aura_http_hdrs *headers;
+    struct aura_http_hdrs headers;
     uint8_t num_of_headers;
     size_t content_length;
     struct aura_iovec *raw_ptr; /* pointer to connection data, zero copy */
@@ -43,8 +43,8 @@ struct aura_http_req {
 
 /* Http response structure */
 struct aura_http_res {
-    struct aura_http_hdrs *headers;  /* headers array */
-    struct aura_http_hdrs *trailers; /* same as above */
+    struct aura_http_hdrs headers;  /* headers array */
+    struct aura_http_hdrs trailers; /* same as above */
     const char *reason;
     const char *version;
     const char *body;
@@ -53,13 +53,16 @@ struct aura_http_res {
     uint8_t num_of_headers;
 };
 
+/* Route structure */
 struct aura_route {
     uint32_t version;
-    struct aura_fn fn_image;
-    struct aura_work_queue wq;
+    char url[128];
+    struct aura_fn *fn;
+    struct aura_work_queue *wq;
     struct aura_router *router; /* router to which route belongs */
 };
 
+/* Router structure */
 struct aura_router {
     aura_rax_tree_t *r_tree;
     struct {
@@ -86,7 +89,7 @@ bool aura_router_destroy(struct aura_router *router);
  * attaching associates workqueue and function
  * to the route.
  */
-bool aura_route_add(struct aura_router *router, uint32_t version, struct aura_fn *fn);
+bool aura_route_add(struct aura_router *router, struct aura_fn *fn);
 
 /**
  * Free a route and resources

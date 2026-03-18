@@ -5,7 +5,7 @@
 #include "file_lib.h"
 #include "function_lib.h"
 #include "ipc_lib.h"
-#include "quickjs/quickjs.h"
+#include "quickjs.h"
 #include "runtime_lib.h"
 #include "unix_socket_lib.h"
 #include "utils_lib.h"
@@ -13,6 +13,49 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+
+typedef JSModuleDef JSModuleDef;
+
+JSValue aura_js_std_await(JSContext *ctx, JSValue obj) {
+    JSValue rv;
+    int state;
+    char *result;
+
+    for (;;) {
+        state = JS_PromiseState(ctx, obj);
+        if (state == JS_PROMISE_FULFILLED) {
+            result = "PROMISE DONE";
+            rv = JS_PromiseResult(ctx, obj);
+            JS_FreeValue(ctx, obj);
+            break;
+        } else if (state == JS_PROMISE_REJECTED) {
+            result = "PROMISE REJECTED";
+            rv = JS_Throw(ctx, JS_PromiseResult(ctx, obj));
+            JS_FreeValue(ctx, obj);
+            break;
+        } else if (state == JS_PROMISE_PENDING) {
+            int err;
+            err = JS_ExecutePendingJob(JS_GetRuntime(ctx), NULL);
+            if (err < 0) {
+                /* js_std_dump_error(ctx) */
+                result = "PENDING DUMP";
+            } else if (err == 0) {
+                result = "NOTHING DUMP";
+                // js_std_promise_rejection_check(ctx);
+
+                // if (os_poll_func)
+                // os_poll_func(ctx);
+            }
+        } else {
+            /* not a promise */
+            result = "NOT A PROMISE";
+            rv = obj;
+            break;
+        }
+    }
+    app_debug(true, 0, "%s", result);
+    return rv;
+}
 
 struct statistical_baseline {
     double mean;
@@ -157,7 +200,7 @@ void aura_fn_deploy_start_cb(struct aura_db_completion *comp, ssize_t result) {
         aura_db_job_update(glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
 
         /* Send response */
-        aura_send_resp(comp->client_fd, (void *)&evt, sizeof(evt));
+        aura_resp_send(comp->client_fd, (void *)&evt, sizeof(evt));
     }
 
     /* Store result and proceed to next step */
@@ -186,7 +229,7 @@ void aura_fn_deploy_artifacts_insert_cb(struct aura_db_completion *comp, ssize_t
         /* Update job failed */
         aura_db_job_update(glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
 
-        aura_send_resp(comp->client_fd, (void *)&evt, sizeof(evt));
+        aura_resp_send(comp->client_fd, (void *)&evt, sizeof(evt));
 
         comp->status = result;
         comp->proceed = true;
@@ -269,7 +312,7 @@ void aura_fn_deploy_artifacts_insert_cb(struct aura_db_completion *comp, ssize_t
         aura_db_job_update(glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
 
         /* Send response */
-        aura_send_resp(comp->client_fd, (void *)&evt, sizeof(evt));
+        aura_resp_send(comp->client_fd, (void *)&evt, sizeof(evt));
         comp->status = res;
         comp->proceed = true;
         return;
@@ -356,10 +399,10 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
 
         res = aura_load_config_fd(config_fd, aura_function_validator, aura_function_validator_len, parser_err, (void *)&usr_data);
         close(config_fd); /* No longer needed */
+        msg_len = 0;
+        msg = NULL;
         if (res != 0) {
             error = A_FN_ERROR_CONFIG;
-            msg_len = 0;
-            msg == NULL;
             goto err;
         }
 
@@ -380,8 +423,6 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
          */
         if (aura_fn_meta_parse(fn_meta, &_fn_meta) != 0) {
             error = A_FN_ERROR_CONFIG;
-            msg_len = 0;
-            msg == NULL;
             goto err;
         }
         aura_fn_meta_destroy(&_fn_meta);
@@ -393,8 +434,6 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
          */
         if (aura_fn_config_parse(fn_config, &_fn_config) != 0) {
             error = A_FN_ERROR_CONFIG;
-            msg_len = 0;
-            msg == NULL;
             goto err;
         }
         aura_fn_config_destroy(&_fn_config);
@@ -410,15 +449,11 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
         rt = JS_NewRuntime();
         if (!rt) {
             error = A_FN_ERROR_CONFIG;
-            msg_len = 0;
-            msg == NULL;
             goto err;
         }
         ctx = JS_NewContext(rt);
         if (!ctx) {
             error = A_FN_ERROR_CONFIG;
-            msg_len = 0;
-            msg == NULL;
             goto err;
         }
 
@@ -432,14 +467,87 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
             goto err;
         }
 
-        bytecode = aura_qjs_create_bytecode(ctx, entry_script, entry_file_len, entry_file, &bytecode_len);
-        if (!bytecode) {
-            error = A_FN_ERROR_CONFIG;
-            msg_len = 0;
-            msg == NULL;
+        // bytecode = aura_qjs_create_bytecode(ctx, entry_script, entry_file_len, entry_file, &bytecode_len);
+        JSValue obj = JS_Eval(ctx, entry_script, entry_file_len, entry_file, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+        JSValue exception, js_msg;
+        const char *js_msg_str;
+        if (JS_IsException(obj)) {
+            JS_FreeValue(ctx, obj);
+            exception = JS_GetException(ctx);
+            js_msg = JS_GetPropertyStr(ctx, exception, "message");
+            js_msg_str = JS_ToCString(ctx, js_msg);
+            app_debug(true, 0, "aura_dmn_fn_deploy: JS_Eval error %s", js_msg_str);
+            error = A_FN_ERROR_FN_CODE;
             goto err;
         }
 
+        bytecode = JS_WriteObject(ctx, &bytecode_len, obj, JS_WRITE_OBJ_BYTECODE);
+        JS_FreeValue(ctx, obj);
+        if (!bytecode) {
+            sys_debug(true, errno, "aura_dmn_fn_deploy: JS_WriteObject error:");
+            error = A_FN_ERROR_GENERIC;
+            goto err;
+        }
+
+        obj = JS_ReadObject(ctx, bytecode, bytecode_len, JS_READ_OBJ_BYTECODE);
+        if (JS_IsException(obj)) {
+            exception = JS_GetException(ctx);
+            js_msg = JS_GetPropertyStr(ctx, exception, "message");
+            js_msg_str = JS_ToCString(ctx, js_msg);
+            app_debug(true, 0, "aura_dmn_fn_deploy: JS_ReadObject error %s", js_msg_str);
+            error = A_FN_ERROR_GENERIC;
+            goto err;
+        }
+
+        if (JS_VALUE_GET_TAG(obj) == JS_TAG_MODULE)
+            if (JS_ResolveModule(ctx, obj) < 0) {
+                JS_FreeValue(ctx, obj);
+                app_debug(true, 0, "aura_dmn_fn_deploy: JS_ResolveModule error");
+                error = A_FN_ERROR_GENERIC;
+                goto err;
+            }
+
+        /* Verify we have a function */
+        JSValue module = JS_EvalFunction(ctx, obj);
+        if (JS_IsException(module)) {
+            JS_FreeValue(ctx, obj);
+            exception = JS_GetException(ctx);
+            js_msg = JS_GetPropertyStr(ctx, exception, "message");
+            js_msg_str = JS_ToCString(ctx, js_msg);
+            app_debug(true, 0, "aura_dmn_fn_deploy: JS_EvalFunction error: %s", js_msg_str);
+            error = A_FN_ERROR_GENERIC;
+            goto err;
+        }
+
+        module = aura_js_std_await(ctx, module);
+        if (JS_IsException(module)) {
+            JS_FreeValue(ctx, obj);
+            exception = JS_GetException(ctx);
+            js_msg = JS_GetPropertyStr(ctx, exception, "message");
+            js_msg_str = JS_ToCString(ctx, js_msg);
+            app_debug(true, 0, "aura_dmn_fn_deploy: aura_js_std_await error: %s", js_msg_str);
+            error = A_FN_ERROR_GENERIC;
+            goto err;
+        }
+        JS_FreeValue(ctx, module);
+
+        JSModuleDef *m = JS_VALUE_GET_PTR(obj);
+        JSValue val = JS_GetModuleNamespace(ctx, m);
+        JSValue handler = JS_GetPropertyStr(ctx, val, "default");
+        JS_FreeValue(ctx, obj);
+        JS_FreeValue(ctx, val);
+
+        if (!JS_IsFunction(ctx, handler)) {
+            JS_FreeValue(ctx, handler);
+            error = A_FN_ERROR_GENERIC;
+            js_msg_str = "export default must be of type function";
+            msg = js_msg_str;
+            msg_len = strlen(js_msg_str);
+            goto err;
+        }
+        JS_FreeValue(ctx, handler);
+
+        app_debug(true, 0, "Proceeding to deploy bytecode: %p -> %lu", bytecode, bytecode_len);
         goto proceed;
 
     err:
@@ -452,7 +560,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
 
         /* We don't wait for confirmation of job update, we should probably wait!! */
         aura_db_job_update(glob_conf.db_handle, user_data.job_id, A_DB_JOB_FAILED, error, 0, A_DB_EXEC_ASYNC, NULL);
-        aura_send_resp(cli_fd, (void *)&evt, sizeof(evt));
+        aura_resp_send(cli_fd, (void *)&evt, sizeof(evt));
         goto out;
 
         /* Move to next step */
@@ -477,7 +585,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
                 evt.msg_len = 0;
 
                 aura_db_job_update(glob_conf.db_handle, job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
-                aura_send_resp(cli_fd, &evt, sizeof(evt));
+                aura_resp_send(cli_fd, &evt, sizeof(evt));
                 goto out;
             }
         }
@@ -492,7 +600,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
 
             /* Don't wait for async op */
             aura_db_job_update(glob_conf.db_handle, job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
-            aura_send_resp(cli_fd, (void *)&evt, sizeof(evt));
+            aura_resp_send(cli_fd, (void *)&evt, sizeof(evt));
             goto out;
         }
 
@@ -707,7 +815,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
 
             /* Don't wait for async op */
             aura_db_job_update(glob_conf.db_handle, user_data.job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
-            aura_send_resp(cli_fd, (void *)&evt, sizeof(evt));
+            aura_resp_send(cli_fd, (void *)&evt, sizeof(evt));
             goto out;
         }
 
@@ -733,7 +841,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
         evt.error_code = A_FN_ERROR_NONE;
         evt.msg_len = 0;
         evt.msg[0] = '\0';
-        aura_send_resp(cli_fd, (void *)&evt, sizeof(evt));
+        aura_resp_send(cli_fd, (void *)&evt, sizeof(evt));
         break;
     default:
         break;

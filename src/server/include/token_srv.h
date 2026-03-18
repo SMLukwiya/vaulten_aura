@@ -78,7 +78,8 @@ typedef enum {
     A_TOKEN_PROTOCOL,
     A_TOKEN_EARLY_DATA,
     A_TOKEN_KEEP_ALIVE,
-    A_TOKEN_CONNECTION
+    A_TOKEN_CONNECTION,
+    A_TOKEN_PRIORITY
 } aura_token;
 
 #include "token_table_lib.h"

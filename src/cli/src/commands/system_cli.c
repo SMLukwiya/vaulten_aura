@@ -125,7 +125,7 @@ int aura_cli_system_stop(void *opts_ptr, void *glob_opts) {
     char buf[64];
     pid_t pid;
     int res, sock_fd;
-    void *data;
+    struct aura_iovec data;
 
     aura_try_connect_or_error(&sock_fd);
     if (sock_fd == -1)
@@ -154,13 +154,13 @@ int aura_cli_system_stop(void *opts_ptr, void *glob_opts) {
     a_init_msg_hdr(hdr, 0, A_MSG_CMD_EXECUTE, A_CMD_SYSTEM_STOP);
 
     if (aura_msg_send(sock_fd, &hdr, NULL, 0, -1) < 0) {
-        app_debug(false, errno, "system stop, failed");
+        sys_debug(false, errno, "system stop, failed");
         return 1;
     }
 
     while (true) {
-        data = aura_recv_resp(sock_fd);
-        if (data == NULL)
+        res = aura_recv_resp(&data, sock_fd, NULL);
+        if (res < 0 || data.base == NULL)
             break;
     }
 
@@ -207,7 +207,7 @@ int aura_cli_system_status(void *opts, void *glob_opts) {
         return 1;
     }
 
-    res = aura_recv_msg(sock_fd, &msg);
+    res = aura_msg_recv(sock_fd, &msg);
     if (msg.hdr.type == A_MSG_RESPONSE) {
         app_info(false, 0, "%s", system_up);
     } else {

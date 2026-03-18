@@ -197,7 +197,7 @@ static int aura_h2_decode_rst_stream_frame(struct aura_h2_rst_stream_payload *pa
 /**
  *
  */
-static int aura_decode_settings_payload(struct aura_h2_settings *settings, struct aura_h2_frame *frame) {
+static int a_decode_settings_payload(struct aura_h2_settings *settings, struct aura_h2_frame *frame) {
     uint16_t settings_id;
     uint32_t val;
     const uint8_t *src;
@@ -310,14 +310,15 @@ static int aura_h2_decode_window_update_frame(struct aura_h2_window_update_paylo
 
 int aura_h2_parse_frame_header(struct aura_h2_in_frame *in_frame,
                                const uint8_t *src, size_t src_len,
-                               size_t max_frame_size, int64_t *frame_len) {
+                               size_t max_frame_size, int *frame_len) {
     *frame_len = -1;
 
     if (src_len < A_H2_FRAME_HEADER_SIZE)
         return A_H2_FRAME_INCOMPLETE;
 
     in_frame->frame.len = a_h2_unpack_24u(src);
-    if (in_frame->frame.len > max_frame_size)
+    /* Frame header len is not included in max_frame size check */
+    if (in_frame->frame.len - A_H2_FRAME_HEADER_SIZE > max_frame_size)
         return A_H2_FRAME_SIZE_ERROR;
 
     if (src_len < (in_frame->frame.len + A_H2_FRAME_HEADER_SIZE))
@@ -347,7 +348,7 @@ int aura_h2_parse_frame_payload(struct aura_h2_in_frame *in_frame) {
     case A_H2_FRAME_TYPE_RST_STREAM:
         return aura_h2_decode_rst_stream_frame(&in_frame->rst_stream_payload, &in_frame->frame);
     case A_H2_FRAME_TYPE_SETTINGS:
-        return aura_decode_settings_payload(&in_frame->settings_payload, &in_frame->frame);
+        return a_decode_settings_payload(&in_frame->settings_payload, &in_frame->frame);
     case A_H2_FRAME_TYPE_PUSH_PROMISE:
         /* Not implemented */
         break;
@@ -405,13 +406,14 @@ void aura_h2_encode_ping_frame(uint8_t *dest, uint32_t frame_len, bool is_ack, c
 /**
  *
  */
-void aura_h2_encode_goaway_frame(uint8_t *dest, uint32_t frame_len, uint32_t last_stream_id, int err_num, const struct aura_iovec *additional_data) {
+// void aura_h2_encode_goaway_frame(uint8_t *dest, uint32_t frame_len, uint32_t last_stream_id, int err_num, const struct aura_iovec *additional_data) {
+static inline void aura_h2_encode_goaway_frame(uint8_t *dest, uint32_t frame_len, struct aura_h2_goaway_payload *payload) {
     uint8_t *_dest = dest;
-    _dest = aura_encode_frame_header(_dest, frame_len, A_H2_FRAME_TYPE_GOAWAY, 0, last_stream_id);
-    _dest = a_h2_pack_32u(_dest, last_stream_id);
-    _dest = a_h2_pack_32u(_dest, err_num);
-    if (additional_data->base != NULL)
-        memcpy(_dest, additional_data->base, additional_data->len);
+    _dest = aura_encode_frame_header(_dest, frame_len, A_H2_FRAME_TYPE_GOAWAY, 0, 0);
+    _dest = a_h2_pack_32u(_dest, payload->last_stream_id);
+    _dest = a_h2_pack_32u(_dest, payload->error_code);
+    if (payload->debug_data.base != NULL)
+        memcpy(_dest, payload->debug_data.base, payload->debug_data.len);
 }
 
 /**
@@ -444,15 +446,14 @@ void aura_h2_encode_window_update_frame(uint8_t *dest, uint32_t frame_len, uint3
 void aura_h2_encode_origin_frame() {}
 
 /* ---------- ENCODING ---------- */
-struct aura_h2_out_frame *aura_encode_control_frame(struct aura_memory_ctx *mc, struct aura_sliding_buf *buf,
-                                                    uint8_t type, uint8_t flags, uint32_t stream_id,
-                                                    const uint8_t *payload, uint32_t payload_len, uint32_t frame_len) {
+struct aura_h2_out_frame *aura_encode_control_frame(struct aura_sliding_buf *buf, uint8_t type, uint8_t flags, uint32_t stream_id,
+                                                    uint32_t frame_len, const uint8_t *payload, uint32_t payload_len) {
     struct aura_h2_out_frame *out_frame;
     uint8_t write_ptr;
     size_t frame_size;
     bool res;
 
-    out_frame = aura_alloc(mc, sizeof(*out_frame));
+    out_frame = aura_alloc(buf->mem_ctx, sizeof(*out_frame));
     if (!out_frame)
         return NULL;
 
@@ -463,6 +464,7 @@ struct aura_h2_out_frame *aura_encode_control_frame(struct aura_memory_ctx *mc, 
     }
 
     out_frame->encoded.data = aura_sliding_buffer_write_pointer(buf);
+    /* Deduct the h2 frame header len */
     frame_size = frame_len - A_H2_FRAME_HEADER_SIZE;
 
     switch (type) {
@@ -474,6 +476,9 @@ struct aura_h2_out_frame *aura_encode_control_frame(struct aura_memory_ctx *mc, 
         break;
     case A_H2_FRAME_TYPE_WINDOW_UPDATE:
         aura_h2_encode_window_update_frame(out_frame->encoded.data, frame_size, stream_id, *(uint32_t *)payload);
+        break;
+    case A_H2_FRAME_TYPE_GOAWAY:
+        aura_h2_encode_goaway_frame(out_frame->encoded.data, frame_size, (struct aura_h2_goaway_payload *)payload);
         break;
     default:
         break;
@@ -490,14 +495,13 @@ struct aura_h2_out_frame *aura_encode_control_frame(struct aura_memory_ctx *mc, 
     return out_frame;
 }
 
-struct aura_h2_out_frame *aura_produce_header_frame(struct aura_memory_ctx *mc, struct aura_sliding_buf *buf,
-                                                    uint32_t stream_id, uint8_t type, uint8_t flags,
-                                                    const uint8_t *payload, uint32_t payload_len) {
+struct aura_h2_out_frame *aura_produce_header_frame(struct aura_sliding_buf *buf, uint32_t stream_id, uint8_t type,
+                                                    uint8_t flags, const uint8_t *payload, uint32_t payload_len) {
     struct aura_h2_out_frame *out_frame;
     uint8_t *dest;
     bool res;
 
-    out_frame = aura_alloc(mc, sizeof(*out_frame));
+    out_frame = aura_alloc(buf->mem_ctx, sizeof(*out_frame));
     if (!out_frame)
         return NULL;
 
@@ -525,14 +529,13 @@ struct aura_h2_out_frame *aura_produce_header_frame(struct aura_memory_ctx *mc, 
     return out_frame;
 }
 
-struct aura_h2_out_frame *aura_encode_data_frame(struct aura_memory_ctx *mc, struct aura_sliding_buf *buf,
-                                                 uint32_t stream_id, uint8_t flags, const uint8_t *payload,
-                                                 uint32_t payload_len, uint8_t pad_len) {
+struct aura_h2_out_frame *aura_encode_data_frame(struct aura_sliding_buf *buf, uint32_t stream_id, uint8_t flags,
+                                                 const uint8_t *payload, uint32_t payload_len, uint8_t pad_len) {
     struct aura_h2_out_frame *out_frame;
     uint8_t write_ptr;
     bool res;
 
-    out_frame = aura_alloc(mc, sizeof(*out_frame));
+    out_frame = aura_alloc(buf->mem_ctx, sizeof(*out_frame));
     if (!out_frame)
         return NULL;
 

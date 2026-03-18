@@ -33,7 +33,7 @@ int aura_cli_run_server_validate_conf_cli(void *opts_ptr, void *glob_opts) {
     char resolved_conf_file_path[1024];
     int sock_fd, file_fd, res;
     struct aura_msg_hdr hdr;
-    char *data;
+    struct aura_iovec data;
     struct srv_conf_validate_opt *opts = (struct srv_conf_validate_opt *)opts_ptr;
 
     aura_try_connect_or_error(&sock_fd);
@@ -60,11 +60,15 @@ int aura_cli_run_server_validate_conf_cli(void *opts_ptr, void *glob_opts) {
     }
     close(file_fd);
 
-    data = aura_recv_resp(sock_fd);
-    if (data == NULL)
-        app_exit(false, 0, "No data");
-    else
-        app_info(false, 0, "%s", data);
+    res = aura_recv_resp(&data, sock_fd, NULL);
+    if (res < 0) {
+        close(sock_fd);
+        return res;
+    }
+
+    if (data.base) {
+        app_info(false, 0, "%s", data.base);
+    }
 
     close(sock_fd);
     return 0;

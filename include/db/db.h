@@ -97,7 +97,6 @@ struct aura_db_rec {
         char check_sum[DIGEST_LEN];
         uint64_t timestamp;
     } rec_meta;
-    // struct aura_iovec key;
     struct aura_iovec data;
 };
 

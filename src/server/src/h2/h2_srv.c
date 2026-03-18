@@ -4,6 +4,17 @@
 #include "header_srv.h"
 #include "server_srv.h"
 
+int error_table[] = {
+  [A_H2_PROTOCOL_ERROR] = A_PROGRESS_ERROR,
+  [A_H2_FRAME_SIZE_ERROR] = A_PROGRESS_ERROR,
+  [A_H2_COMPRESSION_ERROR] = A_PROGRESS_ERROR,
+  [A_H2_FLOW_CONTROL_ERROR] = A_PROGRESS_ERROR,
+  [A_H2_SETTINGS_TIMEOUT_ERROR] = A_PROGRESS_ERROR,
+  [A_H2_FRAME_INCOMPLETE] = A_PROGRESS_BLOCKED,
+  [A_H2_ERROR_NONE] = A_PROGRESS_DONE,
+  [A_H2_ERROR_IN_PROGRESS] = A_PROGRESS_BLOCKED,
+};
+
 int aura_decode_tls_input(struct aura_srv_sock *sock) {
     app_debug(true, 0, ">>> aura_decode_tls_input");
     char *src, *write_ptr;
@@ -61,55 +72,70 @@ int aura_decode_tls_input(struct aura_srv_sock *sock) {
 /**
  *
  */
-void aura_h2_proceed(struct aura_srv_sock *sock, struct aura_srv_ctx *srv_ctx) {
+int aura_h2_proceed(struct aura_srv_sock *sock, struct aura_srv_ctx *srv_ctx) {
     app_debug(true, 0, ">>>> aura_h2_proceed");
     size_t n_read, avail_write;
     int res, err_idx;
 
+    if (!sock->h2_conn) {
+        sock->h2_conn = aura_h2_create_connection_server(sock, srv_ctx);
+        if (!sock->h2_conn)
+            sys_exit(true, errno, "aura_h2_proceed: aura_h2_create_connection_server error:");
+    }
+
     avail_write = aura_sliding_buffer_available_write(&sock->tls_ctx->encrypted_read_buf);
     n_read = aura_sliding_buffer_append_from_fd(&sock->tls_ctx->encrypted_read_buf, sock->sock_fd, avail_write);
     if (n_read == -1) {
-        aura_h2_connection_close(sock->h2_conn);
-        return;
+        sys_debug(true, errno, "aura_h2_proceed: aura_sliding_buffer_append_from_fd error:");
+        // aura_h2_connection_close(sock->h2_conn);
+        return A_PROGRESS_ERROR;
     }
 
     if (n_read == 0 && aura_sliding_buffer_is_empty(&sock->tls_ctx->encrypted_read_buf)) {
         /* rearm socket */
-        return;
+        return A_PROGRESS_BLOCKED;
     }
 
-    // update bytes read as well
     res = aura_decode_tls_input(sock);
     if (res == 1) {
-        app_debug(true, 0, "ERROR decoding the tls input");
-        aura_h2_connection_close(sock->h2_conn);
+        app_debug(true, 0, "aura_h2_proceed: aura_decode_tls_input error:");
+        return A_PROGRESS_ERROR;
+        // aura_h2_connection_close(sock->h2_conn);
     }
 
     if (res == PTLS_ERROR_IN_PROGRESS) {
-        /* rearm socket */
-        return;
+        /* socket is still armed in epoll, just return */
+        app_debug(true, 0, "aura_h2_proceed: aura_decode_tls_input PTLS_IN_PROGRESS");
+        return A_PROGRESS_BLOCKED;
     }
 
-    if (sock->h2_conn == NULL) {
-        sock->h2_conn = aura_h2_create_connection_server(sock, srv_ctx);
-        if (sock->h2_conn == NULL)
-            sys_exit(true, errno, "Out of memory: aura_h2_proceed");
+    for (;;) {
+        switch (sock->h2_conn->state) {
+        case A_H2_CONN_STATE_PREFACE:
+            /* Handle preface */
+            res = aura_h2_process_preface(sock->h2_conn);
+            break;
+
+        case A_H2_CONN_STATE_PREFACE_SETTINGS:
+            /* First settings after connection preface */
+            res = aura_h2_process_preface_settings(sock->h2_conn);
+            break;
+
+        case A_H2_CONN_STATE_CLOSING:
+            break;
+
+        default:
+            /* process frame */
+            res = aura_process_frame(sock->h2_conn);
+            if (res == A_H2_ERROR_NONE)
+                return A_PROGRESS_DONE;
+            break;
+        }
+
+        res = error_table[res];
+        if (res != A_PROGRESS_DONE)
+            return res;
     }
-
-    res = aura_conn_parse_input(sock->h2_conn);
-
-    if (res == A_H2_FRAME_INCOMPLETE) {
-        /* rearm and proceed */
-        return;
-    }
-
-    if (res == A_H2_PREFACE_ERROR) {
-        /* can't proceed, bye! */
-        aura_h2_connection_close(sock->h2_conn);
-        return;
-    }
-
-    return;
 }
 
 void aura_socket_write(struct aura_srv_sock *sock) {
@@ -124,6 +150,7 @@ void aura_socket_write(struct aura_srv_sock *sock) {
 int aura_submit_error_response(struct aura_h2_conn *conn, struct aura_h2_stream *stream, int status) {
     struct aura_http_hdr_set *hdrs;
     struct aura_hpack_static_table_entry *entry;
+    size_t res;
 
     stream->state = A_H2_STREAM_STATE_CLOSING;
     stream->flags |= A_H2_STREAM_FLAG_SEND_HEADERS;
@@ -140,7 +167,9 @@ int aura_submit_error_response(struct aura_h2_conn *conn, struct aura_h2_stream 
         break;
     }
 
-    return aura_submit_response(conn, status, /*hdrs*/ NULL, /*ARRAY_SIZE(hdrs)*/ 0, stream->stream_id, SIZE_MAX, &stream->sync, true);
+    res = aura_submit_response(conn, status, /*hdrs*/ NULL, /*ARRAY_SIZE(hdrs)*/ 0, stream->stream_id, SIZE_MAX, &stream->data, true);
+    stream->state = A_H2_STREAM_STATE_CLOSED;
+    return A_H2_ERROR_NONE;
 }
 
 size_t aura_submit_response(struct aura_h2_conn *conn, int status, struct aura_http_hdr_set *hdrs,
@@ -181,7 +210,7 @@ size_t aura_submit_response(struct aura_h2_conn *conn, int status, struct aura_h
         type = is_first ? A_H2_FRAME_TYPE_HEADERS : A_H2_FRAME_TYPE_CONTINUATION;
         flags = remaining == chunk ? A_H2_FRAME_FLAG_END_HEADERS : 0;
         flags |= end_stream ? A_H2_FRAME_FLAG_END_STREAM : 0;
-        out_frame = aura_produce_header_frame(conn->mc, buf, stream_id, type, flags, _dest + offset, chunk);
+        out_frame = aura_produce_header_frame(buf, stream_id, type, flags, _dest + offset, chunk);
 
         /* add to stream outbound queue */
 

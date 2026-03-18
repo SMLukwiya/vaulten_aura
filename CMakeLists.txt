@@ -4,20 +4,21 @@ project(vaulten_aura VERSION 1.0.0)
 
 find_package(OpenSSL REQUIRED)
 
-find_package(quickjs REQUIRED)
+find_package(ZLIB REQUIRED)
 
-find_package(wasmtime REQUIRED)
+find_package(Threads REQUIRED)
 
-find_package(picotls REQUIRED)
+option(BUILD_SHARED_LIBS "Build a shared library" OFF)
 
-find_package(yaml REQUIRED)
+if (OPENSSL_VERSION VERSION_LESS "3.0.0")
+    message(FATAL_ERROR
+        "   OpenSSL 3.0.0 is the minimum supported version"
+    )
+endif()
+
+include(cmake/dependencies.cmake)
 
 set(PROJECT_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/include)
-
-# todo: find a better way
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-endif()
 
 add_compile_definitions(_GNU_SOURCE)
 # Default Paths
@@ -32,6 +33,9 @@ add_subdirectory(src/cli)
 add_subdirectory(src/daemon)
 add_subdirectory(src/server)
 
+set(CMAKE_C_FLAGS_DEBUG "-O0")
+set(CMAKE_C_FLAGS_RELEASE "-O2")
+
 #test
 enable_testing()
 add_subdirectory(tests)
@@ -44,6 +48,3 @@ include(GNUInstallDirs)
 install(
     TARGETS aura aura_daemon
 )
-
-
-# cmake --preset conan-release

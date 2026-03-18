@@ -5,6 +5,7 @@
 #include "bug_lib.h"
 #include "error_lib.h"
 #include "evt_loop_srv.h"
+#include "h2/h2_srv.h"
 #include "h2/scheduler.h"
 #include "server_srv.h"
 #include "slab_lib.h"
@@ -41,7 +42,6 @@ static inline struct aura_srv_sock *a_sock_alloc(struct aura_memory_ctx *mc) {
 
 struct aura_srv_sock *aura_socket_create(struct aura_memory_ctx *mc, int fd, struct sockaddr *addr, socklen_t addr_len, int flags) {
     struct aura_srv_sock *sock;
-    bool res;
 
     sock = a_sock_alloc(mc);
     if (!sock)
@@ -57,13 +57,18 @@ struct aura_srv_sock *aura_socket_create(struct aura_memory_ctx *mc, int fd, str
     sock->sock_len = addr_len;
     sock->flags = flags;
     sock->tls_ctx->ptls = NULL;
+    sock->in_active = false;
+    // sock->is_idle = false;
+    sock->in_reap = false;
 
-    res = aura_sliding_buffer_create(mc, &sock->plain_read_buf, 0);
-    if (!res)
+    bool res_pr = aura_sliding_buffer_create(mc, &sock->plain_read_buf, 0);
+    bool res_pw = aura_sliding_buffer_create(mc, &sock->plain_write_buf, 0);
+    if (!res_pr || !res_pw)
         goto exception_tls;
 
-    res = aura_sliding_buffer_create(mc, &sock->tls_ctx->encrypted_read_buf, 0);
-    if (!res)
+    bool res_er = aura_sliding_buffer_create(mc, &sock->tls_ctx->encrypted_read_buf, 4096);
+    bool res_ew = aura_sliding_buffer_create(mc, &sock->tls_ctx->encrypted_write_buf, 0);
+    if (!res_er || !res_ew)
         goto exception_buf;
 
     a_list_head_init(&sock->s_list);
@@ -72,20 +77,52 @@ struct aura_srv_sock *aura_socket_create(struct aura_memory_ctx *mc, int fd, str
     return sock;
 
 exception_buf:
-    aura_sliding_buffer_destroy(&sock->plain_read_buf);
+    aura_sliding_buffer_destroy(&sock->tls_ctx->encrypted_read_buf);
+    aura_sliding_buffer_destroy(&sock->tls_ctx->encrypted_write_buf);
 exception_tls:
+    aura_sliding_buffer_destroy(&sock->plain_read_buf);
+    aura_sliding_buffer_destroy(&sock->plain_write_buf);
     aura_free(sock->tls_ctx);
 exception_sock:
     aura_slab_free(sock);
     return NULL;
 }
 
+/**
+ *
+ */
+static inline void a_dispose_sock_plain_buf(struct aura_srv_sock *sock) {
+    aura_sliding_buffer_destroy(&sock->plain_read_buf);
+    aura_sliding_buffer_destroy(&sock->plain_write_buf);
+}
+
+static inline void a_dispose_tls_out_buf(struct aura_sock_tls_ctx *tls_ctx) {
+    aura_sliding_buffer_destroy(&tls_ctx->encrypted_read_buf);
+    aura_sliding_buffer_destroy(&tls_ctx->encrypted_write_buf);
+}
+
 /** */
-void aura_socket_destroy(struct aura_srv_sock *sock) {
+static void a_free_tls(struct aura_sock_tls_ctx *tls_ctx) {
+    assert(!tls_ctx->async.in_flight);
+    assert(tls_ctx->async.w_buf.base == NULL);
+
+    ptls_free(tls_ctx->ptls);
+    a_dispose_tls_out_buf(tls_ctx);
+
+    aura_free(tls_ctx);
+}
+
+/** */
+static inline void aura_socket_destroy(struct aura_srv_sock *sock) {
+    app_debug(true, 0, "aura_socket_destroy <<<");
     if (sock->tls_ctx)
         a_free_tls(sock->tls_ctx);
+    a_dispose_sock_plain_buf(sock);
 
+    if (sock->h2_conn)
+        aura_h2_connection_destroy(sock->h2_conn);
     close(sock->sock_fd);
+    aura_slab_free(sock);
 }
 
 struct aura_srv_sock *aura_socket_accept(struct aura_memory_ctx *mc, int sock_fd, int flags) {
@@ -109,7 +146,14 @@ struct aura_srv_sock *aura_socket_accept(struct aura_memory_ctx *mc, int sock_fd
         return NULL;
     res = a_set_no_tcp_delay_opt(sock->sock_fd);
     if (res != 0) {
-        app_debug(true, errno, "Failed to set tcp delay sock option for %d", cli_fd);
+        sys_debug(true, errno, "aura_socket_accept: aura_socket_create fd=%d:", cli_fd);
+        return NULL;
+    }
+
+    if (sock->tls_ctx) {
+        sock->state = A_SOCK_STATE_HANDSHAKE;
+    } else {
+        sock->state = A_SOCK_STATE_ESTABLISHED;
     }
     /* initialize connection state */
     ptls_log_init_conn_state(a_get_conn_log_state(sock), ptls_openssl_random_bytes);
@@ -117,29 +161,144 @@ struct aura_srv_sock *aura_socket_accept(struct aura_memory_ctx *mc, int sock_fd
     return sock;
 }
 
-/**
- *
- */
-static void a_free_write_buf(struct aura_srv_sock *sock) {}
+static inline bool a_wave_can_continue(struct aura_srv_wave_ctx *wc) {
+    uint64_t now_us = aura_now_us(CLOCK_MONOTONIC);
 
-/**
- *
- */
-static void aura_dispose_tls_out_buf(struct aura_sock_tls_ctx *tls_ctx) {
-    aura_sliding_buffer_destroy(&tls_ctx->encrypted_read_buf);
-    aura_sliding_buffer_destroy(&tls_ctx->encrypted_write_buf);
+    if (now_us - wc->tick_start >= wc->max_epoch_usec) {
+        wc->time_expired = true;
+        return false;
+    }
+
+    // if (wc->all_processed >= wc->max_processed)
+    //     return false;
+
+    // if (has_critical_work())
+    //     return true;
+
+    if (wc->latency_processed > 10)
+        return true;
+
+    return false;
+}
+
+static inline void a_srv_wave_ctx_init(struct aura_srv_wave_ctx *wc, struct aura_srv_ctx *srv_ctx) {
+    memset(wc, 0, sizeof(*wc));
+    wc->srv_ctx = srv_ctx;
+}
+
+static inline void a_srv_wave_ctx_reset(struct aura_srv_wave_ctx *wc) {
+    wc->wave_cnt = 0;
+    wc->max_wave = 4;
+    wc->max_critical = 64;
+    wc->max_latency = 128;
+    wc->max_epoch_usec = 2000; // 2ms
+    wc->max_tp_bytes_per_wave = 65336;
+    wc->all_processed = 0;
+    wc->critical_processed = 0;
+    wc->latency_processed = 0;
+    wc->tick_start = aura_now_us(CLOCK_MONOTONIC);
+    wc->no_new_critical = true;
+    wc->critical_empty = true;
+}
+
+// void aura_process_active_queue(st_aura_evt_loop *evt_loop) {
+void aura_process_active_queue(struct aura_srv_ctx *srv_ctx) {
+    struct aura_srv_sock *sock;
+    int res;
+
+    while (!a_list_is_empty(&srv_ctx->queues.active)) {
+        a_list_dequeue(sock, &srv_ctx->queues.active, s_list);
+
+        switch (sock->state) {
+        case A_SOCK_STATE_HANDSHAKE:
+            res = aura_handle_handshake(sock, srv_ctx);
+            if (res != A_PROGRESS_DONE)
+                break;
+        case A_SOCK_STATE_ESTABLISHED:
+            res = aura_h2_proceed(sock, srv_ctx);
+            break;
+        default:
+            break;
+        }
+
+        if (res == A_PROGRESS_BLOCKED)
+            sock->is_idle = true;
+        else {
+            srv_ctx->evt_loop->ops->remove(srv_ctx->evt_loop, sock->sock_fd);
+            a_list_add_tail(&srv_ctx->queues.reap, &sock->s_list);
+            sock->state = A_SOCK_STATE_CLOSED;
+            sock->in_reap = true;
+            sock->in_active = false;
+        }
+    }
+}
+
+void aura_process_reap_queue(struct aura_srv_ctx *srv_ctx) {
+    struct aura_srv_sock *sock;
+    int res;
+
+    while (!a_list_is_empty(&srv_ctx->queues.reap)) {
+        app_debug(true, 0, "Reaping socket with fd: %d", sock->sock_fd);
+        /* @todo: remove from timer */
+        a_list_dequeue(sock, &srv_ctx->queues.reap, s_list);
+
+        aura_socket_destroy(sock);
+    }
 }
 
 /** */
-static void a_free_tls(struct aura_sock_tls_ctx *tls_ctx) {
-    assert(!tls_ctx->async.in_flight);
-    assert(tls_ctx->async.w_buf.base == NULL);
+void aura_process_in_ready_queue(st_aura_evt_loop *evt_loop) {
+    struct aura_srv_wave_ctx wc;
 
-    ptls_free(tls_ctx->ptls);
-    aura_dispose_tls_out_buf(tls_ctx);
+    a_srv_wave_ctx_reset(&wc);
+    do {
+        wc.wave_cnt++;
 
-    aura_free(tls_ctx);
+        // a_process_critical_queue(&wc);
+        // a_process_latency_queue(evt_loop->srv_ctx);
+        // a_process_throughput_queue(evt_loop->srv_ctx);
+        // a_process_maintenance_queue(evt_loop->srv_ctx); // maintenance only when idle
+    } while (a_wave_can_continue(&wc));
 }
+
+/**/
+// static void a_process_critical_queue(struct aura_srv_wave_ctx *wc) {
+//     struct aura_srv_sock *sock;
+//     struct aura_list_head *head;
+
+//     head = &wc->srv_ctx->queues.critical;
+//     while (!a_list_is_empty(head)) {
+//         a_list_dequeue(sock, head, s_list);
+
+//         if (sock->flags & A_SOCK_CLOSED) {
+//             a_list_add_tail(&wc->srv_ctx->queues.maintenance, &sock->s_list);
+//             // if (sock->h2_conn)
+//             //     aura_h2_conn_destroy(sock->h2_conn);
+
+//             // aura_socket_destroy(sock);
+//             continue;
+//         }
+
+//         aura_h2_proceed(sock, wc->srv_ctx);
+//     }
+// }
+
+/**/
+// static void a_process_latency_queue(struct aura_srv_wave_ctx *wc) {
+//     struct aura_srv_sock *sock;
+//     struct aura_list_head *head;
+
+//     head = &wc->srv_ctx->queues.latency;
+//     while (!a_list_is_empty(head)) {
+//         a_list_dequeue(sock, head, s_list);
+//         if (sock->flags & A_SOCK_HANDSHAKE) {
+//             aura_handle_handshake(sock, wc->srv_ctx);
+//             continue;
+//         }
+
+//         aura_h2_proceed(sock, wc->srv_ctx);
+//     }
+// }
 
 /**
  *
@@ -252,7 +411,6 @@ static size_t a_generate_tls_records_from_one_frame(struct aura_srv_sock *sock, 
     if (write_buf.is_allocated) {
         app_debug(true, 0, ">>>> Allocated ptls buffer for ptls_send");
     }
-    app_debug(true, 0, ">>>> a_generate_tls_records_from_one_frame - 2: %lu", write_buf.off);
     aura_sliding_buffer_commit_write(&sock->tls_ctx->encrypted_write_buf, write_buf.off);
 
     return tls_write_size;
@@ -322,7 +480,7 @@ ssize_t aura_sock_write_tls(struct aura_srv_sock *sock) {
     read_len = aura_sliding_buffer_available_read(&sock->tls_ctx->encrypted_write_buf);
     encrypted_written = aura_write(sock->sock_fd, read_ptr, read_len);
     if (encrypted_written == -1) {
-        aura_dispose_tls_out_buf(sock->tls_ctx);
+        a_dispose_tls_out_buf(sock->tls_ctx);
         return -1;
     }
 
@@ -341,11 +499,8 @@ static inline void aura_tls_shutdown(struct aura_srv_sock *sock) {
     ptls_buffer_init(&write_buf, write_buf_small, sizeof(write_buf_small));
     res = ptls_send_alert(sock->tls_ctx->ptls, &write_buf, PTLS_ALERT_LEVEL_WARNING, PTLS_ALERT_CLOSE_NOTIFY);
     if (res != 0)
-        goto err_out;
+        return; /* @todo: return error */
     ptls_buffer_dispose(&write_buf);
-
-err_out:
-    sock->flags = A_SOCK_CLOSED;
 }
 
 /**
@@ -361,12 +516,11 @@ static inline void aura_handshake_complete(struct aura_srv_sock *sock, struct au
 
     if (sock->tls_ctx->async.sock_closed) {
         // aura_tls_shutdown(sock);
-        sock->flags = A_SOCK_CLOSED;
+        sock->state = A_SOCK_STATE_CLOSED;
         return;
     }
 
-    sock->flags &= ~A_SOCK_HANDSHAKE;
-    sock->flags |= A_SOCK_ESTABLISHED;
+    sock->state = A_SOCK_STATE_ESTABLISHED;
     sock->tls_ctx->record_overhead = ptls_get_record_overhead(sock->tls_ctx->ptls);
 }
 
@@ -429,7 +583,7 @@ static void a_handle_handshake_async(struct aura_srv_sock *sock, ptls_buffer_t *
 /**
  *
  */
-void aura_handle_handshake(struct aura_srv_sock *sock, struct aura_srv_ctx *srv_ctx) {
+int aura_handle_handshake(struct aura_srv_sock *sock, struct aura_srv_ctx *srv_ctx) {
     app_debug(true, 0, ">>>> aura_handle_handshake:");
     ptls_buffer_t w_buf;
     void *send_buf, *read_ptr;
@@ -437,15 +591,15 @@ void aura_handle_handshake(struct aura_srv_sock *sock, struct aura_srv_ctx *srv_
     int res, n_read;
     int ret_val;
 
-    n_read = aura_sliding_buffer_append_from_fd(&sock->tls_ctx->encrypted_read_buf, sock->sock_fd, 2048);
+    n_read = aura_sliding_buffer_append_from_fd(&sock->tls_ctx->encrypted_read_buf, sock->sock_fd, 4096);
     if (n_read == -1) {
-        sock->flags = A_SOCK_CLOSED;
-        return;
+        sock->state = A_SOCK_STATE_CLOSED;
+        return A_PROGRESS_ERROR;
     }
 
     if (n_read == 0 && aura_sliding_buffer_is_empty(&sock->tls_ctx->encrypted_read_buf))
         /* add back for polling */
-        return;
+        return A_PROGRESS_BLOCKED;
 
     if (sock->tls_ctx->async.w_buf.base != NULL) {
         w_buf = sock->tls_ctx->async.w_buf;
@@ -460,7 +614,7 @@ void aura_handle_handshake(struct aura_srv_sock *sock, struct aura_srv_ctx *srv_
 
     if (res == PTLS_ERROR_ASYNC_OPERATION) {
         // proceed async
-        return;
+        return A_PROGRESS_BLOCKED;
     }
 
     /* send stuff if available */
@@ -471,10 +625,15 @@ void aura_handle_handshake(struct aura_srv_sock *sock, struct aura_srv_ctx *srv_
 
     if (res == 0) {
         aura_handshake_complete(sock, srv_ctx);
+        ret_val = A_PROGRESS_DONE;
     } else if (res == PTLS_ERROR_IN_PROGRESS) {
         /* add back so we can rearm sock fd and try again */
+        ret_val = A_PROGRESS_BLOCKED;
     } else {
-        sock->flags = A_SOCK_CLOSED;
+        sock->state = A_SOCK_STATE_CLOSED;
         aura_handshake_failed(sock);
+        ret_val = A_PROGRESS_ERROR;
     }
+
+    return ret_val;
 }

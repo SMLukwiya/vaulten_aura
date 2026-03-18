@@ -20,7 +20,7 @@ void aura_dmn_function_list(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
             evt.state = A_FN_OP_STATE_FAILED;
             evt.msg_len = 0;
 
-            aura_send_resp(cli_fd, (void *)&evt, sizeof(evt));
+            aura_resp_send(cli_fd, (void *)&evt, sizeof(evt));
             goto out;
         }
     }
@@ -43,7 +43,7 @@ void aura_dmn_function_list(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
 
         struct aura_fn_list *fl = (struct aura_fn_list *)evt_ptr->_msg;
 
-        aura_send_resp(cli_fd, (void *)buf, len);
+        aura_resp_send(cli_fd, (void *)buf, len);
     } else {
         size_t fn_cnt;
 
@@ -65,7 +65,7 @@ void aura_dmn_function_list(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
                 fn_list->fns[i].fn_version = fns->funcs[i].fn_version;
             }
 
-            aura_send_resp(cli_fd, (void *)buf, len);
+            aura_resp_send(cli_fd, (void *)buf, len);
         }
     }
 

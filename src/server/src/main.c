@@ -6,9 +6,11 @@
 
 #include "blobber_lib.h"
 #include "db/db.h"
+#include "db/db_broker.h"
 #include "error_lib.h"
 #include "evt_loop_srv.h"
 #include "function_lib.h"
+#include "heap_lib.h"
 #include "ipc_lib.h"
 #include "memory_lib.h"
 #include "openssl/err.h"
@@ -27,6 +29,7 @@
 #include "server_srv.h"
 #include "slab_lib.h"
 #include "socket_srv.h"
+#include "string_lib.h"
 #include "types_lib.h"
 #include "unix_socket_lib.h"
 
@@ -179,20 +182,19 @@ static void a_handle_ocsp_timer_event(int timer_fd, struct aura_ocsp_updater *up
  */
 struct aura_srv_host_conf *a_resolve_sni(struct aura_srv_listener_conf *lc, const char *server_name, uint32_t *off) {
     aura_rax_node_t *host_node;
-    int host_conf_off;
 
     host_node = aura_rax_lookup(lc->sni, server_name, sizeof(server_name) - 1);
     if (!host_node)
         return NULL;
 
     if (host_node->data.type != A_RAX_DATA_INT) {
-        app_debug(true, 0, "Incorrect data format, something fishy going on: FIX NOW!");
+        app_debug(true, 0, "a_resolve_sni: Incorrect data format!: %d", host_node->data.type);
         return NULL;
     }
-    host_conf_off = host_node->data.int_val;
-    *off = host_conf_off;
+    /* Host config offset in host pool */
+    *off = host_node->data.int_val;
 
-    return &glob_conf->host_pool.hosts[host_conf_off];
+    return &glob_conf->host_pool.hosts[*off];
 }
 
 static struct addrinfo *a_resolve_address(const char *hostname, const char *serv_name, int protocol, int sock_type) {
@@ -229,7 +231,7 @@ static int a_on_client_hello(ptls_on_client_hello_t *self, ptls_t *tls_conn, ptl
     struct aura_srv_host_conf *host_config;
     struct aura_srv_tls_iden *chosen_tls_identity, *tls_identity;
     struct aura_srv_listener_conf *lc;
-    struct a_super_on_client_hello_ptls *super_st;
+    struct a_super_on_client_hello_ptls *super_self_st;
     bool prefer_raw_public_key;
     struct aura_srv_sock *conn_data;
     int res;
@@ -237,18 +239,20 @@ static int a_on_client_hello(ptls_on_client_hello_t *self, ptls_t *tls_conn, ptl
     if (hello_params->incompatible_version)
         return 0;
 
-    super_st = (struct a_super_on_client_hello_ptls *)self;
-    lc = super_st->listener;
-    conn_data = (*ptls_get_data_ptr(tls_conn)); /* struct aura_srv_sock * */
+    super_self_st = (struct a_super_on_client_hello_ptls *)self;
+    lc = super_self_st->listener;
+    /* struct aura_srv_sock */
+    conn_data = (*ptls_get_data_ptr(tls_conn));
 
     if (hello_params->server_name.base != NULL) {
         host_config = a_resolve_sni(lc, hello_params->server_name.base, &conn_data->host_conf_off);
-        assert(host_config != NULL);
+        A_BUG_ON_2(!host_config, true);
         ptls_set_server_name(tls_conn, (const char *)hello_params->server_name.base, hello_params->server_name.len);
         ptls_log_recalc_conn_state(a_get_conn_log_state(conn_data));
     } else {
-        host_config = super_st->listener->fb_host_conf;
-        assert(host_config != NULL);
+        /* Use fallback host config */
+        host_config = super_self_st->listener->fb_host_conf;
+        A_BUG_ON_2(!host_config, true);
     }
 
     prefer_raw_public_key = hello_params->server_certificate_types.count > 0 && memchr(hello_params->server_certificate_types.list, PTLS_CERTIFICATE_TYPE_RAW_PUBLIC_KEY, hello_params->server_certificate_types.count) != NULL;
@@ -274,7 +278,6 @@ static int a_on_client_hello(ptls_on_client_hello_t *self, ptls_t *tls_conn, ptl
     }
 identity_found:
     ptls_set_context(tls_conn, chosen_tls_identity->contexts.tls1_3.ctx);
-    app_debug(true, 0, "Identity found: Negotiated protocols %d", hello_params->negotiated_protocols.count);
 
     /* ALNP */
     if (hello_params->negotiated_protocols.count != 0) {
@@ -580,16 +583,16 @@ static int a_setup_tls(struct aura_srv_listener_conf *lc, ptls_key_exchange_algo
                        ptls_iovec_t raw_public_key, struct aura_srv_tls_iden *iden,
                        bool client_verify) {
     struct aura_ptls_super_ctx *ptls_super_ctx;
-    X509 *cert;
+    // X509 *cert;
     EVP_PKEY *key;
-    X509_STORE *ca_store;
-    STACK_OF(X509) * cert_chain;
+    // X509_STORE *ca_store;
+    // STACK_OF(X509) * cert_chain;
     int res;
 
-    ptls_super_ctx = malloc(sizeof(*ptls_super_ctx));
+    ptls_super_ctx = calloc(1, sizeof(*ptls_super_ctx));
     if (!ptls_super_ctx)
         app_exit(true, errno, "Out of memory");
-    memset(ptls_super_ctx, 0, sizeof(*ptls_super_ctx));
+    // memset(ptls_super_ctx, 0, sizeof(*ptls_super_ctx));
 
     *ptls_super_ctx = (struct aura_ptls_super_ctx){
       .ctx = {
@@ -632,9 +635,9 @@ static int a_setup_tls(struct aura_srv_listener_conf *lc, ptls_key_exchange_algo
       },
     };
 
-    cert = a_load_cert(iden->cert.cert_file);
-    if (cert == NULL)
-        app_exit(true, 0, "a_load_cert() failed");
+    // cert = a_load_cert(iden->cert.cert_file);
+    // if (cert == NULL)
+    //     app_exit(true, 0, "a_load_cert() failed");
 
     key = a_load_key(iden->key.key_file);
     if (!key)
@@ -657,7 +660,7 @@ static int a_setup_tls(struct aura_srv_listener_conf *lc, ptls_key_exchange_algo
 
     if (raw_public_key.base == NULL) {
         res = ptls_load_certificates(&ptls_super_ctx->ctx, iden->cert.cert_file);
-        assert(res == 0);
+        A_BUG_ON_2(res != 0, true);
     } else {
         ptls_super_ctx->ctx.certificates.list = malloc(sizeof(ptls_super_ctx->ctx.certificates.list[0]));
         ptls_super_ctx->ctx.certificates.list[0] = raw_public_key;
@@ -668,26 +671,6 @@ static int a_setup_tls(struct aura_srv_listener_conf *lc, ptls_key_exchange_algo
 
     iden->contexts.tls1_3.ctx = &ptls_super_ctx->ctx;
     return res;
-}
-
-/**
- *
- */
-static void load_tls_identity(const aura_blob_param_st *blob, const st_aura_blob_node cert_file_node,
-                              ptls_iovec_t *raw_pubkey, ptls_iovec_t *certs) {
-    size_t raw_pubkey_count, cert_cnt;
-    const char *cert_file;
-    int res;
-
-    cert_file = blob->strtab + cert_file_node.str_offset;
-    res = ptls_load_pem_objects(cert_file, "PUBLIC KEY", raw_pubkey, 1, &raw_pubkey_count);
-    if (res != 0) {
-        //
-    }
-
-    // load private key with ssl
-
-    /** @todo: client verification */
 }
 
 /**
@@ -720,7 +703,7 @@ static struct aura_srv_sock *a_server_init(int type, struct sockaddr *serv_addr,
 
     aura_set_fd_flag(fd, O_NONBLOCK);
 
-    sock = aura_socket_create(&glob_conf->mem_ctx, fd, serv_addr, addr_len, A_SOCK_LISTENER);
+    sock = aura_socket_create(&glob_conf->mem_ctx, fd, serv_addr, addr_len, A_SOCK_FLAG_LISTENER);
     if (!sock)
         goto exception;
 
@@ -889,12 +872,12 @@ static int a_tls_add_iden(const aura_blob_param_st *blob, const st_aura_blob_nod
                           ptls_ech_create_opener_t *create_opener, ptls_iovec_t retry_configs,
                           struct aura_srv_listener_conf *lc) {
 
-    struct aura_srv_tls_iden *iden, *dest;
+    struct aura_srv_tls_iden *iden; //, *dest;
     const st_aura_blob_node *entry_node;
     const st_aura_blob_kv_pair *kv;
     ptls_iovec_t raw_pubkey = {NULL};
     uint32_t kv_cnt, kv_idx, i;
-    const char *key, *cert_file = NULL, *key_file = NULL, *tag = NULL;
+    const char *key, *cert_chain_file = NULL, *key_file = NULL, *tag = NULL;
     int res;
 
     kv_cnt = tls_ident_entry_node->map.kv_cnt;
@@ -906,8 +889,9 @@ static int a_tls_add_iden(const aura_blob_param_st *blob, const st_aura_blob_nod
         key = blob->strtab + kv->key_offset;
         entry_node = &blob->nodes[kv->node_idx];
 
+        /* What is loaded is the chain cert file */
         if (strcmp(key, "cert_file") == 0) {
-            cert_file = blob->strtab + entry_node->str_offset;
+            cert_chain_file = blob->strtab + entry_node->str_offset;
             continue;
         }
 
@@ -922,12 +906,8 @@ static int a_tls_add_iden(const aura_blob_param_st *blob, const st_aura_blob_nod
         }
     }
 
-    if (!a_tls_is_new(lc, cert_file, key_file))
+    if (!a_tls_is_new(lc, cert_chain_file, key_file))
         return 0;
-
-    iden = malloc(sizeof(*iden));
-    if (iden == NULL)
-        goto err;
 
     if (lc->tls_pool.cnt >= lc->tls_pool.cap) {
         lc->tls_pool.cap = lc->tls_pool.cap == 0 ? 5 : lc->tls_pool.cap * 2;
@@ -936,13 +916,12 @@ static int a_tls_add_iden(const aura_blob_param_st *blob, const st_aura_blob_nod
             goto err;
     }
 
-    dest = &lc->tls_pool.idens[lc->tls_pool.cnt];
-    memcpy(dest, iden, sizeof(*iden));
-    dest->cert.cert_file = strdup(cert_file);
-    dest->key.key_file = strdup(key_file);
-    dest->tag = tag ? strdup(tag) : NULL;
+    iden = &lc->tls_pool.idens[lc->tls_pool.cnt];
+    iden->cert.cert_file = strdup(cert_chain_file);
+    iden->key.key_file = strdup(key_file);
+    iden->tag = tag ? strdup(tag) : NULL;
 
-    res = a_setup_tls(lc, key_ex, cs, create_opener, retry_configs, 0, raw_pubkey, dest, false);
+    res = a_setup_tls(lc, key_ex, cs, create_opener, retry_configs, 0, raw_pubkey, iden, false);
     lc->tls_pool.cnt++;
     return 0;
 err:
@@ -957,14 +936,14 @@ static inline int a_add_host_conf(struct aura_srv_host_conf *hc) {
     struct aura_srv_host_conf *conf;
     size_t host_cap = glob_conf->host_pool.cap;
     size_t host_cnt = glob_conf->host_pool.cnt;
-    int res = -1;
+    int res;
 
     if (host_cnt >= host_cap) {
         host_cap = host_cap == 0 ? 5 : host_cap * 2;
         glob_conf->host_pool.cap = host_cap;
         glob_conf->host_pool.hosts = realloc(glob_conf->host_pool.hosts, sizeof(*conf) * host_cap);
         if (!glob_conf->host_pool.hosts)
-            return res;
+            return -1;
     }
 
     conf = &glob_conf->host_pool.hosts[glob_conf->host_pool.cnt];
@@ -1209,15 +1188,12 @@ struct aura_srv_ctx *a_server_ctx_init(st_aura_evt_loop *loop, struct aura_srv_l
     ctx->glob_conf = glob_conf;
     ctx->evt_loop = loop;
     ctx->listener_conf = lc;
+    ctx->inflight = 0;
+    //
+    a_list_head_init(&ctx->queues.active);
+    a_list_head_init(&ctx->queues.reap);
+    //
     loop->srv_ctx = ctx;
-    //
-    a_list_head_init(&ctx->batches.queues.handshake_queue);
-    a_list_head_init(&ctx->batches.queues.fast_lane_queue);
-    a_list_head_init(&ctx->batches.queues.standard_queue);
-    a_list_head_init(&ctx->batches.queues.background_queue);
-    a_list_head_init(&ctx->batches.queues.timeout_queue);
-    a_list_head_init(&ctx->batches.queues.write_queue);
-    //
 
     return ctx;
 }
@@ -1229,31 +1205,115 @@ static inline void a_close_idle_connections(struct aura_srv_ctx *ctx) {
     /**/
 }
 
-/**
- * Parse a function config blob and add it
- * to the function list of a route
- */
-int a_parse_function_config(struct iovec data) {
+/* Find host by hostname */
+static struct aura_srv_host_conf *a_find_host(const char *hostname) {
+    for (int i = 0; i < glob_conf->host_pool.cnt; ++i) {
+        if (strcasecmp(hostname, glob_conf->host_pool.hosts[i].authority.hostname.base) == 0) {
+            return &glob_conf->host_pool.hosts[i];
+        }
+    }
 
-    // res = aura_route_add(&host->router, 1, &fn);
+    return NULL;
+}
 
-    return 0;
+void a_load_fn_destructor(const void *stat) {
+    struct aura_fn_stat_wrapper *_stat;
+
+    if (!stat)
+        return;
+    _stat = (struct aura_fn_stat_wrapper *)stat;
+    aura_free((void *)_stat->fn_stat);
+    aura_free((void *)_stat->fn_name);
+    aura_free(_stat);
 }
 
 /**
- * Load busy functions
+ * Load top k busy functions
  */
-static void a_preload_functions() {
-    struct aura_iovec data;
-    int res;
+static void a_preload_functions(struct aura_memory_ctx *mc, int dmn_sock_fd) {
+    struct aura_heap *heap;
+    struct aura_functions *fns;
+    struct aura_fn_stat *fn_stat;
+    struct aura_fn_stat_wrapper *aux_stat, *_aux_stat;
+    struct aura_fn *fn;
+    struct aura_srv_host_conf *host;
+    int res, error;
 
-    res = aura_db_record_for_each(
-      glob_conf->db_handle, A_MAX_PRELOAD_FN_CNT, A_DB_NS_FN,
-      A_DB_SCHEMA_FN_META_V1, a_parse_function_config);
+    heap = aura_heap_create(A_MAX_PRELOAD_FN_CNT, aura_fn_stat_compare);
+    if (!heap)
+        sys_exit(true, errno, "a_preload_functions error:");
 
-    if (res != 0) {
-        /**/
+    fns = aura_fn_list_fetch_broker(mc, dmn_sock_fd, &error);
+    /* No functions deployed yet! */
+    if (!fns) {
+        /* Fatal error */
+        if (error < 0)
+            sys_exit(true, errno, "a_preload_functions: aura_fn_list_fetch error:");
+        return;
     }
+
+    /**
+     * Load the top k functions using their stats
+     */
+    for (int i = 0; i < fns->func_cnt; ++i) {
+        fn_stat = aura_fn_stat_fetch_broker(mc, fns->funcs[i].fn_name, fns->funcs->fn_version, dmn_sock_fd);
+        if (!fn_stat)
+            continue;
+
+        aux_stat = aura_alloc(mc, sizeof(*aux_stat));
+        if (!aux_stat)
+            sys_exit(true, errno, "a_preload_functions: aura_alloc aux_stat error:");
+
+        aux_stat->fn_stat = fn_stat;
+        aux_stat->fn_name = aura_strdup(mc, fns->funcs[i].fn_name);
+        aux_stat->fn_version = fns->funcs[i].fn_version;
+
+        if (!aura_heap_is_full(heap)) {
+            aura_min_heap_push(heap, aux_stat);
+            continue;
+        }
+
+        /**
+         * If the heap is full, check if the current stat is "higher" than the
+         * min of the heap, if so, replace the min with the current stat.
+         */
+        _aux_stat = aura_heap_peek(heap);
+        if (aura_heap_is_full(heap) && aura_fn_stat_compare((void *)aux_stat, (void *)_aux_stat) > 0) {
+            _aux_stat = aura_min_heap_delete(heap);
+            a_load_fn_destructor(_aux_stat);
+
+            aura_min_heap_push(heap, aux_stat);
+            continue;
+        }
+
+        /**
+         * If the heap is full and the current stat does not
+         * qualify to be added to the heap, simply get rid of it
+         */
+        a_load_fn_destructor(_aux_stat);
+    }
+
+    /**
+     * Add the loaded functions to their respective routes
+     */
+    aura_heap_for_each(heap, aux_stat) {
+        fn = aura_fn_load_broker(mc, aux_stat->fn_name, aux_stat->fn_version, dmn_sock_fd);
+        if (!fn) {
+            /* Technically should not be possible! */
+        } else {
+            host = a_find_host(fn->meta.host);
+            if (!host) {
+                aura_fn_destroy(fn);
+                continue;
+            }
+            if (!aura_route_add(&host->router, fn)) {
+                aura_fn_destroy(fn);
+            }
+        }
+    }
+
+    /* Clean up heap */
+    aura_heap_destroy(heap, a_load_fn_destructor);
 }
 
 /**
@@ -1264,17 +1324,15 @@ static inline void a_handle_internal_request(st_aura_evt_loop *loop) {
     struct aura_msg_hdr hdr, res_hdr;
     int res;
 
-    res = aura_recv_msg(loop->dmn_fd, &msg);
-    aura_dump_msg(&msg, true);
+    res = aura_msg_recv(loop->dmn_fd, &msg);
     if (res < 0) {
-        sys_debug(true, errno, "aura_recv_msg failed: res: %d", res);
-        loop->srv_ctx->batches.internal = false;
+        sys_debug(true, errno, "a_handle_internal_request: aura_msg_recv: res: %d", res);
+        loop->srv_ctx->internal = false;
         aura_evt_loop_stop(loop);
         return;
     } else if (res == 0) {
         /* daemon stopped */
-        app_debug(true, 0, "DAEMON STOPPED");
-        loop->srv_ctx->batches.internal = false;
+        loop->srv_ctx->internal = false;
         aura_evt_loop_stop(loop);
         return;
     }
@@ -1293,7 +1351,7 @@ static inline void a_handle_internal_request(st_aura_evt_loop *loop) {
             aura_evt_loop_stop(loop);
             break;
         case A_CMD_FN_DEPLOY:
-            a_parse_function_config(msg.data);
+            // a_parse_function_config(msg.data);
 
             break;
         default:
@@ -1305,9 +1363,8 @@ static inline void a_handle_internal_request(st_aura_evt_loop *loop) {
         app_debug(true, 0, "Unknown msg type %d", hdr.type);
     }
     /* add back to evt loop */
-    loop->ops->add(loop, loop->dmn_fd, AURA_EVENT_READ);
-    // aura_evt_loop_add(loop, loop->dmn_fd, AURA_EVENT_READ);
-    loop->srv_ctx->batches.internal = false;
+    aura_evt_loop_add(loop, loop->dmn_fd, AURA_EVENT_READ);
+    loop->srv_ctx->internal = false;
 }
 
 /**
@@ -1351,71 +1408,31 @@ int a_run_loop(struct aura_srv_ctx *ctx) {
     st_aura_evt_loop *loop;
     struct aura_srv_sock *s, *s1;
     struct aura_msg msg;
-    int max_accept = 500;
-    int timeout_ms = 1000;
+    int max_accept;
+    int64_t timeout;
+    uint64_t t1, t2;
     int num_of_events, res, fd;
 
     loop = ctx->evt_loop;
     aura_evt_loop_start(loop);
     while (loop->running) {
         a_close_idle_connections(ctx);
-        // loop->ops->poll(loop, timeout_ms, max_accept);
-        aura_evt_loop_poll(loop, timeout_ms, max_accept);
 
-        if (loop->srv_ctx->batches.internal == true) {
+        t1 = aura_evt_loop_get_timeout(&glob_conf->timer_wheel);
+        t2 = aura_srv_opt_get_candidate_epoll_timeout(&glob_conf->optimizer);
+        max_accept = aura_srv_opt_get_accept_budget(&glob_conf->optimizer, ctx->inflight);
+        /* Get the min of the two calculations */
+        timeout = a_min(t1, t2);
+
+        aura_evt_loop_poll(loop, timeout, max_accept);
+
+        if (loop->srv_ctx->internal == true) {
             a_handle_internal_request(loop);
         }
 
-        /* process handshakes */
-        a_list_for_each(s, &loop->srv_ctx->batches.queues.handshake_queue, s_list) {
-            // loop->ops->remove(loop, s->sock_fd);
-            aura_evt_loop_remove(loop, s->sock_fd);
-            aura_handle_handshake(s, ctx);
-        }
+        aura_process_active_queue(loop->srv_ctx);
 
-        /* Move completed handshakes and also close some folks! */
-        a_list_for_each_safe_to_delete(s, s1, &loop->srv_ctx->batches.queues.handshake_queue, s_list) {
-            if ((s->flags & A_SOCK_HANDSHAKE) == 0) {
-                a_list_delete(&s->s_list);
-                a_list_add(&loop->srv_ctx->batches.queues.fast_lane_queue, &s->s_list);
-            } else if ((s->flags & A_SOCK_CLOSED) != 0) {
-                aura_socket_destroy(s);
-                a_list_delete(&s->s_list);
-                app_debug(true, 0, "Should close this socket");
-            }
-        }
-
-        /* process folks who are ready! */
-        a_list_for_each(s, &loop->srv_ctx->batches.queues.fast_lane_queue, s_list) {
-            // loop->ops->remove(loop, s->sock_fd);
-            aura_evt_loop_remove(loop, s->sock_fd);
-            aura_conn_proceed(s, ctx);
-        }
-
-        /* write to folks to are wise */
-        a_list_for_each(s, &loop->srv_ctx->batches.queues.write_queue, s_list) {
-            /**/
-        }
-
-        /* close folks who need closing! */
-        a_list_for_each_safe_to_delete(s, s1, &loop->srv_ctx->batches.queues.fast_lane_queue, s_list) {
-            if ((s->flags & A_SOCK_CLOSED) != 0) {
-                a_list_delete(&s->s_list);
-                app_debug(true, 0, "Should close this socket");
-            }
-        }
-
-        /* rearm hopeful clients! */
-        a_list_for_each(s, &loop->srv_ctx->batches.queues.handshake_queue, s_list) {
-            // loop->ops->add(loop, s->sock_fd, AURA_EVENT_READ);
-            aura_evt_loop_add(loop, s->sock_fd, AURA_EVENT_READ);
-        }
-
-        /* rearm clients who mean business! */
-        a_list_for_each(s, &loop->srv_ctx->batches.queues.fast_lane_queue, s_list) {
-            // loop->ops->add(loop, s->sock_fd, AURA_EVENT_READ);
-            aura_evt_loop_add(loop, s->sock_fd, AURA_EVENT_READ);
-        }
+        aura_process_reap_queue(loop->srv_ctx);
 
         /* handle others */
     }
@@ -1453,6 +1470,9 @@ static inline int a_glob_conf_init() {
     if (!glob_conf->db_handle)
         sys_exit(true, errno, "a_glob_conf_init: aura_db_open error");
 
+    aura_timer_wheel_init(&glob_conf->timer_wheel);
+    aura_srv_opt_init(&glob_conf->optimizer);
+
     return 0;
 }
 
@@ -1489,7 +1509,7 @@ int main(int argc, char *argv[]) {
     aura_scan_str(argv[1], "%" SCNu32, &sock_fd);
     /** @todo: check against OPENMAX */
 
-    aura_recv_msg(sock_fd, &msg);
+    aura_msg_recv(sock_fd, &msg);
     config = msg.data.iov_base;
 
     glob_conf = alloca(sizeof(*glob_conf));
@@ -1546,12 +1566,13 @@ int main(int argc, char *argv[]) {
         aura_evt_loop_add(loop, listener_conf->fd_pool.fds[i], AURA_EVENT_READ);
     }
 
-    a_preload_functions();
+    a_preload_functions(&glob_conf->mem_ctx, sock_fd);
 
     res = a_run_loop(ctx);
+    sys_debug(true, errno, "Server exiting");
 
     exit(res);
 exception:
-    sys_info(true, errno, "Server exiting");
+    sys_debug(true, errno, "Server exiting_error");
     exit(1);
 }

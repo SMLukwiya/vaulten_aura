@@ -14,6 +14,12 @@ typedef enum {
     A_H2_PROCESS_TERMINATE
 } aura_h2_process_result_t;
 
+typedef enum {
+    A_PROGRESS_DONE = 0,
+    A_PROGRESS_ERROR,
+    A_PROGRESS_BLOCKED,
+} aura_process_error;
+
 #define A_H2_DEFAULT_OUTPUT_BUF_SIZE 81920          /* connection flow control window plus alpha */
 #define A_H2_DEFAULT_OUTPUT_BUF_SOFT_MAX 524288     /* 512KB */
 #define A_H2_DEFAULT_OUTPUT_BUF_WRITE_TIMEOUT 60000 /* 60s close if write not complete */
@@ -35,5 +41,8 @@ void aura_socket_write(struct aura_srv_sock *sock);
 size_t aura_submit_response(struct aura_h2_conn *conn, int status, struct aura_http_hdr_set *hdrs,
                             size_t num_of_hdrs, uint32_t stream_id, size_t content_length,
                             struct aura_sliding_buf *buf, bool end_stream);
+
+/**/
+// void aura_h2_proceed(struct aura_srv_sock *sock, struct aura_srv_ctx *srv_ctx);
 
 #endif

@@ -17,23 +17,23 @@ typedef enum {
     A_H2_STREAM_FLAG_READ_HEADERS = 1 << 2,
     A_H2_STREAM_FLAG_HEADERS_RECEIVED = 1 << 3,
     A_H2_STREAM_FLAG_READ_DATA = 1 << 4,
-    A_H2_STREAM_FLAG_CONTINUATION = 1 << 5,
-    A_H2_STREAM_FLAG_PAUSED = 1 << 6,
-    A_H2_STREAM_FLAG_PUSH = 1 << 7,
-    A_H2_STREAM_FLAG_SEND_HEADERS = 1 << 8,
-    A_H2_STREAM_FLAG_HEADERS_SENT = 1 << 9
+    A_H2_STREAM_FLAG_EXECUTING = 1 << 5,
+    A_H2_STREAM_FLAG_CONTINUATION = 1 << 6,
+    A_H2_STREAM_FLAG_PAUSED = 1 << 7,
+    A_H2_STREAM_FLAG_PUSH = 1 << 8,
+    A_H2_STREAM_FLAG_SEND_HEADERS = 1 << 9,
+    A_H2_STREAM_FLAG_HEADERS_SENT = 1 << 10
 } aura_h2_stream_flags_t;
 
 typedef enum {
     A_H2_STREAM_STATE_IDLE,
-    A_H2_STREAM_STATE_OPENING,
-    A_H2_STREAM_STATE_OPENED,
+    A_H2_STREAM_STATE_OPEN,
     A_H2_STREAM_STATE_RESERVED_LOCAL,
     A_H2_STREAM_STATE_RESERVED_REMOTE,
-    A_H2_STREAM_STATE_RESERVED, /* used to cover both server and client settings */
+    A_H2_STREAM_STATE_RESERVED, /* used to cover both local and peer's reserved states  */
     A_H2_STREAM_STATE_HALF_CLOSED_REMOTE,
     A_H2_STREAM_STATE_HALF_CLOSED_LOCAL,
-    A_H2_STREAM_STATE_CLOSING,
+    A_H2_STREAM_STATE_CLOSING, /* Used by stream in final step receiving trailer headers + possible continuations */
     A_H2_STREAM_STATE_CLOSED
 } aura_h2_stream_state_t;
 
@@ -58,7 +58,7 @@ struct aura_h2_stream {
     struct timespec start_ts;
     uint16_t status_code; /* server response status code */
 
-    struct aura_sliding_buf sync;
+    // struct aura_sliding_buf sync;
     struct aura_sliding_buf data;
     struct aura_h2_stream_outbound_queue outbound_queue;
 
@@ -89,6 +89,34 @@ static inline size_t a_h2_get_stream_local_window_size(struct aura_h2_stream *st
 
 static inline size_t a_h2_get_stream_peer_window_size(struct aura_h2_stream *stream) {
     return stream->peer_window_size.available;
+}
+
+/**
+ * Check if given stream can receive headers
+ * Returns 0 if it can, otherwise returns error and indicated error level
+ * is the stream cannot receive headers.
+ */
+static inline int aura_h2_stream_headers_allowed(struct aura_h2_stream *stream, bool *is_stream_error) {
+    if (stream->state == A_H2_STREAM_STATE_RESERVED_LOCAL || stream->flags & A_H2_STREAM_FLAG_CONTINUATION) {
+        *is_stream_error = false;
+        return A_H2_PROTOCOL_ERROR;
+    }
+
+    if (stream->state == A_H2_STREAM_STATE_HALF_CLOSED_REMOTE) {
+        *is_stream_error = true;
+        return A_H2_STREAM_CLOSED_ERROR;
+    }
+
+    if (stream->state == A_H2_STREAM_STATE_CLOSED) {
+        *is_stream_error = false;
+        return A_H2_STREAM_CLOSED_ERROR;
+    }
+
+    return A_H2_ERROR_NONE;
+}
+
+static inline bool aura_h2_stream_trailing_headers(struct aura_h2_stream *stream) {
+    return stream->state == A_H2_STREAM_STATE_CLOSING;
 }
 
 /**

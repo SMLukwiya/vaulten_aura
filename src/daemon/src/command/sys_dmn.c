@@ -21,7 +21,7 @@ void aura_dmn_system_stop(int cli_fd, struct aura_daemon_glob_conf *glob_conf) {
 
     aura_db_close(glob_conf->db_handle);
 
-    res = aura_send_resp(cli_fd, NULL, 0);
+    res = aura_resp_send(cli_fd, NULL, 0);
 
     close(cli_fd);
 }

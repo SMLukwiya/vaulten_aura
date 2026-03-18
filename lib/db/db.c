@@ -237,10 +237,9 @@ static AURA_DB *a_db_alloc(int namelen) {
     memset(db->record_buf, 0, A_DB_REC_BUF_SIZE);
 
     bucket_arr_size = sizeof(struct aura_db_bucket_entry) * A_DB_BUCKET_CNT;
-    db->buckets = malloc(bucket_arr_size);
+    db->buckets = calloc(1, bucket_arr_size);
     if (!db->buckets)
         goto exception;
-    memset(db->buckets, 0, bucket_arr_size);
     db->shutdown = false;
     db->is_busy = false;
     db->append_off = 0;
@@ -410,11 +409,6 @@ AURA_DBHANDLE aura_db_open(struct aura_memory_ctx *mc, const char *app_path, con
     bucket_arr_size = sizeof(struct aura_db_bucket_entry) * A_DB_BUCKET_CNT;
     size_t file_size = sizeof(struct aura_db_hdr) + bucket_arr_size;
     if ((oflag & (O_CREAT | O_TRUNC)) == (O_CREAT | O_TRUNC)) {
-        /*
-         * If the database was created, we have to initialize
-         * it.  Write lock the entire file so that we can stat
-         * it, check its size, and initialize it, atomically.
-         */
         if (fstat(db->db_fd, &statbuf) < 0)
             sys_exit(true, errno, "db_open: fstat error");
 
@@ -1029,7 +1023,6 @@ int aura_db_record_fetch(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_
     /* Value possible in cache */
     pthread_mutex_lock(&db->db_lock);
     if (offset >= db->curr_file_size) {
-
         hdr = a_db_record_cache_fetch(db, namespace, schema_id, key, offset, hash);
         if (hdr) {
             if (hdr->flags & A_DB_FLAG_REC_TOMBSTONE) {
@@ -1047,18 +1040,14 @@ int aura_db_record_fetch(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_
 
                 data_out->rec_meta.timestamp = hdr->timestamp;
                 memcpy(data_out->rec_meta.check_sum, hdr->check_sum, DIGEST_LEN);
-
                 memcpy(data_out->data.base, (char *)hdr + sizeof(*hdr) + hdr->key_len, hdr->data_len);
-                pthread_mutex_unlock(&db->db_lock);
             }
+            pthread_mutex_unlock(&db->db_lock);
 
             return 0;
         }
     }
     pthread_mutex_unlock(&db->db_lock);
-
-    if (a_readw_lock(db->db_fd, 0, SEEK_SET, 0) < 0)
-        sys_exit(true, errno, "aura_db_record_fetch: a_readw_lock error:");
 
     while (offset != 0) {
         res = pread(db->db_fd, &rec_hdr, sizeof(rec_hdr), offset);
@@ -1106,9 +1095,6 @@ int aura_db_record_fetch(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_
 
         offset = rec_hdr.prev_off;
     }
-
-    if (a_unlock(db->db_fd, 0, SEEK_SET, 0) < 0)
-        sys_exit(true, errno, "aura_db_record_fetch: a_unlock error:");
 
     return A_DB_REC_NOT_FOUND;
 
@@ -1858,7 +1844,7 @@ static int a_db_compact(AURA_DB *db) {
     len = ptr - db->name + 2;
     snprintf(compact_file_path, len, "%s", db->name);
     strcat(compact_file_path, AURA_DB_COMPACT_FILE);
-    new_fd = open(compact_file_path, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU, A_DB_FILE_MODE);
+    new_fd = open(compact_file_path, O_RDWR | O_CREAT | O_TRUNC, A_DB_FILE_MODE);
     if (new_fd < 0) {
         free(comp_tab.key_buf);
         return -1;

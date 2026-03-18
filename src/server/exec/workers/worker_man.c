@@ -14,31 +14,41 @@ static inline const st_aura_runtime_ops *a_wq_get_backend(aura_wq_backend_t back
         return NULL;
 }
 
+struct aura_qjs_thread_routine_arg {
+    struct aura_work_queue *wq;
+    struct aura_fn *fn;
+    bool is_part_of_min;
+};
 /**
  * Worker thread routine, runs its own quickjs runtime
  * and context
  */
-void *aura_qjs_thread_routine(void *arg) {
+void *aura_qjs_thread_routine(void *_arg) {
     struct timespec timeout;
+    struct aura_qjs_thread_routine_arg *arg;
     struct aura_work_queue *wq;
-    struct aura_runtime rt;
-    st_aura_qjs_runtime *qjs_rt;
+    struct aura_fn *fn;
+    struct aura_runtime *rt;
+    struct aura_qjs_runtime *qjs_rt;
     struct aura_task *task;
     int res;
-    bool timedout;
+    bool timedout, is_part_of_min;
 
-    wq = (struct aura_work_queue *)arg;
+    arg = (struct aura_qjs_thread_routine_arg *)_arg;
+    wq = arg->wq;
+    fn = arg->fn;
+    is_part_of_min = arg->is_part_of_min;
+    app_debug(true, 0, "aura_qjs_thread_routine <<<<< _A: %p", wq);
     rt = wq->rt;
-    /* create on first task */
-    qjs_rt = malloc(sizeof(*qjs_rt));
-    if (!qjs_rt)
-        return NULL;
-    res = rt.ops->init(qjs_rt, NULL);
+    free(_arg);
+
+    res = rt->ops->init(rt, fn);
     if (res) {
-        app_debug(true, 0, "Failed to initialize qjs runtime");
+        app_debug(true, 0, "aura_qjs_thread_routine: init error: %d", res);
         return NULL;
     }
-    qjs_rt->_is_part_of_min = wq->_is_part_of_min;
+    qjs_rt = wq->rt->rt_data;
+    qjs_rt->_is_part_of_min = is_part_of_min;
 
     res = pthread_mutex_lock(&wq->mutex);
     if (res)
@@ -49,7 +59,7 @@ void *aura_qjs_thread_routine(void *arg) {
         aura_now_ts(&timeout, CLOCK_REALTIME);
         timeout.tv_sec += 5;
 
-        while (a_list_is_empty(&wq->tasks) && !wq->quit) {
+        while (a_list_is_empty(&wq->task_list) && !wq->quit) {
             /**
              * If instance is part of minimum instance,
              * we simply wait until explicitly told to shut
@@ -75,18 +85,20 @@ void *aura_qjs_thread_routine(void *arg) {
             }
         }
 
-        a_list_dequeue(task, &wq->tasks, t_list);
+        wq->idle_instances--;
+        a_list_dequeue(task, &wq->task_list, t_list);
         if (task) {
             res = pthread_mutex_unlock(&wq->mutex);
             if (res)
                 return NULL;
-            res = rt.ops->execute(qjs_rt, task);
+            res = rt->ops->execute(rt, task);
             // destroy task after
+
+            aura_free(task);
             // may perform any callback logic
-            // see a way to use the return value, or package it into the res structure
         }
 
-        if (a_list_is_empty(&wq->tasks) && wq->quit) {
+        if (a_list_is_empty(&wq->task_list) && wq->quit) {
             wq->curr_instances--;
             /* use the same cond var to signal the last closing thread */
             if (wq->curr_instances == 0) {
@@ -96,7 +108,7 @@ void *aura_qjs_thread_routine(void *arg) {
             return NULL;
         }
 
-        if (a_list_is_empty(&wq->tasks) && timedout) {
+        if (a_list_is_empty(&wq->task_list) && timedout) {
             wq->curr_instances--;
             break;
         }
@@ -105,14 +117,16 @@ void *aura_qjs_thread_routine(void *arg) {
     return NULL;
 }
 
-int aura_work_queue_init(struct aura_work_queue *wq, uint32_t min_instances, uint32_t max_instances, aura_wq_backend_t backend) {
-    app_debug(true, 0, "aura_work_queue_init <<<<");
+int aura_work_queue_init(struct aura_work_queue *wq, struct aura_fn *fn) {
     pthread_t new_th_id;
+    uint32_t min_instances;
     int res;
+    app_debug(true, 0, "aura_work_queue_init <<<<");
 
-    wq->rt.ops = a_wq_get_backend(backend);
-    A_BUG_ON_2(wq->rt.ops == NULL, true);
-    wq->backend = backend;
+    wq->rt = malloc(sizeof(*wq->rt));
+    wq->rt->backend = fn->backend;
+    wq->rt->ops = a_wq_get_backend(fn->backend);
+    A_BUG_ON_2(!wq->rt->ops, true);
 
     res = pthread_attr_init(&wq->th_attr);
     if (res) {
@@ -138,13 +152,21 @@ int aura_work_queue_init(struct aura_work_queue *wq, uint32_t min_instances, uin
         return res;
     }
 
-    a_list_head_init(&wq->tasks);
-    wq->max_instances = max_instances;
+    a_list_head_init(&wq->task_list);
+    wq->magic = A_WQ_INITIALIZED;
+    wq->max_instances = fn->config.fn_concurrency.max_instances;
     wq->curr_instances = 0;
     wq->idle_instances = 0;
+    wq->quit = wq->running = false;
+
+    min_instances = fn->config.fn_concurrency.min_instances;
+    struct aura_qjs_thread_routine_arg *arg = malloc(sizeof(*arg));
+
+    arg->wq = wq;
+    arg->fn = fn;
+    arg->is_part_of_min = true;
     while (min_instances--) {
-        wq->_is_part_of_min = true;
-        res = pthread_create(&new_th_id, &wq->th_attr, aura_qjs_thread_routine, wq);
+        res = pthread_create(&new_th_id, &wq->th_attr, aura_qjs_thread_routine, (void *)arg);
         if (res) {
             pthread_mutex_unlock(&wq->mutex);
             return res;
@@ -153,22 +175,20 @@ int aura_work_queue_init(struct aura_work_queue *wq, uint32_t min_instances, uin
         wq->idle_instances++;
     }
 
-    wq->_is_part_of_min = false;
-    wq->quit = wq->running = false;
-    wq->initialized = A_WQ_INITIALIZED;
     return 0;
 }
 
 int aura_work_queue_destroy(struct aura_work_queue *wq) {
     int res;
 
-    A_BUG_ON_2(wq->initialized != A_WQ_INITIALIZED, true);
+    A_BUG_ON_2(wq->magic != A_WQ_INITIALIZED, true);
 
     res = pthread_mutex_lock(&wq->mutex);
     if (res)
         return res;
 
-    wq->initialized = 0;
+    wq->magic = 0;
+    wq->rt->ops->destroy(wq->rt->rt_data);
 
     /**
      * Check for running instances and notify them via quit
@@ -214,18 +234,19 @@ int aura_work_queue_destroy(struct aura_work_queue *wq) {
     return 0;
 }
 
-int aura_work_queue_add(struct aura_work_queue *wq, struct aura_task *task) {
+int aura_work_queue_add(struct aura_work_queue *wq, struct aura_fn *fn, struct aura_task *task) {
     pthread_t new_th_id;
     int res;
+    app_debug(true, 0, "aura_work_queue_add <<<<");
 
-    A_BUG_ON_2(wq->initialized != A_WQ_INITIALIZED, true);
+    A_BUG_ON_2(wq->magic != A_WQ_INITIALIZED, true);
 
     res = pthread_mutex_lock(&wq->mutex);
     if (res)
         return res;
 
     a_list_head_init(&task->t_list);
-    a_list_add_tail(&wq->tasks, &task->t_list);
+    a_list_add_tail(&wq->task_list, &task->t_list);
 
     /* Wake idling instances */
     if (wq->idle_instances > 0) {
@@ -236,14 +257,24 @@ int aura_work_queue_add(struct aura_work_queue *wq, struct aura_task *task) {
         }
     } else if (wq->curr_instances < wq->max_instances) {
         /* We can still create more instances here */
-        res = pthread_create(&new_th_id, &wq->th_attr, aura_qjs_thread_routine, wq);
+        struct aura_qjs_thread_routine_arg *arg = malloc(sizeof(*arg));
+        arg->wq = wq;
+        arg->fn = fn;
+        arg->is_part_of_min = false;
+        res = pthread_create(&new_th_id, &wq->th_attr, aura_qjs_thread_routine, (void *)arg);
         if (res) {
             pthread_mutex_unlock(&wq->mutex);
             return res;
         }
         wq->curr_instances++;
+        wq->idle_instances++;
     }
 
     pthread_mutex_unlock(&wq->mutex);
     return 0;
+}
+
+void aura_task_dump(struct aura_task *task) {
+    app_debug(true, 0, "AURA TASK");
+    app_debug(true, 0, "    Stream id", task->stream_id);
 }

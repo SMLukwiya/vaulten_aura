@@ -14,11 +14,14 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/slab_lib_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/hash_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/db/db.c
+    ${vaulten_aura_SOURCE_DIR}/lib/db/db_broker.c
     ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/encrypt_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/runtime_lib.c
+    # ${vaulten_aura_SOURCE_DIR}/lib/runtime_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/ipc_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/function_v1_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/heap_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
 )
 
 add_executable(aura_server 
@@ -37,13 +40,22 @@ add_executable(aura_server
     exec/workers/worker_man.c # not sure where this belongs for now
     exec/runtime/quickjs/qjs_rt.c #not sure where this belongs for now
     exec/runtime/quickjs/js_bindings.c 
+    src/timer_srv.c
+    src/optimization_srv.c
 
     ${lib_sources}
 )
 
-target_link_libraries(aura_server PRIVATE picotls::picotls PRIVATE quickjs::quickjs PUBLIC openssl::openssl)
+target_link_libraries(aura_server 
+    PRIVATE picotls-openssl picotls-fusion picotls-minicrypto picotls-core 
+    PRIVATE quickjs 
+    PUBLIC OpenSSL::SSL OpenSSL::Crypto
+)
 
-target_include_directories(aura_server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include PRIVATE ${PROJECT_INCLUDE_DIR})
+target_include_directories(aura_server 
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include 
+    PRIVATE ${PROJECT_INCLUDE_DIR}
+)
 
 target_compile_definitions(aura_server 
     PRIVATE AURA_DATA_DIR="${DEFAULT_DATA_DIR}" # defined in global CMakeLists.txt

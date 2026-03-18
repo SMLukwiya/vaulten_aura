@@ -6,7 +6,7 @@
 int aura_cli_run_server_stop(void *opts_ptr, void *glob_opt) {
     int sock_fd, res;
     struct aura_msg_hdr hdr;
-    char *data;
+    struct aura_iovec data;
 
     aura_try_connect_or_error(&sock_fd);
     if (sock_fd == -1)
@@ -18,9 +18,14 @@ int aura_cli_run_server_stop(void *opts_ptr, void *glob_opt) {
         sys_exit(false, errno, "Failed to send aura server start cli cmd");
     }
 
-    data = aura_recv_resp(sock_fd);
-    if (data != NULL)
-        app_info(false, 0, "%s", data);
+    res = aura_recv_resp(&data, sock_fd, NULL);
+    if (res < 0) {
+        close(sock_fd);
+        return res;
+    }
+
+    if (data.base != NULL)
+        app_info(false, 0, "%s", data.base);
 
     close(sock_fd);
     return 0;

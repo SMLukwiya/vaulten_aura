@@ -790,9 +790,9 @@ void aura_dmn_function_config_validate(int conf_fd, int cli_fd) {
     res = aura_load_config_fd(conf_fd, aura_function_validator, aura_function_validator_len, parser_err, (void *)&usr_data);
     if (res != 0 && parser_err->err_cnt > 0) {
         first_err = parser_err->errors[0].message;
-        aura_send_resp(cli_fd, (void *)first_err, strlen(first_err));
+        aura_resp_send(cli_fd, (void *)first_err, strlen(first_err));
     } else {
-        aura_send_resp(cli_fd, (void *)fn_config_valid, sizeof(fn_config_valid) - 1);
+        aura_resp_send(cli_fd, (void *)fn_config_valid, sizeof(fn_config_valid) - 1);
     }
 
     close(cli_fd);

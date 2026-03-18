@@ -198,6 +198,10 @@ static int32_t lookup_token(const char *name, size_t len) {
             if (memcmp(name, "locatio", 7) == 0)
                 return A_TOKEN_LOCATION;
             break;
+        case 'y':
+            if (memcmp(name, "priorit", 7) == 0)
+                return A_TOKEN_PRIORITY;
+            break;
         }
         break;
     case 9:

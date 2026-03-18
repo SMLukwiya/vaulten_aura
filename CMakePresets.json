@@ -1,11 +1,24 @@
 {
-    "version": 4,
-    "include": ["./ConanPresets.json"],
+    "version": 6,
     "configurePresets": [
         {
-            "name": "debug",
-            "displayName": "Debug single config",
-            "inherits": "conan-debug"
+            "name": "dev",
+            "displayName": "dev-config",
+            "description": "dev configure using 'Unix Makefiles' generator",
+            "generator": "Unix Makefiles",
+            "binaryDir": "build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_POLICY_DEFAULT_CMP0091": "NEW",
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_RUNTIME_OUTPUT_DIRECTORY": "${sourceDir}/build/${presetName}/bin"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "dev",
+            "configurePreset": "dev",
+            "jobs": 8
         }
     ]
 }

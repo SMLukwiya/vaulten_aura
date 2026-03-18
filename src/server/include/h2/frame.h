@@ -23,8 +23,7 @@
 #define A_H2_INADEQUATE_SEC_ERROR 0xC
 #define A_H2_PREFACE_ERROR 0xD
 
-#define AURA_H2_ERROR_IGNORE -100
-#define AURA_H2_ERROR_INTERNAL -101
+#define A_H2_ERROR_IN_PROGRESS 0xE
 
 #define A_H2_FRAME_TYPE_DATA 0x0
 #define A_H2_FRAME_TYPE_HEADERS 0x1
@@ -217,8 +216,6 @@ void aura_encode_rst_stream_frame(uint8_t *dest, uint32_t frame_len, uint32_t st
 /**/
 void aura_h2_encode_ping_frame(uint8_t *dest, uint32_t frame_len, bool is_ack, const uint8_t *opaque_data);
 // /**/
-void aura_h2_encode_goaway_frame(uint8_t *dest, uint32_t frame_len, uint32_t last_stream_id, int err_num, const struct aura_iovec *additional_data);
-// /**/
 void aura_h2_encode_settings_frame(uint8_t *dest, uint32_t frame_len, struct aura_h2_settings_payload *settings, size_t num_of_settings);
 // /**/
 void aura_h2_encode_window_update_frame(uint8_t *dest, uint32_t frame_len, uint32_t stream_id, uint32_t increment_size);
@@ -236,19 +233,16 @@ int aura_h2_parse_frame_payload(struct aura_h2_in_frame *in_frame);
  */
 int aura_h2_parse_frame_header(struct aura_h2_in_frame *in_frame,
                                const uint8_t *src, size_t src_len,
-                               size_t max_frame_size, int64_t *frame_len);
+                               size_t max_frame_size, int *frame_len);
 
 /* -------------------- */
-struct aura_h2_out_frame *aura_encode_control_frame(struct aura_memory_ctx *mc, struct aura_sliding_buf *buf, uint8_t type,
-                                                    uint8_t flags, uint32_t stream_id, const uint8_t *payload,
-                                                    uint32_t payload_len, uint32_t frame_len);
+struct aura_h2_out_frame *aura_encode_control_frame(struct aura_sliding_buf *buf, uint8_t type, uint8_t flags, uint32_t stream_id,
+                                                    uint32_t frame_len, const uint8_t *payload, uint32_t payload_len);
 
 /** */
-struct aura_h2_out_frame *aura_produce_header_frame(struct aura_memory_ctx *mc, struct aura_sliding_buf *buf,
-                                                    uint32_t stream_id, uint8_t type, uint8_t flags,
-                                                    const uint8_t *payload, uint32_t payload_len);
+struct aura_h2_out_frame *aura_produce_header_frame(struct aura_sliding_buf *buf, uint32_t stream_id, uint8_t type,
+                                                    uint8_t flags, const uint8_t *payload, uint32_t payload_len);
 
-struct aura_h2_out_frame *aura_encode_data_frame(struct aura_memory_ctx *mc, struct aura_sliding_buf *buf,
-                                                 uint32_t stream_id, uint8_t flags, const uint8_t *payload,
-                                                 uint32_t payload_len, uint8_t pad_len);
+struct aura_h2_out_frame *aura_encode_data_frame(struct aura_sliding_buf *buf, uint32_t stream_id, uint8_t flags,
+                                                 const uint8_t *payload, uint32_t payload_len, uint8_t pad_len);
 #endif

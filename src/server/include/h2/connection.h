@@ -17,17 +17,19 @@ const static struct aura_iovec aura_h2_connection_preface = {
 };
 
 typedef enum {
-    A_H2_STATE_CONN_OPEN,
-    A_H2_STATE_CONN_HALF_CLOSED,
-    A_H2_STATE_CONN_CLOSING
+    A_H2_CONN_STATE_PREFACE,
+    A_H2_CONN_STATE_PREFACE_SETTINGS,
+    A_H2_CONN_STATE_FRAMES,
+    A_H2_CONN_STATE_CLOSING,
+    A_H2_CONN_STATE_CLEANUP,
 } aura_h2_conn_state_t;
 
 typedef enum {
     A_H2_CONN_FLAG_NONE = 0,
-    A_H2_CONN_GOAWAY_QUEUED = 1, /** @todo: not used */
-    A_H2_CONN_GOAWAY_GRACEFUL_TERM_SENT = 2,
-    A_H2_CONN_GOAWAY_IMMEDIATE_TERM_SENT = 3,
-    A_H2_CONN_GOAWAY_RECEIVED = 4,
+    A_H2_CONN_FLAG_GOAWAY_QUEUED,
+    A_H2_CONN_FLAG_GOAWAY_GRACEFUL_TERM_SENT,
+    A_H2_CONN_FLAG_GOAWAY_IMMEDIATE_TERM_SENT,
+    A_H2_CONN_FLAG_GOAWAY_RECEIVED,
 } aura_h2_conn_flags_t;
 
 extern const struct aura_h2_settings aura_h2_default_settings;
@@ -114,12 +116,13 @@ struct aura_h2_sender_engine {
  */
 struct aura_h2_conn {
     bool is_server;
-    bool preface_processed; /* Whether preface has been processed */
     struct aura_memory_ctx *mc;
     struct aura_srv_sock *sock;        /* socket that accepted this conn */
     struct aura_srv_ctx *srv_ctx;      /* global server context */
     struct aura_route *route;          /* route that handles this connection */
     struct aura_list_head stream_list; /* streams attached to this connection */
+    struct aura_list_head conn_list;   /* link in queue */
+    uint8_t prio_class;
     struct aura_h2_sender_engine sender;
 
     struct aura_list_head peer_unacknowledged_settings;
@@ -161,8 +164,6 @@ struct aura_h2_conn {
         struct timeval settings_sent_at;
         struct timeval settings_ack_at;
     } timestamps;
-
-    struct aura_list_head conn_list; /* link in queue */
     uint32_t flags;
 };
 
@@ -230,21 +231,21 @@ static inline size_t a_h2_get_conn_peer_window_size(struct aura_h2_conn *conn) {
 /**
  * Initiate the process of closing the connection
  */
-static inline void aura_h2_connection_initiate_closing(struct aura_h2_conn *conn, uint32_t last_stream_id) {
-    conn->last_processed_stream_id = last_stream_id;
-    conn->flags |= A_H2_CONN_GOAWAY_RECEIVED;
-    conn->flags = A_H2_STATE_CONN_CLOSING;
-    /** @todo: maybe start graceful shutdown timer */
-}
+// static inline void aura_h2_connection_initiate_closing(struct aura_h2_conn *conn, uint32_t last_stream_id) {
+//     conn->last_processed_stream_id = last_stream_id;
+//     conn->flags |= A_H2_CONN_FLAG_GOAWAY_RECEIVED;
+//     conn->flags = A_H2_STATE_CONN_CLOSING;
+//     /** @todo: maybe start graceful shutdown timer */
+// }
 
 /**
  * Test if we can open a new stream on
  * this current connection
  */
 static inline bool a_h2_conn_allow_new_streams(struct aura_h2_conn *conn) {
-    if (conn->state == A_H2_STATE_CONN_CLOSING)
+    if (conn->state == A_H2_CONN_STATE_CLOSING)
         return false;
-    if (conn->flags & (A_H2_CONN_GOAWAY_RECEIVED | A_H2_CONN_GOAWAY_GRACEFUL_TERM_SENT))
+    if (conn->flags & (A_H2_CONN_FLAG_GOAWAY_RECEIVED | A_H2_CONN_FLAG_GOAWAY_GRACEFUL_TERM_SENT))
         return false;
     return true;
 }
@@ -260,7 +261,7 @@ static inline uint64_t a_conn_get_active_streams(struct aura_h2_conn *conn) {
  * Returns true if we have reached the max concurrrent streams
  * per connection
  */
-static inline bool a_conn_has_reached_max_concurrent_streams(struct aura_h2_conn *conn) {
+static inline bool a_h2_conn_has_reached_max_concurrent_streams(struct aura_h2_conn *conn) {
     return (conn->num_inbound_streams >= conn->local_settings.max_conc_streams);
 }
 
@@ -270,10 +271,10 @@ static inline bool a_conn_has_reached_max_concurrent_streams(struct aura_h2_conn
  */
 static inline bool conn_is_closing(struct aura_h2_conn *conn) {
     /* goaway sent and conn doesn't want to read or write */
-    if (conn->state == A_H2_STATE_CONN_CLOSING)
+    if (conn->state == A_H2_CONN_STATE_CLOSING)
         return true;
 
-    if (conn->flags & A_H2_CONN_GOAWAY_RECEIVED || conn->flags & A_H2_CONN_GOAWAY_GRACEFUL_TERM_SENT)
+    if (conn->flags & A_H2_CONN_FLAG_GOAWAY_RECEIVED || conn->flags & A_H2_CONN_FLAG_GOAWAY_GRACEFUL_TERM_SENT)
         return true;
 
     return false;
@@ -308,11 +309,20 @@ static inline bool aura_h2_error_is_non_fatal(int err) {}
 /** */
 struct aura_h2_conn *aura_h2_create_connection_server(struct aura_srv_sock *sock, struct aura_srv_ctx *ctx);
 
-/** */
-int aura_conn_parse_input(struct aura_h2_conn *conn);
+/**/
+int aura_h2_process_preface(struct aura_h2_conn *conn);
+
+/**/
+int aura_h2_process_preface_settings(struct aura_h2_conn *conn);
+
+/**/
+int aura_process_frame(struct aura_h2_conn *conn);
+
+/**/
+void *aura_h2_connection_destroy(struct aura_h2_conn *conn);
 
 /** */
-void aura_h2_connection_close(struct aura_h2_conn *conn);
+int aura_conn_parse_input(struct aura_h2_conn *conn);
 
 /** */
 void a_enqueue_write(struct aura_h2_conn *conn);

@@ -1,5 +1,5 @@
 #include "file_lib.h"
-#include "quickjs/quickjs.h"
+#include "quickjs.h"
 #include "runtime_lib.h"
 
 #include <assert.h>

@@ -35,7 +35,7 @@ void aura_dmn_function_status(AURA_DBHANDLE db, struct aura_memory_ctx *mc, stru
             evt.error_code = A_FN_ERROR_GENERIC;
         }
 
-        aura_send_resp(cli_fd, &evt, sizeof(evt));
+        aura_resp_send(cli_fd, &evt, sizeof(evt));
         goto out;
     }
 
@@ -52,7 +52,7 @@ void aura_dmn_function_status(AURA_DBHANDLE db, struct aura_memory_ctx *mc, stru
         evt.state = A_FN_OP_STATE_FAILED;
         evt.msg_len = 0;
 
-        aura_send_resp(cli_fd, &evt, sizeof(evt));
+        aura_resp_send(cli_fd, &evt, sizeof(evt));
         goto out;
     }
 
@@ -64,7 +64,7 @@ void aura_dmn_function_status(AURA_DBHANDLE db, struct aura_memory_ctx *mc, stru
     memcpy(evt.msg, fn_state->is_active ? fn_status_active : fn_status_inactive, evt.msg_len);
     aura_free(fn_state);
 
-    aura_send_resp(cli_fd, &evt, sizeof(evt));
+    aura_resp_send(cli_fd, &evt, sizeof(evt));
 
 out:
     if (fn_name)
@@ -79,7 +79,7 @@ void aura_fn_start_cb(struct aura_db_completion *comp, ssize_t result) {
         evt.error_code = A_FN_ERROR_GENERIC;
         evt.state = A_FN_OP_STATE_FAILED;
         evt.msg_len = 0;
-        aura_send_resp(comp->client_fd, &evt, sizeof(evt));
+        aura_resp_send(comp->client_fd, &evt, sizeof(evt));
         comp->proceed = true;
         comp->status = result;
         return;
@@ -90,7 +90,6 @@ void aura_fn_start_cb(struct aura_db_completion *comp, ssize_t result) {
 
 void aura_dmn_function_start(AURA_DBHANDLE db, struct aura_memory_ctx *mc, struct iovec *fn, int cli_fd) {
     struct aura_fn_state *fn_state;
-    struct aura_functions *fns;
     struct aura_fn_petite *fn_petite;
     struct aura_fn_evt evt;
     struct aura_iovec key;
@@ -123,7 +122,7 @@ void aura_dmn_function_start(AURA_DBHANDLE db, struct aura_memory_ctx *mc, struc
             evt.error_code = A_FN_ERROR_GENERIC;
         }
 
-        aura_send_resp(cli_fd, &evt, sizeof(evt));
+        aura_resp_send(cli_fd, &evt, sizeof(evt));
         goto out;
     }
 
@@ -163,7 +162,7 @@ void aura_dmn_function_start(AURA_DBHANDLE db, struct aura_memory_ctx *mc, struc
     evt.error_code = A_FN_ERROR_NONE;
     evt.state = A_FN_OP_STATE_DONE;
     evt.msg_len = 0;
-    aura_send_resp(cli_fd, &evt, sizeof(evt));
+    aura_resp_send(cli_fd, &evt, sizeof(evt));
 
 out:
     if (fn_name)
@@ -204,7 +203,7 @@ void aura_dmn_function_stop(AURA_DBHANDLE db, struct aura_memory_ctx *mc, struct
             evt.error_code = A_FN_ERROR_GENERIC;
         }
 
-        aura_send_resp(cli_fd, &evt, sizeof(evt));
+        aura_resp_send(cli_fd, &evt, sizeof(evt));
         goto out;
     }
 
@@ -244,7 +243,7 @@ void aura_dmn_function_stop(AURA_DBHANDLE db, struct aura_memory_ctx *mc, struct
     evt.error_code = A_FN_ERROR_NONE;
     evt.state = A_FN_OP_STATE_DONE;
     evt.msg_len = 0;
-    aura_send_resp(cli_fd, &evt, sizeof(evt));
+    aura_resp_send(cli_fd, &evt, sizeof(evt));
 
 out:
     if (fn_name)

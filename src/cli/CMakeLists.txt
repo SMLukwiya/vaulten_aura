@@ -6,10 +6,11 @@ list(APPEND CMAKE_MESSAGE_INDENT " ")
 
 set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/unix_socket_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/error_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/utils_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/slab_lib_v1.c
 )
 
 add_executable(aura 
@@ -34,7 +35,7 @@ add_executable(aura
     ${lib_sources}
 )
 
-target_link_libraries(aura PRIVATE yaml::yaml)
+target_link_libraries(aura PRIVATE yaml)
 
 target_include_directories(aura PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include PRIVATE ${PROJECT_INCLUDE_DIR})
 

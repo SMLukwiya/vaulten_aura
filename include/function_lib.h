@@ -16,6 +16,7 @@
 
 #define A_FN_NAME_MAX_LEN 1024
 
+/* Fn list key (base, len) */
 static struct aura_iovec a_function_list_key = {
   .base = "system:functions",
   .len = sizeof("system:functions") - 1,
@@ -513,6 +514,7 @@ struct aura_fn_state {
 /* Function Complete structure (contains everything about a fn) */
 struct aura_fn {
     uint64_t fn_id;
+    uint8_t backend;
     struct aura_fn_meta meta;
     struct aura_fn_config config;
     struct aura_fn_stat stats;
@@ -590,6 +592,7 @@ typedef enum {
     A_FN_ERROR_NONE,
     A_FN_ERROR_GENERIC,
     A_FN_ERROR_CONFIG,
+    A_FN_ERROR_FN_CODE,
     A_FN_ERROR_DUPLICATE,
     A_FN_ERROR_NOT_EXIST
 } aura_fn_error;
@@ -750,20 +753,44 @@ struct aura_functions *aura_fn_list_fetch(AURA_DBHANDLE db, int *error);
 int aura_fn_list_add(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *fn_name,
                      uint32_t fn_version, uint64_t job_id, struct aura_db_completion *comp);
 
+/** Brokered fetch for the list of deployed functions */
+struct aura_functions *aura_fn_list_fetch_broker(struct aura_memory_ctx *mc, int dmn_sock_fd, int *error);
+
 /** Remove a function from the list of deployed functions */
 int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_memory_ctx *mc, uint64_t job_id,
                         const char *fn_name, uint32_t fn_version, struct aura_db_completion *comp);
+
+/** */
+struct aura_fn_stat *aura_fn_stat_fetch_broker(struct aura_memory_ctx *mc, const char *fn_name, uint32_t fn_version, int dmn_fd);
+
+/**/
+struct aura_iovec aura_fn_meta_fetch(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version);
+
+/**/
+struct aura_iovec aura_fn_config_fetch(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version);
+
+/**/
+struct aura_iovec aura_fn_code_fetch(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version);
+
+/**/
+struct aura_iovec aura_fn_state_fetch(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version);
 
 /**
  * Load a function to memory
  */
 struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *fn_name, uint32_t fn_version);
 
+/** */
+struct aura_fn *aura_fn_load_broker(struct aura_memory_ctx *mc, const char *fn_name, uint32_t fn_version, int sock_fd);
+
 /** Fetch function stats */
 struct aura_fn_stat *aura_fn_stat_fetch(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version);
 
 /* Compare function stats */
 int aura_fn_stat_compare(const void *s1, const void *s2);
+
+/**/
+void aura_fn_stat_dump(struct aura_fn_stat *stats);
 
 struct aura_rollback_detector *rollback_detector_create(aura_rollback_cb cb);
 void rollback_detector_add_deployment(struct aura_rollback_detector *rbd, uint64_t fn_id, const char *version /* create a struct to pass error threshold stuff */);

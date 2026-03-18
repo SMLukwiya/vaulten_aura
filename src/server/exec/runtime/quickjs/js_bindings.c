@@ -1,9 +1,10 @@
 #include "bug_lib.h"
+#include "error_lib.h"
 #include "exec/runtime_srv.h"
 #include "exec/task_srv.h"
 #include "list_lib.h"
 #include "memory_lib.h"
-#include "quickjs/quickjs.h"
+#include "quickjs.h"
 #include "slab_lib.h"
 #include "utils_lib.h"
 
@@ -23,6 +24,8 @@ typedef enum {
     HTTP_PATCH,
     HTTP_HEAD,
 } a_http_method_t;
+
+static JSValue a_response_set_status(JSContext *ctx, JSValueConst this_val, JSValueConst status);
 
 static inline bool a_get_property(JSContext *ctx, JSValue *value, JSValueConst obj, const char *option) {
     JSValue val;
@@ -48,11 +51,12 @@ JSValue aura_js_console_log(JSContext *ctx, JSValueConst this_val, int argc, JSV
     for (int i = 0; i < argc; ++i) {
         const char *str = JS_ToCString(ctx, argv[i]);
         if (str) {
-            fprintf(stdout, "%s ", str);
+            // fprintf(stdout, "%s ", str);
+            syslog(LOG_INFO, "%s", str);
             JS_FreeCString(ctx, str);
         }
     }
-    fprintf(stdout, "\n");
+    // fprintf(stdout, "\n");
     return JS_UNDEFINED;
 }
 
@@ -61,16 +65,17 @@ JSValue aura_js_console_error(JSContext *ctx, JSValueConst this_val, int argc, J
     for (int i = 0; i < argc; ++i) {
         const char *str = JS_ToCString(ctx, argv[i]);
         if (str) {
-            fprintf(stderr, "%s ", str);
+            // fprintf(stderr, "%s ", str);
+            syslog(LOG_ERR, "%s", str);
             JS_FreeCString(ctx, str);
         }
     }
-    fprintf(stderr, "\n");
+    // fprintf(stderr, "\n");
     return JS_UNDEFINED;
 }
 
 /** */
-void aura_js_console_init(st_aura_qjs_runtime *qrt) {
+void aura_js_console_init(struct aura_qjs_runtime *qrt) {
     JSContext *ctx;
     JSValue global_obj;
     JSValue console;
@@ -90,66 +95,135 @@ void aura_js_console_init(st_aura_qjs_runtime *qrt) {
 
 /* ---- END CONSOLE ---- */
 
+/* ---- logger ---- */
+void aura_log_structured_error(const char *name, const char *message, const char *stack) {
+    syslog(LOG_INFO, "Name; %s", name);
+    syslog(LOG_INFO, "Message; %s", message);
+    syslog(LOG_INFO, "Stack; %s", stack);
+}
+
+/* ---- std dump error */
+void aura_js_std_dump_error(JSContext *ctx, char *msg) {
+    JSValue exc, name, message, stack;
+
+    if (msg) {
+        aura_log_structured_error(NULL, msg, NULL);
+    } else {
+        exc = JS_GetException(ctx);
+        name = JS_GetPropertyStr(ctx, exc, "name");
+        message = JS_GetPropertyStr(ctx, exc, "message");
+        stack = JS_GetPropertyStr(ctx, exc, "stack");
+
+        aura_log_structured_error(JS_ToCString(ctx, name), JS_ToCString(ctx, message), JS_ToCString(ctx, stack));
+
+        JS_FreeValue(ctx, name);
+        JS_FreeValue(ctx, message);
+        JS_FreeValue(ctx, stack);
+        JS_FreeValue(ctx, exc);
+    }
+}
+
+/* ---- std await ---- */
+JSValue aura_js_std_await(JSContext *ctx, JSValue obj) {
+    JSValue rv;
+    int state;
+
+    for (;;) {
+        state = JS_PromiseState(ctx, obj);
+        if (state == JS_PROMISE_FULFILLED) {
+            rv = JS_PromiseResult(ctx, obj);
+            JS_FreeValue(ctx, obj);
+            break;
+        } else if (state == JS_PROMISE_REJECTED) {
+            rv = JS_Throw(ctx, JS_PromiseResult(ctx, obj));
+            JS_FreeValue(ctx, obj);
+            break;
+        } else if (state == JS_PROMISE_PENDING) {
+            int err;
+            err = JS_ExecutePendingJob(JS_GetRuntime(ctx), NULL);
+            if (err < 0) {
+                /* js_std_dump_error(ctx) */
+            } else if (err == 0) {
+                // js_std_promise_rejection_check(ctx);
+
+                // if (os_poll_func)
+                // os_poll_func(ctx);
+            }
+        } else {
+            /* not a promise */
+            rv = obj;
+            break;
+        }
+    }
+    return rv;
+}
+
 /* ---------- FETCH ---------- */
 JSClassID req_class_id;
 JSClassID res_class_id;
+// JSClassID fetch_class_id;
 
 static JSClassDef req_class = {
-  .class_name = "Edge_Request",
+  .class_name = "Request",
 };
 
 static JSClassDef res_class = {
-  .class_name = "Edge_Response",
+  .class_name = "Response",
 };
 
-static JSValue a_js_fetch_new_request(JSContext *ctx, JSValueConst *argv) {
-    JSValue req_obj;
+// static JSClassDef fetch_class = {
+//   .class_name = "Fetch"};
+
+static inline int a_js_fetch_new_request(JSContext *ctx, int argc, JSValueConst *argv) {
+    JSValueConst args;
+    JSValue val;
     Request *req;
+    const char *url, *method, *body;
+    size_t len;
 
-    req = malloc(sizeof(*req));
-    if (!req)
-        return JS_EXCEPTION;
-
-    /* extract details from user request object */
-
-    req_obj = JS_NewObjectClass(ctx, req_class_id);
-    if (JS_IsException(req_obj))
-        return JS_EXCEPTION;
-
-    JS_SetOpaque(req_obj, (void *)req);
-    req->obj = JS_DupValue(ctx, req_obj); /* @todo: is duplicating needed */
-
-    /* call c function to create stream*/
-
-    return req_obj;
-}
-
-static JSValue a_js_fetch_new_response(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    JSValue res_obj;
-    Response *res;
-
-    res = malloc(sizeof(*res));
-    if (!res)
-        return JS_EXCEPTION;
-
-    /* set defauts */
-    res->status = 200;
-    // res->headers = create_headers
-    res->body = NULL;
-    res->body_len = 0;
-
-    if (argc > 0 && !JS_IsUndefined(argv[0])) {
-        /* copy over user object to res structure */
+    if (argc > 1) {
+        url = JS_ToCString(ctx, argv[0]);
+        args = argv[1];
+    } else {
+        args = argv[0];
+        val = JS_GetPropertyStr(ctx, args, "url");
+        if (JS_IsException(val))
+            return -1;
+        url = JS_ToCString(ctx, val);
+        JS_FreeValue(ctx, val);
     }
 
-    res_obj = JS_NewObjectClass(ctx, res_class_id);
-    if (JS_IsException(res_obj))
-        return JS_EXCEPTION;
+    if (!url)
+        return -1;
 
-    JS_SetOpaque(res_obj, (void *)res);
-    res->obj = JS_DupValue(ctx, res_obj); /* @todo: */
+    val = JS_GetPropertyStr(ctx, args, "method");
+    if (JS_IsException(val))
+        goto err_url;
+    method = JS_ToCString(ctx, val);
+    JS_FreeValue(ctx, val);
+    if (!method)
+        goto err_url;
 
-    return res_obj;
+    val = JS_GetPropertyStr(ctx, args, "body");
+    if (JS_IsException(val))
+        goto err_method;
+    body = JS_ToCStringLen(ctx, &len, val);
+    JS_FreeValue(ctx, val);
+
+    if (strcmp(method, "POST") == 0 && !body) {
+        goto err_method;
+    }
+
+    /* call c function to create stream */
+    // aura_js_fetch_request();
+
+    return 0;
+
+err_method:
+    JS_FreeCString(ctx, method);
+err_url:
+    JS_FreeCString(ctx, url);
+    return -1;
 }
 
 /* req.method */
@@ -193,8 +267,30 @@ static JSValue a_req_url_get(JSContext *ctx, JSValueConst this_val) {
     return JS_NewString(ctx, req->url);
 }
 
+/* res.status */
+static JSValue a_fetch_get_status(JSContext *ctx, JSValueConst this_val) {
+    Response *res;
+
+    // res = JS_GetOpaque2(ctx, this_val, res_class_id)
+    return JS_UNDEFINED;
+}
+
+static JSValue a_response_set_status(JSContext *ctx, JSValueConst this_val, JSValueConst status) {
+    Response *res;
+    int _status;
+
+    res = JS_GetOpaque2(ctx, this_val, res_class_id);
+    A_BUG_ON_2(!res, true);
+
+    if (JS_ToUint32(ctx, &_status, status))
+        return JS_EXCEPTION;
+
+    res->status = _status;
+    return JS_UNDEFINED;
+}
+
 /* req.arrayBuffer *zero-copy */
-static JSValue a_js_req_arraybuffer(JSContext *ctx, JSValueConst this_val) {
+static JSValue a_js_req_arraybuffer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     Request *req;
 
     req = JS_GetOpaque2(ctx, this_val, req_class_id);
@@ -205,7 +301,7 @@ static JSValue a_js_req_arraybuffer(JSContext *ctx, JSValueConst this_val) {
 }
 
 /* req.text */
-static JSValue a_req_body_text_get(JSContext *ctx, JSValueConst this_val) {
+static JSValue a_req_body_text_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     Request *req;
 
     req = JS_GetOpaque2(ctx, this_val, req_class_id);
@@ -215,35 +311,68 @@ static JSValue a_req_body_text_get(JSContext *ctx, JSValueConst this_val) {
     return JS_NewStringLen(ctx, req->body, req->body_len);
 }
 
+static JSValue a_js_res_json(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JSValue val;
+    Response *res;
+    const char *body;
+    size_t len;
+
+    res = JS_GetOpaque2(ctx, this_val, res_class_id);
+    A_BUG_ON_2(!res, true);
+
+    val = JS_JSONStringify(ctx, argv[0], argv[1], argv[2]);
+    if (JS_IsException(val))
+        return val;
+
+    body = JS_ToCStringLen(ctx, &len, val);
+    JS_FreeValue(ctx, val);
+
+    res->body = body;
+    res->body_len = len;
+
+    return JS_UNDEFINED;
+}
+
 /* Js fetch implementation */
 JSValue aura_js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    JSValue req_obj, promise;
+    JSValue promise;
     JSValue resolving_funcs[2];
+    int res;
 
     if (argc < 1 || argc > 2)
         return JS_EXCEPTION;
 
-    promise = JS_NewPromiseCapability(ctx, resolving_funcs);
+    res = a_js_fetch_new_request(ctx, argc, argv);
+    if (res == -1) {
+        return JS_EXCEPTION;
+    }
 
-    req_obj = a_js_fetch_new_request(ctx, argv);
+    promise = JS_NewPromiseCapability(ctx, resolving_funcs);
     return promise;
 }
 
 const JSCFunctionListEntry aura_js_request_proto_funcs[] = {
   JS_CGETSET_DEF("method", a_req_method_get, NULL),
   JS_CGETSET_DEF("url", a_req_url_get, NULL),
-  JS_CGETSET_DEF("arrayBuffer", a_js_req_arraybuffer, NULL),
-  JS_CGETSET_DEF("text", a_req_body_text_get, NULL),
+  JS_CFUNC_DEF("arrayBuffer", 1, a_js_req_arraybuffer),
+  JS_CFUNC_DEF("text", 1, a_req_body_text_get),
+};
+
+const JSCFunctionListEntry aura_js_response_proto_funcs[] = {
+  JS_CGETSET_DEF("status", NULL, a_response_set_status),
+  JS_CFUNC_DEF("json", 0, a_js_res_json),
 };
 
 const uint32_t aura_js_request_proto_funcs_len = ARRAY_SIZE(aura_js_request_proto_funcs);
+const uint32_t aura_js_response_proto_funcs_len = ARRAY_SIZE(aura_js_response_proto_funcs);
 
-int aura_js_fetch_init(st_aura_qjs_runtime *qrt) {
+int aura_js_fetch_init(struct aura_qjs_runtime *qrt) {
     JSContext *ctx;
-    JSValue req_proto, global;
     JSRuntime *rt;
+    JSValue req_proto, res_proto, global;
 
     ctx = qrt->ctx;
+    rt = qrt->rt;
     /**
      * init request protos, shared by all runtimes
      * quickjs will take handle if the class is
@@ -255,15 +384,28 @@ int aura_js_fetch_init(st_aura_qjs_runtime *qrt) {
     /* response */
     JS_NewClassID(&res_class_id);
     JS_NewClass(rt, res_class_id, &res_class);
+    /* fetch */
+    // JS_NewClassID(&fetch_class_id);
+    // JS_NewClass(rt, fetch_class_id, &fetch_class);
 
     req_proto = JS_NewObject(ctx);
     if (JS_IsException(req_proto)) {
-        JS_FreeValue(ctx, req_proto);
-        return 1;
+        return -1;
     }
-    JS_SetPropertyFunctionList(ctx, req_proto, aura_js_request_proto_funcs, aura_js_request_proto_funcs_len);
-    global = JS_GetGlobalObject(ctx);
 
+    res_proto = JS_NewObject(ctx);
+    if (JS_IsException(res_proto)) {
+        JS_FreeValue(ctx, req_proto);
+        return -1;
+    }
+
+    JS_SetPropertyFunctionList(ctx, req_proto, aura_js_request_proto_funcs, aura_js_request_proto_funcs_len);
+    JS_SetClassProto(ctx, req_class_id, req_proto);
+
+    JS_SetPropertyFunctionList(ctx, res_proto, aura_js_response_proto_funcs, aura_js_response_proto_funcs_len);
+    JS_SetClassProto(ctx, res_class_id, res_proto);
+
+    global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "fetch", JS_NewCFunction(ctx, aura_js_fetch, "fetch", 1));
     JS_FreeValue(ctx, global);
 

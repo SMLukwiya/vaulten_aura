@@ -18,7 +18,10 @@ bool aura_router_destroy(struct aura_router *router) {
     if (router->r_tree)
         aura_rax_free(router->r_tree);
 
-    router->r_tree = NULL;
+    if (router->route_pool.routes)
+        free(router->route_pool.routes);
+    memset(router, 0, sizeof(*router));
+
     return true;
 }
 
@@ -35,14 +38,14 @@ static inline bool a_route_destroy(struct aura_route *route) {
 
     // destroy function
 
-    res = aura_work_queue_destroy(&route->wq);
+    res = aura_work_queue_destroy(route->wq);
     if (res != 0) {
         /** @todo: Failed to destroy work queue, what should I do?? */
         return false;
     }
 
     /* remove from tree */
-    aura_rax_remove(route->router->r_tree, route->fn_image.meta.http_trigger.path.base, route->fn_image.meta.http_trigger.path.len, NULL);
+    aura_rax_remove(route->router->r_tree, route->fn->meta.http_trigger.path.base, route->fn->meta.http_trigger.path.len, NULL);
 
     memset(route, 0, sizeof(*route));
     /** @todo: a new slot is free on the vector, either keep a free offset for later use or compact memory */
@@ -50,7 +53,7 @@ static inline bool a_route_destroy(struct aura_route *route) {
     return true;
 }
 
-bool aura_route_add(struct aura_router *router, uint32_t version, struct aura_fn *fn) {
+bool aura_route_add(struct aura_router *router, struct aura_fn *fn) {
     aura_rax_node_t *n;
     struct aura_route *new_route;
     char *pattern;
@@ -76,13 +79,23 @@ bool aura_route_add(struct aura_router *router, uint32_t version, struct aura_fn
     }
 
     new_route = &router->route_pool.routes[router->route_pool.cnt];
-    res = aura_work_queue_init(&new_route->wq, fn->config.fn_concurrency.min_instances, fn->config.fn_concurrency.max_instances, A_WQ_JS);
+    new_route->version = 0x1;
+    new_route->router = router;
+    snprintf(new_route->url, sizeof(new_route->url), "%s", fn->meta.host);
+    if (pattern[0] != '/') {
+        /** @todo: complete */
+    }
+    strncat(new_route->url + strlen(new_route->url), pattern, sizeof(new_route->url) - strlen(new_route->url) - 1);
+    new_route->fn = fn;
+    new_route->wq = malloc(sizeof(struct aura_work_queue));
+    if (!new_route->wq)
+        return false;
+
+    res = aura_work_queue_init(new_route->wq, fn);
     if (res) {
         sys_debug(true, errno, "Failed to initialize workqueue: %d", res);
         return false;
     }
-
-    memcpy(&new_route->fn_image, fn, sizeof(*fn));
 
     res = aura_rax_insert(router->r_tree, pattern, pattern_len, A_RAX_NODE_TYPE_SPARSE, a_rax_data_init_int(router->route_pool.cnt));
     if (!res) {
@@ -99,14 +112,16 @@ bool aura_route_remove(struct aura_route *route) {
 }
 
 struct aura_route *aura_route_match(struct aura_router *router, struct aura_iovec *pattern, a_http_method_t method) {
-    int len;
     aura_rax_node_t *node;
-    struct aura_route *curr_route;
 
     node = aura_rax_lookup(router->r_tree, pattern->base, pattern->len);
     if (!node)
         return NULL;
-    /** @todo: should I check if route at this position is valid first */
+
+    if (node->data.int_val > router->route_pool.cnt) {
+        app_debug(true, 0, "aura_route_match: Invalid offset: %d", node->data.int_val);
+        return NULL;
+    }
     return &router->route_pool.routes[node->data.int_val];
 }
 
@@ -115,6 +130,9 @@ bool aura_route_request_init(struct aura_http_req *req) {
 
     req->version = 0x10000;
     req->version_len = 3;
+    req->headers.cap = 0;
+    req->headers.cnt = 0;
+    req->headers.entries = NULL;
     return true;
 }
 
@@ -124,4 +142,9 @@ void aura_route_request_destroy(struct aura_http_req *req) {
 
     if (req->path.base != NULL)
         aura_free(req->path.base);
+
+    if (req->headers.entries) {
+        aura_free(req->headers.entries);
+        req->headers.entries = NULL;
+    }
 }

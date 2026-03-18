@@ -48,6 +48,7 @@ int aura_cli_fn_status(void *opts_ptr, void *glob_opts) {
     int sock_fd, res;
     char *fn_name, *sep;
     uint32_t fn_verion;
+    struct aura_iovec data;
     struct aura_fn_evt *evt;
 
     aura_try_connect_or_error(&sock_fd);
@@ -78,8 +79,13 @@ int aura_cli_fn_status(void *opts_ptr, void *glob_opts) {
 
     while (true) {
         should_terminate = false;
-        evt = aura_recv_resp(sock_fd);
+        res = aura_recv_resp(&data, sock_fd, NULL);
+        if (res < 0) {
+            close(sock_fd);
+            return res;
+        }
 
+        evt = (struct aura_fn_evt *)data.base;
         if (!evt)
             break;
 

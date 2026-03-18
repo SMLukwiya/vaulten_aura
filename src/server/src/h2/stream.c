@@ -8,64 +8,43 @@
 
 struct aura_h2_stream *aura_h2_stream_open(struct aura_h2_conn *conn, uint32_t stream_id, uint8_t starting_state, uint32_t flags) {
     struct aura_h2_stream *stream;
-    bool fresh_stream;
+    struct aura_slab_cache *sc;
     int res;
-
-    if (starting_state == A_H2_STREAM_STATE_RESERVED) {
-        stream->flags |= A_H2_STREAM_FLAG_PUSH;
-    }
 
     /**
      * Push promise is not yet supported, stream should always be NULL here,
      * unless we are being haunted by something!!!!
      */
-    fresh_stream = false;
     stream = aura_h2_find_stream(conn, stream_id);
     if (stream) {
         A_BUG_ON_2(stream->state != A_H2_STREAM_STATE_IDLE, true);
         stream->state = starting_state;
         --conn->num_of_idle_streams;
     } else {
-        stream = aura_alloc(conn->mc, sizeof(*stream)); /** @todo: change to slab` */
+        sc = aura_slab_cache_find_by_id(conn->mc, A_SLAB_CACHE_ID_STREAM);
+        stream = aura_slab_alloc(sc);
         if (!stream)
             return NULL;
         memset(stream, 0, sizeof(*stream));
-        fresh_stream = true;
-        /* This can be extracted into it's own function */
         stream->stream_id = stream_id;
         stream->conn = conn;
         stream->local_window_size.available = A_H2_INITIAL_WINDOW_SIZE;
         stream->peer_window_size.available = A_H2_INITIAL_WINDOW_SIZE;
-        stream->state = A_H2_STREAM_STATE_IDLE;
+        stream->state = starting_state;
         stream->flags = flags;
         stream->outbound_queue.blocked_by_connection = false;
         stream->outbound_queue.blocked_by_flow_control = false;
         stream->outbound_queue.pending_bytes = 0;
         a_list_head_init(&stream->outbound_queue.f_list);
-        res = aura_now_ts(&stream->start_ts, CLOCK_REALTIME);
+        res = aura_now_ts(&stream->start_ts, CLOCK_MONOTONIC);
         a_list_head_init(&stream->s_list);
-        aura_sliding_buffer_create(conn->mc, &stream->sync, 0);
+        // aura_sliding_buffer_create(conn->mc, &stream->sync, 0);
         aura_sliding_buffer_create(conn->mc, &stream->data, 0);
 
         aura_route_request_init(&stream->req);
     }
 
     switch (starting_state) {
-        /* Not yet supported */
-    case A_H2_STREAM_STATE_RESERVED:
-        /**
-         * It's reserved local, therefore, it would not read data according to rfc,
-         * so we add the flag to indicate we won't be reading anything on the stream A_H2_FORBID_READ
-         *
-         * if not ours, we update flags to indicate no write
-         * update the number of incoming reserved streams
-         */
-        if (a_h2_did_we_initiate_this_stream_id(conn, stream->stream_id)) {
-            stream->state = A_H2_STREAM_STATE_HALF_CLOSED_LOCAL;
-        } else {
-            stream->state = A_H2_STREAM_STATE_HALF_CLOSED_REMOTE;
-        }
-        break;
     case A_H2_STREAM_STATE_IDLE:
         ++conn->num_of_idle_streams;
         break;
@@ -80,6 +59,8 @@ struct aura_h2_stream *aura_h2_stream_open(struct aura_h2_conn *conn, uint32_t s
         else
             ++conn->num_inbound_streams;
     }
+
+    a_list_add_tail(&conn->stream_list, &stream->s_list);
 
     return stream;
 }
@@ -113,7 +94,7 @@ void aura_h2_stream_abandon(struct aura_h2_stream *stream) {
  *
  */
 void aura_h2_stream_close(struct aura_h2_stream *stream) {
-    bool stream_is_ours;
+    app_debug(true, 0, "aura_h2_stream_close <<<< ");
     int res;
 
     if (!stream) {
@@ -121,23 +102,20 @@ void aura_h2_stream_close(struct aura_h2_stream *stream) {
         return;
     }
 
-    /* detach from queue */
-    a_list_delete(&stream->s_list);
-
-    aura_sliding_buffer_destroy(&stream->sync);
+    // aura_sliding_buffer_destroy(&stream->sync);
     aura_sliding_buffer_destroy(&stream->data);
 
     aura_route_request_destroy(&stream->req);
 
     /* @todo: update stats */
-    stream_is_ours = a_h2_stream_is_even_numbered(stream->stream_id);
-    if (stream_is_ours)
+    if (a_h2_stream_is_even_numbered(stream->stream_id))
         --stream->conn->num_outbound_streams;
     else
         --stream->conn->num_inbound_streams;
 
-    stream->state = A_H2_STREAM_STATE_CLOSED;
-    aura_free(stream);
+    // stream->state = A_H2_STREAM_STATE_CLOSED;
+    // aura_free(stream);
+    aura_slab_free((void *)stream);
 }
 
 /**

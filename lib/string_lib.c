@@ -112,7 +112,7 @@ char *aura_strdup(struct aura_memory_ctx *mc, const char *str) {
     char *copy;
     size_t len;
 
-    len = strlen(str) + 1; /* +1 Null terminated */
+    len = strlen(str) + 1; /* +1 null-terminated */
     copy = aura_alloc(mc, len);
     strcpy(copy, str);
     return copy;

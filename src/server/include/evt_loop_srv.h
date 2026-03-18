@@ -1,6 +1,9 @@
 #ifndef AURA_EVT_LOOP_H
 #define AURA_EVT_LOOP_H
 
+#include "time_lib.h"
+#include "timer_srv.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -50,5 +53,8 @@ int aura_evt_loop_add_timer(st_aura_evt_loop *loop, uint64_t timeout, aura_evt_l
 void aura_evt_loop_start(st_aura_evt_loop *loop);
 void aura_evt_loop_stop(st_aura_evt_loop *loop);
 int aura_evt_loop_poll(st_aura_evt_loop *loop, uint64_t timeout_ms, uint32_t max_accept);
+
+/** */
+int64_t aura_evt_loop_get_timeout(struct aura_timer_wheel *tw);
 
 #endif

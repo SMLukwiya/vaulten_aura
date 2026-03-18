@@ -5,6 +5,10 @@
 #define _GNU_SOURCE
 #endif
 
+#include "memory_lib.h"
+#include "slab_lib.h"
+#include "types_lib.h"
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdbool.h>
@@ -65,6 +69,9 @@ typedef enum {
     A_CMD_FN_START,
     A_CMD_FN_STOP,
     A_CMD_FN_LIST,
+    /**/
+    A_CMD_DB_FETCH_REQUEST,
+    A_CMD_DB_INSERT_REQUEST,
 } aura_cmd_t;
 
 /* Message header structure */
@@ -113,10 +120,10 @@ int aura_unix_server_accept(int fd, uid_t *uid_p);
 int aura_unix_cli_connect(struct aura_unix_socket *cli, const char *serv_name, const char *cli_name, int cli_perm);
 void aura_unix_sock_close(int fd);
 int aura_msg_send(int sock_fd, struct aura_msg_hdr *aura_hdr, void *data, size_t data_len, int fd);
-int aura_recv_msg(int sock_fd, struct aura_msg *aura_msg);
-int aura_send_resp(int sock_fd, void *data, size_t len);
-void *aura_recv_resp(int sock_fd);
-void aura_dump_msg(struct aura_msg *msg, bool daemon);
+int aura_msg_recv(int sock_fd, struct aura_msg *aura_msg);
+int aura_resp_send(int sock_fd, void *data, size_t len);
+int aura_recv_resp(struct aura_iovec *data_out, int sock_fd, struct aura_memory_ctx *mc);
+void aura_msg_dump(struct aura_msg *msg, bool daemon);
 void aura_try_connect_or_error(int *fd);
 
 #endif

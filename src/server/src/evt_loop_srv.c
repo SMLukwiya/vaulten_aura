@@ -104,3 +104,20 @@ int aura_evt_loop_remove(st_aura_evt_loop *loop, int fd) {
 int aura_evt_loop_poll(st_aura_evt_loop *loop, uint64_t timeout_ms, uint32_t max_accept) {
     return loop->ops->poll(loop, timeout_ms, max_accept);
 }
+
+/**
+ *
+ */
+int64_t aura_evt_loop_get_timeout(struct aura_timer_wheel *tw) {
+    uint64_t now;
+
+    if (tw->next_deadline_ms == UINT64_MAX)
+        return -1;
+
+    now = aura_now_ms(CLOCK_MONOTONIC);
+    if (tw->next_deadline_ms <= now)
+        return 0;
+
+    uint64_t delta = tw->next_deadline_ms - now;
+    return delta;
+}

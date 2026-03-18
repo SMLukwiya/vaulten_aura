@@ -23,7 +23,7 @@ void aura_fn_delete_cb(struct aura_db_completion *comp, ssize_t result) {
         evt.msg[0] = '\0';
 
         aura_db_job_update(glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
-        aura_send_resp(comp->client_fd, &evt, sizeof(evt));
+        aura_resp_send(comp->client_fd, &evt, sizeof(evt));
         comp->status = result;
         comp->proceed = true;
         return;
@@ -101,7 +101,7 @@ void aura_fn_delete_cb(struct aura_db_completion *comp, ssize_t result) {
         evt.msg_len = 0;
 
         aura_db_job_update(glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
-        aura_send_resp(comp->client_fd, (void *)&evt, sizeof(evt));
+        aura_resp_send(comp->client_fd, (void *)&evt, sizeof(evt));
         comp->status = res;
         comp->proceed = true;
         return;
@@ -171,7 +171,7 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
             }
 
             aura_db_job_update(db, job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
-            aura_send_resp(cli_fd, &evt, sizeof(evt));
+            aura_resp_send(cli_fd, &evt, sizeof(evt));
             goto out;
         }
 
@@ -297,7 +297,7 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
             evt.msg_len = 0;
 
             aura_db_job_update(db, job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
-            aura_send_resp(cli_fd, &evt, sizeof(evt));
+            aura_resp_send(cli_fd, &evt, sizeof(evt));
             goto out;
         }
 
@@ -321,9 +321,9 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
         evt.state = A_FN_OP_STATE_DONE;
         evt.msg_len = 0;
 
-        res = aura_send_resp(cli_fd, &evt, sizeof(evt));
+        res = aura_resp_send(cli_fd, &evt, sizeof(evt));
         if (res < 0) {
-            sys_debug(true, errno, "aura_dmn_function_delete: aura_send_resp error:");
+            sys_debug(true, errno, "aura_dmn_function_delete: aura_resp_send error:");
         }
 
     default:

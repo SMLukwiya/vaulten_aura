@@ -2,7 +2,7 @@
 #include "error_lib.h"
 #include "string_lib.h"
 
-void a_dump_msghdr(struct msghdr *msg, bool daemon) {
+void aura_msghdr_dump(struct msghdr *msg, bool daemon) {
     app_debug(daemon, 0, "msghdr dump:");
     app_debug(daemon, 0, " msg_name: %p", msg->msg_name);
     app_debug(daemon, 0, " msg_namelen: %d", msg->msg_namelen);
@@ -43,8 +43,8 @@ void a_dump_msghdr(struct msghdr *msg, bool daemon) {
     }
 }
 
-void aura_dump_msg(struct aura_msg *msg, bool daemon) {
-    app_debug(daemon, 0, "aura message:");
+void aura_msg_dump(struct aura_msg *msg, bool daemon) {
+    app_debug(daemon, 0, "AURA MSG:");
     app_debug(daemon, 0, "   message header:");
     app_debug(daemon, 0, "       header length: %d", msg->hdr.len);
     app_debug(daemon, 0, "       message type: %d", msg->hdr.type);
@@ -61,7 +61,7 @@ void aura_dump_msg(struct aura_msg *msg, bool daemon) {
 }
 
 /* Adds file descriptor as part of the message */
-static inline void a_add_integer(struct cmsghdr *cmsg, int value) {
+static inline void a_integer_add(struct cmsghdr *cmsg, int value) {
     cmsg->cmsg_len = control_len(int);
     cmsg->cmsg_level = SOL_SOCKET;
     cmsg->cmsg_type = SCM_RIGHTS;
@@ -69,7 +69,7 @@ static inline void a_add_integer(struct cmsghdr *cmsg, int value) {
 }
 
 /* Adds user credentials as part of the message */
-static inline void a_add_credentials(struct cmsghdr *cmsg) {
+static inline void a_credentials_add(struct cmsghdr *cmsg) {
     struct sock_cred *cred;
     cmsg->cmsg_len = control_len(struct sock_cred);
     cmsg->cmsg_level = SOL_SOCKET;
@@ -90,18 +90,19 @@ int aura_msg_send(int sock_fd, struct aura_msg_hdr *aura_hdr, void *data, size_t
     struct cmsghdr *cmsg_ptr;
     bool send_fd = fd > -1;
     struct iovec iov_data[2];
-    size_t iov_len = 2, res;
+    size_t iov_len = 2;
+    ssize_t res;
     size_t buf_len = control_space(struct sock_cred);
     if (send_fd) {
         buf_len += control_space(int);
     }
     struct cmsghdr *cmsg;
     memset(&msg, 0, sizeof(struct msghdr));
-    memset(&iov_data, 0, (2 * sizeof(struct iovec)));
+    memset(iov_data, 0, (2 * sizeof(struct iovec)));
 
     cmsg = malloc(buf_len);
     if (!cmsg)
-        return 1;
+        return -1;
 
     iov_data[0].iov_base = aura_hdr;
     iov_data[0].iov_len = sizeof(struct aura_msg_hdr);
@@ -118,31 +119,31 @@ int aura_msg_send(int sock_fd, struct aura_msg_hdr *aura_hdr, void *data, size_t
     msg.msg_controllen = buf_len;
 
     cmsg_ptr = cmsg;
-    a_add_credentials(cmsg_ptr);
+    a_credentials_add(cmsg_ptr);
     if (send_fd) {
         cmsg_ptr = CMSG_NXTHDR(&msg, cmsg_ptr);
-        a_add_integer(cmsg_ptr, fd);
+        a_integer_add(cmsg_ptr, fd);
     }
 
     res = sendmsg(sock_fd, &msg, 0);
     if (res == -1) {
         free(cmsg);
-        return 1;
+        return res;
     }
 
     free(cmsg);
     return 0;
 }
 
-int aura_send_resp(int sock_fd, void *data, size_t len) {
+int aura_resp_send(int sock_fd, void *data, size_t len) {
     errno = 0;
     int res;
     struct msghdr msg;
     struct iovec iov[2];
     struct aura_msg_hdr aura_hdr;
 
-    memset(&iov, 0, 2 * sizeof(struct iovec));
     memset(&msg, 0, sizeof(struct msghdr));
+    memset(iov, 0, 2 * sizeof(struct iovec));
     a_init_msg_hdr(aura_hdr, len, A_MSG_RESPONSE, 0);
     iov[0].iov_base = &aura_hdr;
     iov[0].iov_len = sizeof(struct aura_msg_hdr);
@@ -164,14 +165,14 @@ int aura_send_resp(int sock_fd, void *data, size_t len) {
 
 /**
  * Receive message into an aura message structure
- * NOTE: user must check header length if > 0 and free memory allocated for data
+ * NOTE: user must check header data length if > 0 and free memory allocated for data
  */
-int aura_recv_msg(int sock_fd, struct aura_msg *aura_msg) {
+int aura_msg_recv(int sock_fd, struct aura_msg *aura_msg) {
     size_t ctrl_len = control_space(int) + control_space(struct sock_cred); /* we assume both are passed */
     struct msghdr msg;
     struct cmsghdr *cmsg_ptr;
     struct sock_cred *cred;
-    struct cmsghdr cmsg[ctrl_len];
+    char cmsg[ctrl_len];
     struct iovec iov[1];
     size_t iov_len = 1;
     char *payload;
@@ -196,7 +197,7 @@ int aura_recv_msg(int sock_fd, struct aura_msg *aura_msg) {
     /* read header */
     do {
         n_received = recvmsg(sock_fd, &msg, 0);
-    } while (n_received == -1 && (errno == EINTR || errno == EAGAIN)); /* ignore interrupt signal */
+    } while (n_received == -1 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)); /* ignore interrupt signal */
 
     if (n_received < 0) {
         return -2;
@@ -221,7 +222,7 @@ int aura_recv_msg(int sock_fd, struct aura_msg *aura_msg) {
         /* read payload */
         do {
             n_received = recvmsg(sock_fd, &msg, 0);
-        } while (n_received == -1 && (errno == EINTR || errno == EAGAIN)); /* ignore interrupt signal */
+        } while (n_received == -1 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)); /* ignore interrupt signal */
 
         if (n_received < 0) {
             return -4;
@@ -255,7 +256,7 @@ int aura_recv_msg(int sock_fd, struct aura_msg *aura_msg) {
     return 1;
 }
 
-void *aura_recv_resp(int sock_fd) {
+int aura_recv_resp(struct aura_iovec *data_out, int sock_fd, struct aura_memory_ctx *mc) {
     errno = 0;
     struct aura_msg_hdr hdr;
     struct msghdr msg;
@@ -266,6 +267,8 @@ void *aura_recv_resp(int sock_fd) {
     iov[0].iov_base = &hdr;
     iov[0].iov_len = sizeof(struct aura_msg_hdr);
     memset(&msg, 0, sizeof(struct msghdr));
+    data_out->base = NULL;
+    data_out->len = 0;
 
     /* read header */
     do {
@@ -273,15 +276,21 @@ void *aura_recv_resp(int sock_fd) {
         msg.msg_iovlen = 1;
         n_received = recvmsg(sock_fd, &msg, 0);
     } while (n_received == -1 && (errno == EINTR || errno == EAGAIN)); /* ignore interrupt signal */
-    if (n_received < 0) {
-        return NULL;
-    }
+
+    if (n_received < 0)
+        return -1;
 
     /* body was sent, process body */
     if (hdr.len > 0) {
-        if ((payload = malloc(hdr.len)) == NULL)
-            return NULL;
-        iov[0].iov_base = payload;
+        if (mc)
+            data_out->base = aura_alloc(mc, hdr.len);
+        else
+            data_out->base = malloc(hdr.len);
+
+        if (!data_out->base)
+            return -1;
+        data_out->len = hdr.len;
+        iov[0].iov_base = data_out->base;
         iov[0].iov_len = hdr.len;
 
         /* read payload */
@@ -289,19 +298,13 @@ void *aura_recv_resp(int sock_fd) {
             msg.msg_iov = iov;
             msg.msg_iovlen = 1;
             n_received = recvmsg(sock_fd, &msg, 0);
-        } while (n_received == -1 && (errno == EINTR || errno == EAGAIN)); /* ignore interrupt signal */
-        if (n_received < 0) {
-            return NULL;
-        }
+        } while (n_received == -1 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)); /* ignore interrupt signal */
 
-        if (n_received == 0) {
-            return 0;
-        }
-
-        return payload;
+        if (n_received <= 0)
+            return n_received;
     }
 
-    return NULL;
+    return 0;
 }
 
 /**/

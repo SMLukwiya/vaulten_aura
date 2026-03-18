@@ -63,7 +63,7 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, struct srv_start_arg
 
     if (res == 0 && parser_err->err_cnt > 0) {
         first_err = parser_err->errors[0].message;
-        aura_send_resp(cli_fd, (void *)first_err, strlen(first_err));
+        aura_resp_send(cli_fd, (void *)first_err, strlen(first_err));
         goto out;
     }
 
@@ -127,13 +127,13 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, struct srv_start_arg
             app_alert(true, errno, "aura_dmn_start_server: aura_child_proceed error:");
 
         struct aura_msg res_msg;
-        res = aura_recv_msg(sock_fds[0], &res_msg);
+        res = aura_msg_recv(sock_fds[0], &res_msg);
         if (res_msg.hdr.type != A_MSG_PING) {
             app_debug(true, 0, "aura_dmn_start_server: Incorrect msg hdr type: %d", res_msg.hdr.type);
             goto out;
         }
 
-        res = aura_send_resp(cli_fd, (void *)server_started, sizeof(server_started) - 1);
+        res = aura_resp_send(cli_fd, (void *)server_started, sizeof(server_started) - 1);
         return 0;
     }
 out:
@@ -157,7 +157,7 @@ int aura_dmn_server_stop(struct aura_msg *msg, int sock_fd, int cli_fd, pid_t sr
 
     if (srv_pid == 0) {
         /** @todo: create correct message to return */
-        res = aura_send_resp(cli_fd, (void *)server_stopped, sizeof(server_stopped) - 1);
+        res = aura_resp_send(cli_fd, (void *)server_stopped, sizeof(server_stopped) - 1);
         close(cli_fd);
         return 0;
     }
@@ -165,11 +165,11 @@ int aura_dmn_server_stop(struct aura_msg *msg, int sock_fd, int cli_fd, pid_t sr
     a_init_msg_hdr(hdr, 0, A_MSG_CMD_EXECUTE, A_CMD_SERVER_STOP);
     res = aura_msg_send(sock_fd, &hdr, NULL, 0, -1);
     if (res != 0) {
-        res = aura_send_resp(cli_fd, (void *)server_stopped_failed, sizeof(server_stopped_failed) - 1);
+        res = aura_resp_send(cli_fd, (void *)server_stopped_failed, sizeof(server_stopped_failed) - 1);
         return 1;
     }
 
-    res = aura_send_resp(cli_fd, (void *)server_stopped, sizeof(server_stopped) - 1);
+    res = aura_resp_send(cli_fd, (void *)server_stopped, sizeof(server_stopped) - 1);
     return 0;
 }
 
@@ -188,9 +188,9 @@ int aura_dmn_server_status(int srv_fd, int cli_fd) {
         goto out;
     }
 
-    res = aura_recv_msg(srv_fd, &res_msg);
+    res = aura_msg_recv(srv_fd, &res_msg);
     if (res != 1) {
-        app_debug(true, errno, "aura_dmn_server_status: aura_recv_msg error:");
+        app_debug(true, errno, "aura_dmn_server_status: aura_msg_recv error:");
         goto out;
     }
 
@@ -200,11 +200,11 @@ int aura_dmn_server_status(int srv_fd, int cli_fd) {
         goto out;
     }
 
-    aura_send_resp(cli_fd, server_up, sizeof(server_up) - 1);
+    aura_resp_send(cli_fd, server_up, sizeof(server_up) - 1);
     close(cli_fd);
     return 0;
 out:
-    aura_send_resp(cli_fd, server_down, sizeof(server_down) - 1);
+    aura_resp_send(cli_fd, server_down, sizeof(server_down) - 1);
     close(cli_fd);
     return 1;
 }

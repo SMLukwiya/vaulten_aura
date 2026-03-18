@@ -63,10 +63,8 @@ static inline void a_calculate_sizes(struct aura_slab_cache *s) {
     uint32_t size = s->size;
     uint32_t order;
 
-    size = A_ALIGN(size, ptr_size);
-    s->size = size;
     order = a_calculate_slab_order_2(0, 2, size);
-    s->objs_per_slab = a_num_of_objs(2, size);
+    s->objs_per_slab = a_num_of_objs(order, size);
     s->slab_size = A_PAGE_SIZE << order;
 }
 
@@ -81,14 +79,13 @@ struct aura_slab_cache *aura_slab_cache_create(struct aura_memory_ctx *m_ctx,
 
     obj_size = A_ALIGN(obj_size, ptr_size);
     s_cache = calloc(1, sizeof(*s_cache));
-    if (s_cache == NULL)
+    if (!s_cache)
         return NULL;
 
     s_cache->slab_cache_id = s_cache_id;
     snprintf(s_cache->name, A_MAX_SLAB_NAME - 1, "%s", name);
-    s_cache->name[A_MAX_SLAB_NAME] = '\0';
     s_cache->obj_size = obj_size;
-    s_cache->size = obj_size + A_OBJECT_HEADER_SIZE + (A_REDZONE_SIZE * 2);
+    s_cache->size = A_ALIGN(obj_size + A_OBJECT_HEADER_SIZE + (A_REDZONE_SIZE * 2), ptr_size);
     s_cache->ctor = ctor;
     s_cache->flags = flags;
     s_cache->mem_ctx = m_ctx;
@@ -108,7 +105,6 @@ struct aura_slab_cache *aura_slab_cache_create(struct aura_memory_ctx *m_ctx,
  * add debug and checking info if applicable
  */
 static void *a_setup_object(struct aura_slab_cache *sc, void *obj) {
-    char *user_ptr;
     struct aura_object_hdr *obj_hdr;
     uint64_t *left_redzone, *right_redzone;
     int i;
@@ -118,7 +114,6 @@ static void *a_setup_object(struct aura_slab_cache *sc, void *obj) {
     obj_hdr->slab_id = sc->slab_max_id++;
     obj_hdr->size = sc->obj_size;
     obj_hdr->mem_ctx = sc->mem_ctx;
-    user_ptr = obj + A_OBJECT_HEADER_SIZE + A_REDZONE_SIZE;
 
 #if A_SLAB_REDZONE
     // left_redzone = (uint64_t *)obj + A_OBJECT_HEADER_SIZE;
@@ -179,6 +174,7 @@ struct aura_slab *a_slab_create(struct aura_slab_cache *sc) {
 
     obj_start = aligned_alloc(64, slab_size);
     if (!obj_start) {
+        sys_debug(true, errno, "a_slab_create: aligned_alloc");
         free(slab);
         return NULL;
     }
@@ -187,10 +183,9 @@ struct aura_slab *a_slab_create(struct aura_slab_cache *sc) {
 
     slab->slab_cache = sc;
     a_list_head_init(&slab->slab_list);
-    slab_mem = obj_start;
     obj_stride = sc->size;
 
-    obj_start = a_setup_object(sc, slab_mem);
+    obj_start = a_setup_object(sc, obj_start);
     slab->obj = slab->free_list = obj_start;
     for (i = 0, p = obj_start; i < sc->objs_per_slab - 1; ++i, p = next) {
         next = p + obj_stride;
@@ -422,13 +417,15 @@ bool aura_create_dynamic_slab_alloc_caches(struct aura_memory_ctx *m_ctx) {
     struct aura_slab *slab;
     uint32_t i, idx, max_size, obj_size;
     uint32_t arr_size;
+    char name[64];
 
     arr_size = ARRAY_SIZE(dynamic_slab_pool);
     max_size = dynamic_slab_pool[arr_size - 1];
 
     for (i = 0; i < arr_size; ++i) {
         obj_size = dynamic_slab_pool[i];
-        sc = aura_slab_cache_create(m_ctx, A_SLAB_CACHE_ID_DYAMIC, a_get_slab_name(obj_size), obj_size, NULL, 0);
+        aura_slab_get_cache_name(name, obj_size);
+        sc = aura_slab_cache_create(m_ctx, A_SLAB_CACHE_ID_DYAMIC, name, obj_size, NULL, 0);
         if (!sc) {
             return false;
         }

@@ -226,8 +226,10 @@ size_t aura_sliding_buffer_append(struct aura_sliding_buf *buf, const uint8_t *d
 size_t aura_sliding_buffer_append_from_fd(struct aura_sliding_buf *buf, int fd, size_t max_len) {
     size_t avail_write, to_read;
     ssize_t bytes_read;
+    uint8_t *write_ptr;
 
     avail_write = aura_sliding_buffer_available_write(buf);
+    write_ptr = aura_sliding_buffer_write_pointer(buf);
     if (avail_write == 0) {
         if (!aura_sliding_buffer_ensure_capacity(buf, max_len))
             return 0;
@@ -235,7 +237,7 @@ size_t aura_sliding_buffer_append_from_fd(struct aura_sliding_buf *buf, int fd, 
     }
 
     to_read = a_min(avail_write, max_len);
-    bytes_read = read(fd, buf->data + buf->end, to_read);
+    bytes_read = read(fd, write_ptr, to_read);
 
     if (bytes_read > 0) {
         buf->end += bytes_read;
@@ -245,7 +247,7 @@ size_t aura_sliding_buffer_append_from_fd(struct aura_sliding_buf *buf, int fd, 
         return bytes_read;
     }
 
-    if (bytes_read < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+    if (bytes_read <= 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
         return 0;
 
     return -1;

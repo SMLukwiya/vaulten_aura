@@ -37,7 +37,7 @@
 #define A_HPACK_PARSE_HEADERS_AUTHORITY_EXISTS 8
 #define A_HPACK_PARSE_HEADERS_PROTOCOL_EXISTS 16
 
-#define a_hpack_is_pseudo_header(header) (likely(header[0] == ':'))
+// #define a_hpack_is_pseudo_header(header) (likely(header[0] == ':'))
 #define a_horizontal_tab(c) (likely((uint8_t)c == 0x09))
 
 #define DYNAMIC_TABLE_UPDATE_SIZE 5
@@ -123,6 +123,10 @@ int hpack_parse_response(struct aura_h2_conn *conn, struct aura_h2_stream *strea
 void hpack_dispose_header_table(struct aura_hpack_hdr_table *hdr_tb);
 
 /* ---------- */
+/* Check if header value is a pseudo header */
+static inline bool aura_hpack_is_pseudo_header(char *header) {
+    return likely(header[0] == ':');
+}
 /**
  * Calculate spaces consumed by a single header entry
  */

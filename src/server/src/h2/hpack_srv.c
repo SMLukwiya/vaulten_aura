@@ -80,37 +80,36 @@ static bool hpack_decode_integer(const uint8_t **src, const uint8_t *src_end, ui
     }
     *out = value;
     return true;
-    /** @todo: Test if this extracts 64 bit values correctly */
 }
 
 /**
  *
  */
-static inline bool huffman_decode4(char **dest, uint8_t in, uint8_t *state, bool *accepting, uint8_t *char_errs, int *err) {
-    const nghttp2_huff_decode *entry;
-    uint8_t next_state;
-    int res;
+// static inline bool huffman_decode4(char **dest, uint8_t in, uint8_t *state, bool *accepting, uint8_t *char_errs, int *err) {
+//     const nghttp2_huff_decode *entry;
+//     uint8_t next_state;
+//     int res;
 
-    entry = huff_decode_table[*state] + in;
-    res = entry->flags & NGHTTP2_HUFF_FAIL;
-    if (res != 0) {
-        if (err)
-            *err = HPACK_ERR_COMPRESSION;
-        return false;
-    }
+//     entry = huff_decode_table[*state] + in;
+//     res = entry->flags & NGHTTP2_HUFF_FAIL;
+//     if (res != 0) {
+//         if (err)
+//             *err = HPACK_ERR_COMPRESSION;
+//         return false;
+//     }
 
-    next_state = entry->state;
-    res = entry->flags & NGHTTP2_HUFF_SYM;
-    if (res != 0) {
-        *(*dest)++ = entry->sym;
-        *char_errs |= (entry->flags & NGHTTP2_HUFF_INVALID_CHARS);
-    }
+//     next_state = entry->state;
+//     res = entry->flags & NGHTTP2_HUFF_SYM;
+//     if (res != 0) {
+//         *(*dest)++ = entry->sym;
+//         *char_errs |= (entry->flags & NGHTTP2_HUFF_INVALID_CHARS);
+//     }
 
-    *state = next_state;
-    *accepting = (entry->flags & NGHTTP2_HUFF_ACCEPTED) != 0;
+//     *state = next_state;
+//     *accepting = (entry->flags & NGHTTP2_HUFF_ACCEPTED) != 0;
 
-    return true;
-}
+//     return true;
+// }
 
 /**
  *
@@ -127,7 +126,8 @@ static inline bool header_value_valid_as_whole(const char *s, size_t len) {
 size_t hpack_decode_huffman(char *dest, const uint8_t *src, size_t len, bool value_is_name, int *err) {
     char *ptr = dest;
     const uint8_t *src_end = src + len;
-    uint8_t state = 0, char_errs = 0;
+    uint8_t c, char_errs = 0;
+    const nghttp2_huff_decode e = {0, 0x00, 0}, *entry = &e;
     bool accepting = true;
     bool res;
 
@@ -138,21 +138,37 @@ size_t hpack_decode_huffman(char *dest, const uint8_t *src, size_t len, bool val
     }
 
     for (; src < src_end; src++) {
-        res = huffman_decode4(&ptr, *src >> 4, &state, &accepting, &char_errs, err);
-        if (res == false)
-            return SIZE_MAX;
-        res = huffman_decode4(&ptr, *src & 0xf, &state, &accepting, &char_errs, err);
-        if (res == false)
-            return SIZE_MAX;
+        c = *src;
+        entry = huff_decode_table[entry->state] + (c >> 4);
+        if (entry->flags & NGHTTP2_HUFF_SYM) {
+            *ptr++ = entry->sym;
+            char_errs |= (entry->flags & NGHTTP2_HUFF_INVALID_CHARS);
+        }
+        // res = huffman_decode4(&ptr, *src >> 4, &state, &accepting, &char_errs, err);
+        // if (res == false)
+        //     return SIZE_MAX;
+        // res = huffman_decode4(&ptr, *src & 0xf, &state, &accepting, &char_errs, err);
+        // if (res == false)
+        //     return SIZE_MAX;
+        entry = huff_decode_table[entry->state] + (c & 0xf);
+        if (entry->flags & NGHTTP2_HUFF_SYM) {
+            *ptr++ = entry->sym;
+            char_errs |= (entry->flags & NGHTTP2_HUFF_INVALID_CHARS);
+        }
     }
 
-    if (accepting == false)
+    // if (accepting == false)
+    //     return SIZE_MAX;
+    if (!(entry->flags & NGHTTP2_HUFF_ACCEPTED)) {
+        if (err)
+            *err = HPACK_ERR_COMPRESSION;
         return SIZE_MAX;
+    }
 
     /* validate */
     if (value_is_name) {
         /* pseudo-headers are checked later in 'decode_header' */
-        if (!a_hpack_is_pseudo_header(dest) && (char_errs & NGHTTP2_HUFF_INVALID_FOR_HEADER_NAME) != 0) {
+        if (!aura_hpack_is_pseudo_header(dest) && (char_errs & NGHTTP2_HUFF_INVALID_FOR_HEADER_NAME) != 0) {
             if ((char_errs & NGHTTP2_HUFF_UPPER_CASE_CHAR) != 0) {
                 if (err)
                     *err = HPACK_ERR_PROTOCOL;
@@ -172,14 +188,262 @@ bool hpack_validate_header_name(const uint8_t *src, size_t len, int *err) {
 
     /* all printable chars, except upper case and separator characters */
     static const char valid_h2_header_name_char[] = {
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /*    0-31 */
-      0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, /*   32-63 */
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, /*   64-95 */
-      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, /*  96-127 */
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* 128-159 */
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* 160-191 */
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* 192-223 */
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* 224-255 */
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0, /*    0-31 */
+      0,
+      1,
+      0,
+      1,
+      1,
+      1,
+      1,
+      1,
+      0,
+      0,
+      1,
+      1,
+      0,
+      1,
+      1,
+      0,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0, /*   32-63 */
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      1, /*   64-95 */
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0, /*  96-127 */
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0, /* 128-159 */
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0, /* 160-191 */
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0, /* 192-223 */
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0, /* 224-255 */
     };
 
     if (len == 0)
@@ -211,14 +475,262 @@ void hpack_validate_header_value(const uint8_t *src, size_t len, int *err) {
 
     /* all printable chars + horizontal tab (RFC 7230 3.2) */
     static const char valid_h2_field_value_char[] = {
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /*    0-31 */
-      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /*   32-63 */
-      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /*   64-95 */
-      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, /*  96-127 */
-      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 128-159 */
-      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 160-191 */
-      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 192-223 */
-      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 224-255 */
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0, /*    0-31 */
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1, /*   32-63 */
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1, /*   64-95 */
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      0, /*  96-127 */
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1, /* 128-159 */
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1, /* 160-191 */
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1, /* 192-223 */
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1, /* 224-255 */
     };
 
     for (; len != 0; ++src, --len) {
@@ -245,12 +757,12 @@ static struct aura_iovec *hpack_decode_string(struct aura_memory_ctx *mc, const 
     if (*src >= src_end)
         return NULL;
 
+    /* huffman flag (MSB == 1) */
+    is_huffman = (**src & 0x80) != 0;
+
     res = hpack_decode_integer(src, src_end, 7, &len, err);
     if (res == false)
         return NULL;
-
-    /* huffman flag (MSB == 1) */
-    is_huffman = (**src & 0x80) != 0;
 
     if (is_huffman) {
         if (len > src_end - *src)
@@ -271,7 +783,7 @@ static struct aura_iovec *hpack_decode_string(struct aura_memory_ctx *mc, const 
 
         if (value_is_name) {
             /* pseudo-headers are checked later in 'decode_header' */
-            if ((len == 0 || !a_hpack_is_pseudo_header(*src)) && !hpack_validate_header_name(*src, len, err))
+            if ((len == 0 || !aura_hpack_is_pseudo_header((void *)*src)) && !hpack_validate_header_name(*src, len, err))
                 return NULL;
         } else
             hpack_validate_header_value((char *)*src, len, err);
@@ -354,22 +866,19 @@ bool hpack_decode_header(struct aura_memory_ctx *mc, struct aura_hpack_hdr_table
                          const uint8_t **const src, const uint8_t *src_end, int *err) {
 
     struct aura_hdr_nv *entry;
-    struct aura_iovec *name = NULL;
-    struct aura_iovec *value = NULL;
-    bool name_is_indexed;
-    bool value_is_indexed;
-    bool insert_new_entry;
-    int64_t index;
-    int64_t new_cap;
+    struct aura_iovec *name, *value;
+    bool name_is_indexed, value_is_indexed, insert_new_entry;
+    int64_t index, new_cap;
+    int32_t prefix_len, token;
     int res, binary_format;
-    int32_t prefix_len;
-    int32_t token;
 
     index = 0;
     prefix_len = -1;
     name_is_indexed = false;
     value_is_indexed = false;
     insert_new_entry = false;
+    name = NULL;
+    value = NULL;
     for (; *src < src_end;) {
         /* determine the encoding and proceed */
         binary_format = hpack_determine_binary_format(**src);
@@ -557,7 +1066,7 @@ int hpack_parse_request(struct aura_h2_conn *conn, struct aura_h2_stream *stream
     end = src + len;
     content_length = SIZE_MAX;
     inbound_hdr_tb = &conn->input_hdr_table;
-    req_hdrs = stream->req.headers;
+    req_hdrs = &stream->req.headers;
     while (src != end) {
         decode_err = NULL;
         res = hpack_decode_header(conn->mc, inbound_hdr_tb, &nv, &src, end, &error);
@@ -572,7 +1081,7 @@ int hpack_parse_request(struct aura_h2_conn *conn, struct aura_h2_stream *stream
             }
         }
 
-        if (a_hpack_is_pseudo_header(nv.name->base)) {
+        if (aura_hpack_is_pseudo_header(nv.name->base)) {
             switch (nv.token) {
             case A_TOKEN_AUTHORITY:
                 res = cb[HPACK_AUTHORITY_CB](conn, stream, nv.name, nv.value);
@@ -609,23 +1118,36 @@ int hpack_parse_request(struct aura_h2_conn *conn, struct aura_h2_stream *stream
                 return HPACK_ERR_PROTOCOL;
             }
         } else {
-            if (nv.token == A_TOKEN_CONTENT_LENGTH) {
+            switch (nv.token) {
+            case A_TOKEN_CONTENT_LENGTH:
                 res = cb[HPACK_METHOD_CB](conn, stream, nv.name, nv.value);
                 if (res != HPACK_OK)
                     return res;
-                continue;
-            } else if (nv.token == A_TOKEN_EXPECT) {
-                continue;
-            } else if (nv.token == A_TOKEN_HOST) {
+                break;
+
+            case A_TOKEN_EXPECT:
+            case A_TOKEN_PRIORITY:
+            case A_TOKEN_ACCEPT:
+            case A_TOKEN_ACCEPT_ENCODING:
+            case A_TOKEN_USER_AGENT:
+                break;
+
+            case A_TOKEN_HOST:
                 /* HTTP2 allows the use of host header (in place of :authority) */
                 res = cb[HPACK_AUTHORITY_CB](conn, stream, nv.name, nv.value);
                 if (res != HPACK_OK)
                     return res;
-                continue;
-            } else if (nv.token == A_TOKEN_TE && aura_lc_str_is_eq(nv.value->base, nv.value->len, str_lit("trailers"))) {
-                /* do not reject */
-            } else {
+                break;
+
+            case A_TOKEN_TE:
+                if (aura_lc_str_is_eq(nv.value->base, nv.value->len, str_lit("trailers"))) {
+                    /**/
+                }
+                break;
+
+            default:
                 /* rest of the header fields that are marked as special are rejected */
+                app_debug(true, 0, "hpack unknown special header: %s (ignore)", nv.value->base);
                 return HPACK_ERR_PROTOCOL;
             }
             aura_add_header(conn->mc, req_hdrs, &nv);
@@ -657,7 +1179,7 @@ int hpack_parse_response(struct aura_h2_conn *conn, struct aura_h2_stream *strea
     bool res;
 
     outbound_hdr_tb = &conn->output_hdr_table;
-    res_hdrs = stream->res.headers;
+    res_hdrs = &stream->res.headers;
     end = src + len;
     /* detect missing :status header as the first response */
     if (src == end) {
@@ -1061,11 +1583,11 @@ size_t hpack_stream_produce_data(struct aura_memory_ctx *mc, struct aura_h2_stre
 
     while (remaining > 0) {
         chunk = remaining > stream->conn->peer_settings.max_frame_size ? stream->conn->peer_settings.max_frame_size : remaining;
-        out_frame = aura_encode_data_frame(
-          mc,
-          &stream->data, stream->stream_id,
-          end_stream && (remaining == chunk) ? A_H2_FRAME_FLAG_END_STREAM : 0,
-          data + offset, chunk, 0);
+        // out_frame = aura_encode_data_frame(
+        //   mc,
+        //   &stream->data, stream->stream_id,
+        //   end_stream && (remaining == chunk) ? A_H2_FRAME_FLAG_END_STREAM : 0,
+        //   data + offset, chunk, 0);
 
         /* add to stream outbound queue */
         /* schedule on connection data frame */

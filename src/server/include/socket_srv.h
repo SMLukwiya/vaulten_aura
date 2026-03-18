@@ -18,10 +18,10 @@
 #define A_MAX_READ_PER_CONN (64 * 1024) /* 64KB */
 
 #define A_INVALID_SOCK_FD -1
-#define A_SOCK_LISTENER 0x1
-#define A_SOCK_HANDSHAKE 0x2
-#define A_SOCK_ESTABLISHED 0x4
-#define A_SOCK_CLOSED 0x8
+#define A_SOCK_FLAG_LISTENER 0x1
+#define A_SOCK_STATE_HANDSHAKE 0x2
+#define A_SOCK_STATE_ESTABLISHED 0x4
+#define A_SOCK_STATE_CLOSED 0x8
 
 #define A_MAX_RECORD_TLS_RECORD_SIZE 16384
 #define A_MAX_TRANSMISSION_UNIT_ESTIMATE 1500
@@ -61,12 +61,16 @@ struct aura_sock_tls_ctx {
  * Server socket structure
  */
 struct aura_srv_sock {
-    struct aura_sock_tls_ctx *tls_ctx; /* for tls handshake */
+    struct aura_sock_tls_ctx *tls_ctx; /* for tls stuff */
     int sock_fd;
     socklen_t sock_len;
+    uint8_t state;
     uint32_t flags;
+    bool in_active;
+    bool in_reap;
+    bool is_idle;
     struct sockaddr_storage addr;
-    uint32_t host_conf_off;
+    uint32_t host_conf_off; /* offset within the global host list(array) */
 
     union {
         struct aura_h2_conn *h2_conn; /* h2 connection associated with socket */
@@ -75,6 +79,7 @@ struct aura_srv_sock {
     ptls_log_conn_state_t ptls_log_state;
     /**/
     struct aura_sliding_buf plain_read_buf;
+    struct aura_sliding_buf plain_write_buf;
     struct {
         struct aura_iovec buf;
         size_t pending_off;
@@ -83,6 +88,37 @@ struct aura_srv_sock {
 
     struct aura_list_head s_list; /* for keeping track in queue */
     bool in_write_queue;
+
+    /**
+     * @todo:
+     * intrusive wheel node: struct aura_list_head wheel_node
+     * uin32_t wheel_level (L0/L1/L2/Heap)
+     * uin64_t last_activity
+     * uin32_t wheel_slot
+     * intrusive heap node: struct heap_node hp_node;
+     */
+} __attribute__((aligned(64)));
+
+/* Wave structure */
+struct aura_srv_wave_ctx {
+    struct aura_srv_ctx *srv_ctx;
+    uint32_t wave_cnt; /* Current wave iteration */
+    uint32_t max_wave; /* Max wave iterations */
+    uint64_t tick_start;
+    uint64_t max_epoch_usec; /* Max epoch cpu time slice */
+
+    /* Per wave work tracking */
+    uint32_t all_processed;         /* Total processed */
+    uint32_t critical_processed;    /* Total critical processed */
+    uint32_t latency_processed;     /* Total latency processed */
+    uint32_t throughput_processed;  /* Total tp processed */
+    uint32_t max_critical;          /* Max critical per wave */
+    uint32_t max_latency;           /* Max Latency per wave */
+    uint32_t max_tp_bytes_per_wave; /* Max tp bytes per wave */
+
+    bool critical_empty;
+    bool no_new_critical;
+    uint32_t time_expired;
 };
 
 /**
@@ -96,8 +132,9 @@ struct aura_srv_sock *aura_socket_create(struct aura_memory_ctx *mc, int fd, str
  * using these flags
  */
 struct aura_srv_sock *aura_socket_accept(struct aura_memory_ctx *mc, int fd, int flags);
-void aura_handle_handshake(struct aura_srv_sock *sock, struct aura_srv_ctx *srv_ctx);
-void aura_socket_destroy(struct aura_srv_sock *sock);
+
+/**/
+int aura_handle_handshake(struct aura_srv_sock *sock, struct aura_srv_ctx *srv_ctx);
 
 /** */
 ssize_t aura_read(int fd, void *buf, size_t len);
@@ -111,7 +148,13 @@ ssize_t aura_write(int fd, void *buf, size_t len);
 
 /**/
 void aura_conn_proceed(struct aura_srv_sock *sock, struct aura_srv_ctx *srv_ctx);
-void aura_h2_proceed(struct aura_srv_sock *sock, struct aura_srv_ctx *srv_ctx);
+int aura_h2_proceed(struct aura_srv_sock *sock, struct aura_srv_ctx *srv_ctx);
+
+/**/
+void aura_process_active_queue(struct aura_srv_ctx *srv_ctx);
+
+/**/
+void aura_process_reap_queue(struct aura_srv_ctx *srv_ctx);
 
 /**
  * Decode received tls bytes using the negotiated

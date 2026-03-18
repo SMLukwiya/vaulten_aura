@@ -6,6 +6,7 @@
 #include "list_lib.h"
 #include "memory_lib.h"
 #include "metrics_srv.h"
+#include "optimization_srv.h"
 #include "picotls.h"
 #include "picotls/certificate_compression.h"
 #include "picotls/openssl.h"
@@ -13,6 +14,7 @@
 #include "radix_lib.h"
 #include "route_srv.h"
 #include "socket_srv.h"
+#include "timer_srv.h"
 #include "types_lib.h"
 #include "utils_lib.h"
 
@@ -28,9 +30,6 @@
 #include <unistd.h>
 
 /* for general null terminated string */
-#define a_str_lit(str) (str), strlen(str)
-/* WARNING: only use for static character, and character arrays, not character pointers */
-#define a_str_lit_static(str) (str), sizeof(str) - 1
 
 #define AURA_QLEN 4096
 #define A_MAX_FDS 65536
@@ -75,7 +74,6 @@ struct aura_srv_tls_iden {
         char *key_file;
         void *mmapped_data;
         size_t size;
-        int hsm_slot; /* Hardware security Module slot */
         uint8_t type;
     } key;
 
@@ -118,14 +116,18 @@ struct aura_srv_host_conf {
     struct aura_srv_sec_policy *def_security_policy; /* default security policy */
 };
 
+enum a_work_class {
+    A_WC_NONE = 0,
+    A_WC_CRITICAL,
+    A_WC_LATENCY,
+    A_WC_THROUGHPUT,
+    A_WC_MAINTENANCE
+};
+
 /* Server queues structure */
 struct aura_srv_req_queue {
-    struct aura_list_head fast_lane_queue;
-    struct aura_list_head standard_queue;
-    struct aura_list_head background_queue;
-    struct aura_list_head handshake_queue;
-    struct aura_list_head timeout_queue;
-    struct aura_list_head write_queue;
+    struct aura_list_head active; /* Hold temp read ready conns as they await being moved to appropriate queues */
+    struct aura_list_head reap;   /* Hold temp write ready conns as they await being moved to appropriate queues */
 
     /*Adaptive scheduling stats */
     uint32_t avg_completion_time[A_TOTAL_ADMISSIONS_PRIORITY_LEVELS]; /* Per prio */
@@ -167,15 +169,13 @@ struct aura_srv_ctx {
         size_t aura_server_errors[10]; /** @todo: define AURA_SERVER_ERRORS */
     } h2;
 
-    struct {
-        struct aura_srv_req_queue queues;
-        size_t handshake_cnt;
-        size_t read_cnt;
-        size_t write_cnt;
-        size_t timeout_cnt;
-        /* if we have an internal request, we store the sock fd */
-        bool internal;
-    } batches;
+    struct aura_srv_req_queue queues; /* Queues according to stage (handshake...etc) */
+    size_t handshake_cnt;
+    size_t read_cnt;
+    size_t write_cnt;
+    size_t timeout_cnt;
+    bool internal;     /* Internal request from daemon */
+    uint64_t inflight; /* requests inflight */
 
     struct aura_srv_metrics_bucket metrics;
 };
@@ -207,6 +207,9 @@ struct aura_srv_global_conf {
     struct aura_iovec aura_app_path;
     struct aura_iovec aura_db_path;
     AURA_DBHANDLE db_handle;
+
+    struct aura_timer_wheel timer_wheel;
+    struct aura_srv_optimizer optimizer;
 };
 
 #endif

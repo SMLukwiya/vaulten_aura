@@ -52,7 +52,8 @@ int aura_cli_run_fn_deploy(void *opts_ptr, void *glob_opts) {
     struct aura_msg_hdr hdr;
     struct fn_deploy_config *opts;
     struct aura_fn_evt *evt;
-    int sock_fd, file_fd, dir_fd;
+    struct aura_iovec data;
+    int sock_fd, file_fd, dir_fd, res;
 
     aura_try_connect_or_error(&sock_fd);
     if (sock_fd == -1)
@@ -98,7 +99,14 @@ int aura_cli_run_fn_deploy(void *opts_ptr, void *glob_opts) {
     bool should_terminate;
     while (true) {
         should_terminate = false;
-        evt = aura_recv_resp(sock_fd);
+        res = aura_recv_resp(&data, sock_fd, NULL);
+        if (res < 0) {
+            closedir(dp);
+            close(sock_fd);
+            return res;
+        }
+
+        evt = (struct aura_fn_evt *)data.base;
         if (!evt)
             break;
 

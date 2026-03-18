@@ -1,0 +1,9 @@
+[submodule "deps/quickjs"]
+	path = deps/quickjs
+	url = https://github.com/bellard/quickjs.git
+[submodule "deps/picotls"]
+	path = deps/picotls
+	url = https://github.com/h2o/picotls.git
+[submodule "deps/libyaml"]
+	path = deps/libyaml
+	url = https://github.com/yaml/libyaml

@@ -36,7 +36,8 @@ int aura_cli_run_fn_validate_config_cli(void *opts_ptr, void *glob_opts) {
     bool ret;
     struct aura_msg_hdr hdr;
     struct aura_msg response;
-    char *data;
+    struct aura_iovec data;
+    // char *data;
 
     aura_try_connect_or_error(&sock_fd);
     if (sock_fd == -1)
@@ -54,9 +55,9 @@ int aura_cli_run_fn_validate_config_cli(void *opts_ptr, void *glob_opts) {
     if (aura_msg_send(sock_fd, &hdr, NULL, 0, file_fd) != 0)
         sys_exit(false, errno, "Failed to send aura cli command");
 
-    data = aura_recv_resp(sock_fd);
-    if (data != NULL) {
-        app_info(false, 0, "%s", data);
+    res = aura_recv_resp(&data, sock_fd, NULL);
+    if (data.base != NULL) {
+        app_info(false, 0, "%s", data.base);
     }
     close(sock_fd); /** Is there need since the cli exits here */
     return 0;

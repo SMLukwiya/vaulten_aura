@@ -5,6 +5,8 @@ project(vaulten_aura_test)
 set(common_sources
     ${vaulten_aura_SOURCE_DIR}/lib/error_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/utils_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/slab_lib_v1.c
 )
 
 # -------------------- DB TESTS -------------------- #
@@ -17,7 +19,7 @@ add_executable(test_aura_db
     ${vaulten_aura_SOURCE_DIR}/lib/slab_lib_v1.c
     ${common_sources}
 )
-target_link_libraries(test_aura_db PUBLIC openssl::openssl)
+target_link_libraries(test_aura_db PUBLIC OpenSSL::SSL OpenSSL::Crypto)
 target_include_directories(test_aura_db 
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include 
     PRIVATE ${PROJECT_INCLUDE_DIR}
@@ -84,7 +86,7 @@ set_tests_properties(daemon_test PROPERTIES
 # Bytecode generation
 add_executable(test_bytecode_gen
     daemon/codegen.c
-    ${vaulten_aura_SOURCE_DIR}/lib/runtime_lib.c
+    # ${vaulten_aura_SOURCE_DIR}/lib/runtime_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
     ${common_sources}
 )
@@ -94,7 +96,7 @@ target_include_directories(test_bytecode_gen
     PRIVATE ${PROJECT_INCLUDE_DIR}
 )
 
-target_link_libraries(test_bytecode_gen PRIVATE quickjs::quickjs)
+target_link_libraries(test_bytecode_gen PRIVATE quickjs)
 
 add_test(
     NAME codegen_test

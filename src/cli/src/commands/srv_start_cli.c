@@ -50,7 +50,7 @@ int aura_cli_run_server_start(void *opts_ptr, void *glob_opt) {
     char resolved_svr_conf_file_path[1024];
     int sock_fd, file_fd, res;
     struct aura_msg_hdr hdr;
-    char *data;
+    struct aura_iovec data;
     struct svr_start_opts *opts;
 
     aura_try_connect_or_error(&sock_fd);
@@ -76,9 +76,14 @@ int aura_cli_run_server_start(void *opts_ptr, void *glob_opt) {
     }
     close(file_fd);
 
-    data = aura_recv_resp(sock_fd);
-    if (data != NULL)
-        app_info(false, 0, "%s", data);
+    res = aura_recv_resp(&data, sock_fd, NULL);
+    if (res < 0) {
+        close(sock_fd);
+        return res;
+    }
+
+    if (data.base != NULL)
+        app_info(false, 0, "%s", data.base);
 
     close(sock_fd);
     return 0;

@@ -65,7 +65,8 @@ struct aura_cli_flag fn_list_stopped_flag = {
 int aura_cli_fn_list(void *opts_ptr, void *glob_opts) {
     struct aura_msg_hdr hdr;
     struct fn_list_config *opts;
-    int sock_fd;
+    int sock_fd, res;
+    struct aura_iovec data;
     char *state;
     struct aura_fn_evt *evt;
 
@@ -92,8 +93,13 @@ int aura_cli_fn_list(void *opts_ptr, void *glob_opts) {
 
     while (true) {
         should_terminate = false;
-        evt = aura_recv_resp(sock_fd);
+        res = aura_recv_resp(&data, sock_fd, NULL);
+        if (res < 0) {
+            close(sock_fd);
+            return res;
+        }
 
+        evt = (struct aura_fn_evt *)data.base;
         if (!evt)
             break;
 

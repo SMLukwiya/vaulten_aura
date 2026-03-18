@@ -22,10 +22,6 @@
 #define A_REDZONE_SIZE 0
 #endif
 
-#define VAL(x) #x
-#define STR(x) VAL(x)
-#define a_get_slab_name(size) ((size) < 1024) ? STR(size) "B" : ((size) < 1048576) ? STR(size) "KB" \
-                                                                                   : STR(size) "MB"
 #define A_MAX_SLAB_NAME 128
 
 /* Object header structure */
@@ -183,6 +179,13 @@ static inline void a_verify_poison_pattern(void *ptr, uint64_t size, uint64_t ex
     do {                                     \
     } while (0)
 #endif
+
+/* Get the name of dynamic cache */
+static inline void aura_slab_get_cache_name(char *buf, uint32_t size) {
+    char *ext = size < 1024 ? "B" : size < 1048576 ? "KB"
+                                                   : "MB";
+    sprintf(buf, "%d %s", size, ext);
+}
 
 /* our dynamic memory is in 64 byte multiples */
 static inline int aura_get_dynamic_slab_index(size_t size) {

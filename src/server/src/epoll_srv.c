@@ -123,16 +123,18 @@ int aura_epoll_poll(struct aura_evt_loop *evt_loop, int64_t timeout_ms, uint32_t
     int num_of_events, fd, i, j;
     struct aura_srv_sock *sock, *peer_sock;
     struct aura_epoll_data *epoll = evt_loop->backend;
+    struct epoll_event ev;
 
     num_of_events = epoll_wait(epoll->epoll_fd, epoll->ep_events, evt_loop->max_fds, timeout_ms);
     if (num_of_events < 0 && errno != EINTR)
         sys_exit(true, errno, "aura_epoll_poll: epoll_wait error:");
 
     for (i = 0; i < num_of_events; ++i) {
-        fd = epoll->ep_events[i].data.fd;
+        ev = epoll->ep_events[i];
+        fd = ev.data.fd;
 
-        if (fd == evt_loop->dmn_fd && (epoll->ep_events[i].events & EPOLLIN)) {
-            evt_loop->srv_ctx->batches.internal = true;
+        if (fd == evt_loop->dmn_fd && (ev.events & EPOLLIN)) {
+            evt_loop->srv_ctx->internal = true;
             evt_loop->ops->remove(evt_loop, fd);
             continue;
         }
@@ -141,27 +143,49 @@ int aura_epoll_poll(struct aura_evt_loop *evt_loop, int64_t timeout_ms, uint32_t
         if (!sock) /* should not happen */
             continue;
 
-        if (sock->flags & A_SOCK_LISTENER) {
-            for (j = 0; j < max_accept; ++j) {
-                peer_sock = aura_socket_accept(&evt_loop->srv_ctx->glob_conf->mem_ctx, fd, A_SOCK_HANDSHAKE);
-                if (peer_sock == NULL) {
+        /* Error or Hangup - immediate critical */
+        if (epoll->ep_events[i].events & (EPOLLERR | EPOLLHUP)) {
+            /* Remove from whatever list it was previously on */
+            a_list_delete(&sock->s_list);
+            sock->state = A_SOCK_STATE_CLOSED;
+            evt_loop->ops->remove(evt_loop, fd);
+            a_list_add_tail(&evt_loop->srv_ctx->queues.reap, &sock->s_list);
+            continue;
+        }
+
+        if (sock->flags & A_SOCK_FLAG_LISTENER) {
+            for (int j = 0; j < max_accept; ++j) {
+                peer_sock = aura_socket_accept(&evt_loop->srv_ctx->glob_conf->mem_ctx, sock->sock_fd, 0);
+                if (!peer_sock) {
                     if (errno == EAGAIN) {
-                        /* We have exhausted all we can accept */
+                        /* No more to accept */
                         break;
                     } else {
-                        sys_debug(true, errno, "Failed to create peer socket");
+                        sys_debug(true, errno, "aura_epoll_poll: aura_socket_accept error:");
                         break;
                     }
                 }
 
                 /* create tls for new conn */
-                peer_sock->tls_ctx->ptls = ptls_server_new(evt_loop->srv_ctx->listener_conf->tls_pool.idens[0].contexts.tls1_3.ctx); // evt_loop->srv_ctx->listener_conf->ptls;
+                peer_sock->tls_ctx->ptls = ptls_server_new(evt_loop->srv_ctx->listener_conf->tls_pool.idens[0].contexts.tls1_3.ctx);
+                /* Attach sock as opaque data to tls object */
                 *ptls_get_data_ptr(peer_sock->tls_ctx->ptls) = peer_sock;
+                /* Store peer socket in sock map */
                 evt_loop->srv_ctx->glob_conf->fdmap[peer_sock->sock_fd] = peer_sock;
+                /* Add peer sock fd to poll */
                 evt_loop->ops->add(evt_loop, peer_sock->sock_fd, AURA_EVENT_READ);
-                a_list_add(&evt_loop->srv_ctx->batches.queues.handshake_queue, &peer_sock->s_list);
+                /* Add handshake to latency queue */
             }
             continue;
+        }
+
+        if (ev.events & EPOLLIN || ev.events & EPOLLOUT) {
+            /* delete from whatever queue (even if it's already in the right queue) */
+            a_list_delete(&sock->s_list);
+            /* Add to appropriate queue */
+            sock->in_active = true;
+            sock->in_reap = false;
+            a_list_add_tail(&evt_loop->srv_ctx->queues.active, &sock->s_list);
         }
     }
 }
