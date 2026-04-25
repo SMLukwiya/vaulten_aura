@@ -11,6 +11,7 @@
 #include <arpa/inet.h>
 #include <stdarg.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 
 /**
@@ -77,7 +78,7 @@ static inline void a_ensure_node_is_sequence(struct aura_yml_conf_parser *p, yam
 }
 
 /*----------- AURA YAML VERSION -----------*/
-void a_validate_yaml_version_fn(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct aura_yml_node *yn) {
+void a_yml_validate_fn_version(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct aura_yml_node *yn) {
     struct aura_yml_usr_data_ctx *usr_data;
     const char *value = evt->data.scalar.value;
 
@@ -96,7 +97,7 @@ void a_validate_yaml_version_fn(struct aura_yml_conf_parser *p, yaml_event_t *ev
 }
 
 /*---------- SERVER ----------*/
-void a_validate_yml_server(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct aura_yml_node *yn) {
+void a_yml_validate_server_info(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct aura_yml_node *yn) {
     struct aura_yml_usr_data_ctx *usr_data;
     aura_rax_tree_t *rax;
     uint32_t node_off;
@@ -141,55 +142,13 @@ void a_validate_yml_server(struct aura_yml_conf_parser *p, yaml_event_t *evt, st
         return;
     }
 
-    /* port */
-    if (strcmp(yn->key, "port") == 0) {
-        uint32_t port;
-
-        a_ensure_node_is_scalar(p, evt, yn);
-
-        /**
-         * Scan with 32 bits so we can detect larger numbers
-         * otherwise 16 bits would wrap around and we wouldn't
-         * detect.
-         */
-        res = aura_scan_str(yn->str_val, "%" SCNu32, &port);
-        if (res != 1 || port > UINT16_MAX)
-            YAML_ADD_ERROR(p, evt, "Invalid %s, Expected a valid port number", yn->full_path);
-
-        if (usr_data->extract && !p->in_panic) {
-            node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NUM, A_IDX_SERVER_PORT);
-            usr_data->node_arr[node_off].uint_val = port;
-            a_parse_tree_insert(p, evt, yn, node_off);
-        }
-        return;
-    }
-
-    /* address */
-    if (strcmp(yn->key, "addr") == 0) {
-        uint32_t addr;
-
-        a_ensure_node_is_scalar(p, evt, yn);
-
-        if (inet_pton(AF_INET, yn->str_val, &addr) != 1)
-            YAML_ADD_ERROR(p, evt, "Invalid %s, Expected a valid address", yn->full_path);
-
-        if (usr_data->extract && !p->in_panic) {
-            node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NUM, A_IDX_SERVER_ADDR);
-            usr_data->node_arr[node_off].uint_val = addr;
-            a_parse_tree_insert(p, evt, yn, node_off);
-        }
-        return;
-    }
-
     /* timeout map */
     if (strcmp(yn->key, "timeout") == 0) {
         a_ensure_node_is_mapping(p, evt, yn);
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_NONE);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_SERVER_NONE);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -201,7 +160,7 @@ void a_validate_yml_server(struct aura_yml_conf_parser *p, yaml_event_t *evt, st
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_SERVER_TO_READ);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_SERVER_READ_TO);
             usr_data->node_arr[node_off].str_val = strdup(yn->str_val);
             // usr_data->node_arr[node_off].val_type = A_YAML_STRING; /** @todo: maybe number */
             a_parse_tree_insert(p, evt, yn, node_off);
@@ -216,7 +175,7 @@ void a_validate_yml_server(struct aura_yml_conf_parser *p, yaml_event_t *evt, st
         if (usr_data->extract && !p->in_panic) {
 
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_SERVER_TO_WRITE);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_SERVER_WRITE_TO);
             usr_data->node_arr[node_off].str_val = strdup(yn->str_val);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
@@ -224,8 +183,257 @@ void a_validate_yml_server(struct aura_yml_conf_parser *p, yaml_event_t *evt, st
     }
 }
 
+typedef enum {
+    A_FIELD_ADDR,
+    A_FIELD_PORT,
+    A_FIELD_PROTOCOL,
+    A_FIELD_TLS,
+    A_FIELD_QUIC
+} a_listener_field_type;
+
+/* Fill the listener array */
+static inline int a_listener_append(struct aura_yml_srv_listeners *listeners, int idx, a_listener_field_type field_type, void *val) {
+    /* touching this index position for the first time */
+    bool first_visit = listeners->cnt != idx + 1;
+    /* count driven by yaml index */
+    listeners->cnt = idx + 1;
+
+    while (listeners->cap <= listeners->cnt) {
+        listeners->cap = listeners->cap == 0 ? 3 : listeners->cap * 2;
+        listeners->entries = realloc(listeners->entries, sizeof(*listeners->entries) * listeners->cap);
+        if (!listeners->entries)
+            return -1;
+    }
+
+    /* set default values if first visit */
+    if (first_visit) {
+        listeners->entries[idx].address = A_ADDR_UNSET_IPV4;
+        listeners->entries[idx].port = A_PORT_UNSET;
+        listeners->entries[idx].protocol = A_PROTOCOL_NONE;
+        listeners->entries[idx].tls = false;
+        listeners->entries[idx].quic = false;
+    }
+
+    switch (field_type) {
+    case A_FIELD_ADDR:
+        listeners->entries[idx].address = *(uint64_t *)val;
+        break;
+
+    case A_FIELD_PORT:
+        listeners->entries[idx].port = *(uint16_t *)val;
+        break;
+
+    case A_FIELD_PROTOCOL:
+        listeners->entries[idx].protocol = *(a_transport_protocol *)val;
+        break;
+
+    case A_FIELD_TLS:
+        listeners->entries[idx].tls = *(bool *)val;
+        break;
+
+    case A_FIELD_QUIC:
+        listeners->entries[idx].quic = *(bool *)val;
+        break;
+
+    default:
+        return -1;
+    }
+
+    return 0;
+}
+
+/* ---------- LISTENERS ---------- */
+void a_yml_validate_listeners(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct aura_yml_node *yn) {
+    struct aura_yml_usr_data_ctx *usr_data;
+    aura_rax_tree_t *rax;
+    uint32_t node_off;
+    int res;
+
+    usr_data = (struct aura_yml_usr_data_ctx *)p->usr_data_ctx;
+    rax = usr_data->parse_tree;
+
+    if (!yn) {
+        app_alert(true, 0, "Validation node not passed: fix asap");
+        return;
+    }
+
+    if (usr_data->extract && !rax) {
+        app_alert(true, 0, "Trying to extract data without parser tree!: fix asap");
+        return;
+    }
+
+    if (strcmp(yn->key, "listeners") == 0) {
+        a_ensure_node_is_sequence(p, evt, yn);
+
+        if (usr_data->extract && !p->in_panic) {
+            node_off = a_get_node_off(p, evt);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_SERVER_LISTENERS);
+            a_parse_tree_insert(p, evt, yn, node_off);
+        }
+        return;
+    }
+
+    if (strcmp(yn->key, "listeners[*]") == 0) {
+        a_ensure_node_is_mapping(p, evt, yn);
+
+        if (usr_data->extract && !p->in_panic) {
+            node_off = a_get_node_off(p, evt);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_SERVER_NONE);
+            a_parse_tree_insert(p, evt, yn, node_off);
+        }
+        return;
+    }
+
+    if (strcmp(yn->key, "name") == 0) {
+        a_ensure_node_is_scalar(p, evt, yn);
+
+        if (usr_data->extract && !p->in_panic) {
+            node_off = a_get_node_off(p, evt);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_SERVER_NONE);
+            usr_data->node_arr[node_off].str_val = yn->str_val ? strdup(yn->str_val) : NULL;
+            a_parse_tree_insert(p, evt, yn, node_off);
+        }
+        return;
+    }
+
+    /* address */
+    if (strcmp(yn->key, "address") == 0) {
+        uint32_t addr;
+
+        a_ensure_node_is_scalar(p, evt, yn);
+
+        if (inet_pton(AF_INET, yn->str_val, &addr) != 1)
+            YAML_ADD_ERROR(p, evt, "Invalid %s, Expected a valid address", yn->full_path);
+
+        if (a_listener_append(&usr_data->listeners, yn->idx, A_FIELD_ADDR, (void *)&addr) < 0)
+            YAML_ADD_ERROR(p, evt, "Internal validation error: %s", yn->full_path);
+
+        if (usr_data->extract && !p->in_panic) {
+            node_off = a_get_node_off(p, evt);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_SERVER_NONE);
+            usr_data->node_arr[node_off].str_val = strdup(yn->str_val);
+            a_parse_tree_insert(p, evt, yn, node_off);
+        }
+        return;
+    }
+
+    /* port */
+    if (strcmp(yn->key, "port") == 0) {
+        uint32_t port;
+
+        a_ensure_node_is_scalar(p, evt, yn);
+
+        /**
+         * Scan with 32 bits to be able to detect invalid port
+         * beyond 65536.
+         */
+        res = aura_scan_str(yn->str_val, "%" SCNu32, &port);
+        if (res != 1 || port > UINT16_MAX)
+            YAML_ADD_ERROR(p, evt, "Invalid %s, Expected a valid port number", yn->full_path);
+
+        if (a_listener_append(&usr_data->listeners, yn->idx, A_FIELD_PORT, (void *)&port) < 0)
+            YAML_ADD_ERROR(p, evt, "Internal validation error: %s", yn->full_path);
+
+        if (usr_data->extract && !p->in_panic) {
+            node_off = a_get_node_off(p, evt);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_SERVER_NONE);
+            usr_data->node_arr[node_off].str_val = strdup(yn->str_val);
+            a_parse_tree_insert(p, evt, yn, node_off);
+        }
+        return;
+    }
+
+    /* protocol */
+    if (strcmp(yn->key, "protocol") == 0) {
+        a_ensure_node_is_scalar(p, evt, yn);
+        int is_tcp = strcasecmp(yn->str_val, "tcp") == 0;
+        int is_udp = strcasecmp(yn->str_val, "udp") == 0;
+
+        if (!is_tcp && !is_udp != 0)
+            YAML_ADD_ERROR(p, evt, "Invalid listener protocol, expected 'tcp' or 'udp");
+
+        /* Not supported as yet! */
+        if (is_udp)
+            YAML_ADD_ERROR(p, evt, "UDP/QUIC protocol not yet supported");
+
+        int proto = is_tcp ? A_PROTOCOL_TCP : is_udp ? A_PROTOCOL_UDP
+                                                     : A_PROTOCOL_NONE;
+        if (a_listener_append(&usr_data->listeners, yn->idx, A_FIELD_PROTOCOL, (void *)&proto) < 0)
+            YAML_ADD_ERROR(p, evt, "Internal validation error: %s", yn->full_path);
+
+        if (usr_data->extract && !p->in_panic) {
+            node_off = a_get_node_off(p, evt);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NUM, A_IDX_SERVER_NONE);
+            usr_data->node_arr[node_off].int_val = proto;
+            a_parse_tree_insert(p, evt, yn, node_off);
+        }
+        return;
+    }
+
+    /* tls status */
+    if (strcmp(yn->key, "tls") == 0) {
+        a_ensure_node_is_scalar(p, evt, yn);
+        int is_true = strcasecmp(yn->str_val, "true") == 0;
+        int is_false = strcasecmp(yn->str_val, "false") == 0;
+
+        if (!is_true && !is_false != 0)
+            YAML_ADD_ERROR(p, evt, "Invalid listener tls configuration, expected 'true' or 'false");
+
+        bool tls = is_true ? true : false;
+        if (a_listener_append(&usr_data->listeners, yn->idx, A_FIELD_TLS, (void *)&tls) < 0)
+            YAML_ADD_ERROR(p, evt, "Internal validation error: %s", yn->full_path);
+
+        if (usr_data->extract && !p->in_panic) {
+            node_off = a_get_node_off(p, evt);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_BOOL, A_IDX_SERVER_NONE);
+            usr_data->node_arr[node_off].bool_val = tls;
+            a_parse_tree_insert(p, evt, yn, node_off);
+        }
+        return;
+    }
+
+    /* quic status */
+    if (strcmp(yn->key, "quic") == 0) {
+        a_ensure_node_is_scalar(p, evt, yn);
+        int is_true = strcasecmp(yn->str_val, "true") == 0;
+        int is_false = strcasecmp(yn->str_val, "false") == 0;
+
+        if (!is_true && !is_false != 0)
+            YAML_ADD_ERROR(p, evt, "Invalid listener quic configuration, expected 'true' or 'false");
+
+        bool quic = is_true ? true : false;
+        if (a_listener_append(&usr_data->listeners, yn->idx, A_FIELD_QUIC, (void *)&quic) < 0)
+            YAML_ADD_ERROR(p, evt, "Internal validation error: %s", yn->full_path);
+
+        if (usr_data->extract && !p->in_panic) {
+            node_off = a_get_node_off(p, evt);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_BOOL, A_IDX_SERVER_NONE);
+            usr_data->node_arr[node_off].bool_val = quic;
+            a_parse_tree_insert(p, evt, yn, node_off);
+        }
+        return;
+    }
+}
+
+/* Fill the listener array */
+static inline int a_listener_tls_tag(struct aura_yml_tls_tags *tags, int idx, char *val) {
+    /* count driven by yaml index */
+    tags->cnt = idx + 1;
+
+    while (tags->cap <= tags->cnt) {
+        tags->cap = tags->cap == 0 ? 3 : tags->cap * 2;
+        tags->entries = realloc(tags->entries, sizeof(*tags->entries) * tags->cap);
+        if (!tags->entries)
+            return -1;
+    }
+
+    tags->entries[idx] = strdup(val);
+
+    return 0;
+}
+
 /*---------- TLS ----------*/
-void a_validate_yml_tls(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct aura_yml_node *yn) {
+void a_yml_validate_tls(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct aura_yml_node *yn) {
     struct aura_yml_usr_data_ctx *usr_data;
     aura_rax_tree_t *rax;
     uint32_t node_off;
@@ -249,7 +457,7 @@ void a_validate_yml_tls(struct aura_yml_conf_parser *p, yaml_event_t *evt, struc
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_NONE);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_SERVER_NONE);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -263,7 +471,7 @@ void a_validate_yml_tls(struct aura_yml_conf_parser *p, yaml_event_t *evt, struc
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_TLS_IDEN);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_SERVER_TLS_IDEN);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -275,7 +483,7 @@ void a_validate_yml_tls(struct aura_yml_conf_parser *p, yaml_event_t *evt, struc
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_NONE);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_SERVER_NONE);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -319,7 +527,7 @@ void a_validate_yml_tls(struct aura_yml_conf_parser *p, yaml_event_t *evt, struc
         usr_data->expect_key = true;
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_NONE);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_SERVER_NONE);
             usr_data->node_arr[node_off].str_val = strdup(resolved);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
@@ -358,7 +566,7 @@ void a_validate_yml_tls(struct aura_yml_conf_parser *p, yaml_event_t *evt, struc
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_NONE);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_SERVER_NONE);
             usr_data->node_arr[node_off].str_val = strdup(resolved);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
@@ -373,9 +581,16 @@ void a_validate_yml_tls(struct aura_yml_conf_parser *p, yaml_event_t *evt, struc
     if (strcmp(yn->key, "tag") == 0) {
         a_ensure_node_is_scalar(p, evt, yn);
 
+        /* update tls seen on the first tag */
+        if (!usr_data->seen_tls_identities)
+            usr_data->seen_tls_identities = true;
+
+        if (a_listener_tls_tag(&usr_data->tls_tags, yn->idx, (char *)yn->str_val) < 0)
+            YAML_ADD_ERROR(p, evt, "Internal validation error: %s", yn->full_path);
+
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_NONE);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_SERVER_NONE);
             usr_data->node_arr[node_off].str_val = strdup(yn->str_val);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
@@ -408,7 +623,7 @@ void a_validate_yml_tls(struct aura_yml_conf_parser *p, yaml_event_t *evt, struc
         proceed:
             if (usr_data->extract && !p->in_panic) {
                 node_off = a_get_node_off(p, evt);
-                a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_NONE);
+                a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_SERVER_NONE);
                 /**
                  * Since the same key is re-used for the sequence entries as well,
                  * we must check if we have a value associated with an entry,
@@ -423,7 +638,7 @@ void a_validate_yml_tls(struct aura_yml_conf_parser *p, yaml_event_t *evt, struc
             usr_data->seen_ciphers = true;
             if (usr_data->extract && !p->in_panic) {
                 node_off = a_get_node_off(p, evt);
-                a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_TLS_CIPHERS);
+                a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_SERVER_TLS_CIPHERS);
                 usr_data->node_arr[node_off].str_val = NULL;
                 a_parse_tree_insert(p, evt, yn, node_off);
             }
@@ -432,12 +647,49 @@ void a_validate_yml_tls(struct aura_yml_conf_parser *p, yaml_event_t *evt, struc
     }
 }
 
+typedef enum {
+    A_FIELD_HOST_NAME,
+    A_FIELD_HOST_TLS,
+} a_host_field_type;
+
+/* Fill the listener array */
+static inline int a_host_append(struct aura_yml_srv_hosts *hosts, int idx, a_host_field_type field_type, void *val) {
+    /* touching this index position for the first time */
+    bool first_visit = hosts->cnt != idx + 1;
+    /* count driven by yaml index */
+    hosts->cnt = idx + 1;
+
+    while (hosts->cap <= hosts->cnt) {
+        hosts->cap = hosts->cap == 0 ? 3 : hosts->cap * 2;
+        hosts->entries = realloc(hosts->entries, sizeof(*hosts->entries) * hosts->cap);
+        if (!hosts->entries)
+            return -1;
+    }
+
+    /* set default values if first visit */
+    if (first_visit) {
+        hosts->entries[idx].name = NULL;
+        hosts->entries[idx].tls_tag = NULL;
+    }
+
+    switch (field_type) {
+    case A_FIELD_HOST_NAME:
+        hosts->entries[idx].name = strdup(val);
+        break;
+
+    case A_FIELD_HOST_TLS:
+        hosts->entries[idx].tls_tag = strdup(val);
+        break;
+
+    default:
+        return -1;
+    }
+
+    return 0;
+}
+
 /*---------- HOST ----------*/
-/**
- * Validate hosts
- * hosts
- */
-void a_validate_hosts(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct aura_yml_node *yn) {
+void a_yml_validate_hosts(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct aura_yml_node *yn) {
     struct aura_yml_usr_data_ctx *usr_data;
     aura_rax_tree_t *rax;
     uint32_t node_off;
@@ -461,7 +713,7 @@ void a_validate_hosts(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct 
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_HOSTS);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_SERVER_HOSTS);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -472,9 +724,7 @@ void a_validate_hosts(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct 
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            // usr_data->node_arr[node_off].type = yn->type;
-            // usr_data->node_arr[node_off].key = strdup(yn->key);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_NONE);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_SERVER_NONE);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -483,9 +733,12 @@ void a_validate_hosts(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct 
     if (strcmp(yn->key, "name") == 0) {
         a_ensure_node_is_scalar(p, evt, yn);
 
+        if (a_host_append(&usr_data->hosts, yn->idx, A_FIELD_HOST_NAME, (void *)yn->str_val) < 0)
+            YAML_ADD_ERROR(p, evt, "Internal validation error: %s", yn->full_path);
+
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_NONE);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_SERVER_NONE);
             usr_data->node_arr[node_off].str_val = strdup(yn->str_val);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
@@ -495,9 +748,12 @@ void a_validate_hosts(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct 
     if (strcmp(yn->key, "tls") == 0) {
         a_ensure_node_is_scalar(p, evt, yn);
 
+        if (a_host_append(&usr_data->hosts, yn->idx, A_FIELD_HOST_TLS, (void *)yn->str_val) < 0)
+            YAML_ADD_ERROR(p, evt, "Internal validation error: %s", yn->full_path);
+
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_NONE);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_SERVER_NONE);
             usr_data->node_arr[node_off].str_val = strdup(yn->str_val);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
@@ -512,7 +768,7 @@ void a_validate_hosts(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct 
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_NONE);
+            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_SERVER_NONE);
             /**
              * Since the same key is re used for the sequence entries as well,
              * we must check if we have a value associated with an entry,
@@ -529,8 +785,13 @@ void a_validate_hosts(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct 
  * Validator run at the end to check for
  * mostly missing fields
  */
-static void a_run_parent_validator(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct aura_validation_ctx *v_ctx) {
+static void a_run_parent_validator(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct aura_yml_node *yn) {
     struct aura_yml_usr_data_ctx *usr_data;
+    struct aura_yml_srv_listeners listeners;
+    struct aura_yml_srv_hosts hosts;
+    bool tls_supported;
+    int i;
+
     usr_data = (struct aura_yml_usr_data_ctx *)p->usr_data_ctx;
 
     /* validate mandatory fields */
@@ -542,6 +803,69 @@ static void a_run_parent_validator(struct aura_yml_conf_parser *p, yaml_event_t 
     if (!usr_data->seen_any_key_file) {
         YAML_ADD_ERROR(p, evt, "missing a key file, please provide one");
         return;
+    }
+
+    /* validate listeners */
+    listeners = usr_data->listeners;
+    tls_supported = false;
+    for (i = 0; i < listeners.cnt; ++i) {
+        if (listeners.entries[i].address == A_ADDR_UNSET_IPV4 || listeners.entries[i].port == A_PORT_UNSET || listeners.entries[i].protocol == A_PROTOCOL_NONE) {
+            YAML_ADD_ERROR(p, evt, "Invalid listener configuration, missing required fields");
+            return;
+        }
+
+        if (listeners.entries[i].protocol == A_PROTOCOL_UDP && !listeners.entries[i].quic) {
+            YAML_ADD_ERROR(p, evt, "Invalid listener configuration, UDP requries QUIC");
+            return;
+        }
+
+        if (listeners.entries[i].protocol == A_PROTOCOL_UDP && listeners.entries[i].tls) {
+            YAML_ADD_ERROR(p, evt, "Invalid listener configuration, TLS not valid for UDP");
+            return;
+        }
+
+        if ((listeners.entries[i].tls || listeners.entries[i].quic) && !tls_supported)
+            tls_supported = true;
+
+        /* Penalize complete duplicates on tcp */
+        for (int j = 0; j < listeners.cnt; ++j) {
+            if (j != i) {
+                if (listeners.entries[j].address == listeners.entries[i].address &&
+                    listeners.entries[j].port == listeners.entries[i].port &&
+                    listeners.entries[j].protocol == listeners.entries[i].protocol &&
+                    listeners.entries[j].protocol == A_PROTOCOL_TCP) {
+                    YAML_ADD_ERROR(p, evt, "Invalid listener configuration, Duplicate tcp connection not allowed");
+                    return;
+                }
+            }
+        }
+    }
+
+    /* Validate identities */
+    if (tls_supported && !usr_data->seen_tls_identities) {
+        YAML_ADD_ERROR(p, evt, "TLS identity required to support TLS listeners");
+        return;
+    }
+
+    /* Validate hosts */
+    hosts = usr_data->hosts;
+    bool tag_seen;
+    for (i = 0; i < hosts.cnt; ++i) {
+        if (!hosts.entries[i].name || (tls_supported && !hosts.entries[i].tls_tag)) {
+            YAML_ADD_ERROR(p, evt, "Invalid host configuration missing required fields");
+            return;
+        }
+
+        /* search for host tls tag */
+        tag_seen = false;
+        for (int j = 0; j < usr_data->tls_tags.cnt; ++j) {
+            if (strcmp(hosts.entries[i].tls_tag, usr_data->tls_tags.entries[j]) == 0 && tls_supported)
+                tag_seen = true;
+        }
+        if (!tag_seen && tls_supported) {
+            YAML_ADD_ERROR(p, evt, "Invalid hosts configuration, unknown tls identity for hosts: %s", hosts.entries[i].name);
+            return;
+        }
     }
 }
 
@@ -600,14 +924,15 @@ struct aura_yml_validator aura_server_validator__[] = {
  *
  */
 struct aura_yml_validator aura_server_validator[] = {
-  {"version", .cb = a_validate_yaml_version_fn},
-  {"server", .cb = a_validate_yml_server},
-  {"tls", .cb = a_validate_yml_tls},
-  {"hosts", .cb = a_validate_hosts},
+  {"version", .cb = a_yml_validate_fn_version},
+  {"server", .cb = a_yml_validate_server_info},
+  {"listeners", .cb = a_yml_validate_listeners},
+  {"tls", .cb = a_yml_validate_tls},
+  {"hosts", .cb = a_yml_validate_hosts},
   {"logging", NULL},
   {"monitoring", NULL},
   {"security", NULL},
-  //   {"no_path_validator", .cb = a_run_parent_validator},
+  {"parent_validator", .cb = a_run_parent_validator}, /* position parent validator as last array entry */
 };
 
 int aura_server_validator_len = ARRAY_SIZE(aura_server_validator);
@@ -626,10 +951,25 @@ void a_srv_init_user_data_ctx(struct aura_yml_usr_data_ctx *usr_data, bool extra
 }
 
 void a_srv_free_user_data_ctx(struct aura_yml_usr_data_ctx *usr_data) {
+    int i;
+
     if (!usr_data)
         return;
 
-    for (int i = 0; i < usr_data->node_cnt; ++i) {
+    if (usr_data->listeners.entries) {
+        free(usr_data->listeners.entries);
+    }
+
+    /* Underlying host name is freed by yaml below */
+    for (i = 0; i < usr_data->hosts.cnt; ++i) {
+        if (usr_data->hosts.entries[i].name)
+            free(usr_data->hosts.entries[i].name);
+
+        if (usr_data->hosts.entries[i].tls_tag)
+            free(usr_data->hosts.entries[i].tls_tag);
+    }
+
+    for (i = 0; i < usr_data->node_cnt; ++i) {
         if (usr_data->node_arr[i].key) {
             free((void *)usr_data->node_arr[i].key);
         }

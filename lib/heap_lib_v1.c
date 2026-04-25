@@ -171,6 +171,17 @@ void *aura_min_heap_delete(struct aura_heap *hp) {
     return item;
 }
 
+bool aura_heap_entry_exists(struct aura_heap *hp, void *element) {
+    if (aura_heap_is_empty(hp))
+        return false;
+
+    for (int i = 0; i < hp->size; ++i) {
+        if (hp->data[i] == element)
+            return true;
+    }
+    return false;
+}
+
 void aura_heap_dump(struct aura_heap *hp, bool is_daemon) {
     app_debug(is_daemon, 0, "AURA HEAP");
     app_debug(is_daemon, 0, "   Size: %lu", hp->size);

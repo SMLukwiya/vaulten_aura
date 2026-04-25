@@ -16,6 +16,9 @@ if (OPENSSL_VERSION VERSION_LESS "3.0.0")
     )
 endif()
 
+#test
+enable_testing()
+
 include(cmake/dependencies.cmake)
 
 set(PROJECT_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/include)
@@ -29,16 +32,13 @@ add_compile_definitions(AURA_DB_FILE="aura.db")
 add_compile_definitions(AURA_DB_WAL_FILE="aura_db.wal")
 add_compile_definitions(AURA_DB_COMPACT_FILE="aura_compact.db")
 
+add_subdirectory(tests)
 add_subdirectory(src/cli)
 add_subdirectory(src/daemon)
 add_subdirectory(src/server)
 
 set(CMAKE_C_FLAGS_DEBUG "-O0")
 set(CMAKE_C_FLAGS_RELEASE "-O2")
-
-#test
-enable_testing()
-add_subdirectory(tests)
 
 # installation
 set(install_dir ${PROJECT_BINARY_DIR}/install)

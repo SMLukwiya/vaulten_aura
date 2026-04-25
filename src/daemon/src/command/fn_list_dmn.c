@@ -12,6 +12,7 @@ void aura_dmn_function_list(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
     size_t len;
 
     fn_state = key->iov_base;
+    app_debug(true, 0, "FUNCTION LIST <<<");
 
     fns = aura_fn_list_fetch(db, &error);
     if (!fns) {
@@ -50,11 +51,12 @@ void aura_dmn_function_list(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
         if (strncmp(fn_state, "all", key->iov_len) == 0) {
             size_t len = sizeof(evt) + sizeof(struct aura_fn_list) + (fns->func_cnt * sizeof(struct aura_fn_rep));
             char buf[len];
+            memset(buf, 0, sizeof(buf));
             struct aura_fn_evt *evt_p = (struct aura_fn_evt *)buf;
 
             evt_p->error_code = A_FN_ERROR_NONE;
             evt_p->state = A_FN_OP_STATE_DONE;
-            evt_p->msg_len = (fn_list.cnt * sizeof(struct aura_fn_rep));
+            evt_p->msg_len = (fns->func_cnt * sizeof(struct aura_fn_rep));
             evt_p->_msg = buf + sizeof(evt);
             struct aura_fn_list *fn_list = (struct aura_fn_list *)evt_p->_msg;
             fn_list->cnt = fns->func_cnt;

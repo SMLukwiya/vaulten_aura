@@ -193,7 +193,7 @@ struct aura_cli_cmd system_stop = {
 
 /* Check if system is alive */
 int aura_cli_system_status(void *opts, void *glob_opts) {
-    int res, sock_fd;
+    int sock_fd;
     struct aura_msg_hdr hdr;
     struct aura_msg msg;
 
@@ -204,10 +204,12 @@ int aura_cli_system_status(void *opts, void *glob_opts) {
     a_init_msg_hdr(hdr, 0, A_MSG_PING, 0);
     if (aura_msg_send(sock_fd, &hdr, NULL, 0, -1) < 0) {
         app_debug(false, errno, "aura_cli_system_status: aura_msg_send error:");
-        return 1;
+        return -1;
     }
 
-    res = aura_msg_recv(sock_fd, &msg);
+    if (aura_msg_recv(sock_fd, &msg) <= 0)
+        return -1;
+
     if (msg.hdr.type == A_MSG_RESPONSE) {
         app_info(false, 0, "%s", system_up);
     } else {

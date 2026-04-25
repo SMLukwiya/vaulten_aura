@@ -310,7 +310,6 @@ void *aura_slab_alloc(struct aura_slab_cache *sc) {
 
     sc->stats.total_allocations++;
     sc->stats.active_allocations++;
-    // high water mark
 
     hdr = (struct aura_object_hdr *)obj;
     user_ptr = (char *)obj + A_OBJECT_HEADER_SIZE + A_REDZONE_SIZE;
@@ -374,7 +373,7 @@ void aura_slab_free(void *ptr) {
 #endif
 
     /* dynamic slab pool */
-    if (hdr->slab_cache_id == A_SLAB_CACHE_ID_DYAMIC) {
+    if (hdr->slab_cache_id == A_SLAB_CACHE_ID_DYNAMIC) {
         index = aura_get_dynamic_slab_index(hdr->size);
         sc = hdr->mem_ctx->dynamic_slab_caches[index];
     } else {
@@ -395,6 +394,7 @@ void aura_slab_free(void *ptr) {
     A_UNPOISON_OBJECT(ptr, sc->obj_size);
 #endif
 
+    memset(ptr, 0, sc->obj_size);
     a_set_free_pointer(sc, ptr, slab->free_list);
     slab->free_list = ptr;
 
@@ -412,7 +412,7 @@ void aura_slab_free(void *ptr) {
     slab->in_use--;
 }
 
-bool aura_create_dynamic_slab_alloc_caches(struct aura_memory_ctx *m_ctx) {
+int aura_create_dynamic_slab_alloc_caches(struct aura_memory_ctx *m_ctx) {
     struct aura_slab_cache *sc;
     struct aura_slab *slab;
     uint32_t i, idx, max_size, obj_size;
@@ -425,19 +425,19 @@ bool aura_create_dynamic_slab_alloc_caches(struct aura_memory_ctx *m_ctx) {
     for (i = 0; i < arr_size; ++i) {
         obj_size = dynamic_slab_pool[i];
         aura_slab_get_cache_name(name, obj_size);
-        sc = aura_slab_cache_create(m_ctx, A_SLAB_CACHE_ID_DYAMIC, name, obj_size, NULL, 0);
+        sc = aura_slab_cache_create(m_ctx, A_SLAB_CACHE_ID_DYNAMIC, name, obj_size, NULL, 0);
         if (!sc) {
-            return false;
+            return -1;
         }
         slab = a_slab_create(sc);
         if (!slab) {
             aura_slab_cache_destroy(sc);
-            return false;
+            return -1;
         }
         m_ctx->dynamic_slab_caches[i] = sc;
     }
 
-    return true;
+    return 0;
 }
 
 void *aura_alloc(struct aura_memory_ctx *mc, size_t size) {
@@ -470,6 +470,7 @@ void *aura_alloc(struct aura_memory_ctx *mc, size_t size) {
     return ptr;
 }
 
+/** @todo: edge case, when switching over underlying systems, ensure data is copied over correctly */
 void *aura_realloc(struct aura_memory_ctx *mc, void *ptr, size_t size) {
     struct aura_slab_cache *sc;
     uint32_t index;
@@ -515,6 +516,9 @@ void *aura_realloc(struct aura_memory_ctx *mc, void *ptr, size_t size) {
 
 void aura_free(void *ptr) {
     struct aura_object_hdr *hdr;
+
+    if (!ptr)
+        return;
 
     hdr = (struct aura_object_hdr *)(((char *)ptr) - A_OBJECT_HEADER_SIZE - A_REDZONE_SIZE);
     if (hdr->mem_ctx == NULL) {

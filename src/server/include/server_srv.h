@@ -1,11 +1,14 @@
 #ifndef AURA_SERVER_H
 #define AURA_SERVER_H
 
+#include "../infra/metrics/metrics_srv.h"
+#include "../infra/timer/timer_srv.h"
 #include "db/db.h"
 #include "defaults_srv.h"
+#include "h2/hpack_srv.h"
+#include "interned.h"
 #include "list_lib.h"
 #include "memory_lib.h"
-#include "metrics_srv.h"
 #include "optimization_srv.h"
 #include "picotls.h"
 #include "picotls/certificate_compression.h"
@@ -14,7 +17,6 @@
 #include "radix_lib.h"
 #include "route_srv.h"
 #include "socket_srv.h"
-#include "timer_srv.h"
 #include "types_lib.h"
 #include "utils_lib.h"
 
@@ -86,8 +88,10 @@ struct aura_srv_tls_iden {
     struct {
         struct {
             ptls_context_t *ctx;
-            ptls_openssl_signature_scheme_t *sig_scheme;
-        } tls1_3;
+            ptls_context_t *client_ctx;
+            const ptls_openssl_signature_scheme_t *sig_schemes;
+        } ptls;
+        X509_STORE *store;
     } contexts;
 
     struct {
@@ -102,12 +106,7 @@ struct aura_srv_tls_iden {
 
 /* Server host config structure */
 struct aura_srv_host_conf {
-    struct {
-        struct aura_iovec hostname;
-        uint16_t port;
-    } authority;
-    struct sockaddr addr;
-    socklen_t addr_len;
+    struct aura_iovec hostname;
     uint32_t def_tls_off; /* default tls identity offset */
     uint32_t *other_tls_off;
     uint32_t other_tls_cnt;
@@ -116,22 +115,10 @@ struct aura_srv_host_conf {
     struct aura_srv_sec_policy *def_security_policy; /* default security policy */
 };
 
-enum a_work_class {
-    A_WC_NONE = 0,
-    A_WC_CRITICAL,
-    A_WC_LATENCY,
-    A_WC_THROUGHPUT,
-    A_WC_MAINTENANCE
-};
-
 /* Server queues structure */
 struct aura_srv_req_queue {
-    struct aura_list_head active; /* Hold temp read ready conns as they await being moved to appropriate queues */
-    struct aura_list_head reap;   /* Hold temp write ready conns as they await being moved to appropriate queues */
-
-    /*Adaptive scheduling stats */
-    uint32_t avg_completion_time[A_TOTAL_ADMISSIONS_PRIORITY_LEVELS]; /* Per prio */
-    uint32_t queue_depths[A_TOTAL_ADMISSIONS_PRIORITY_LEVELS];
+    struct aura_list_head active; /* Hold read ready */
+    struct aura_list_head reap;   /* Hold destruction ready */
 };
 
 /**
@@ -140,12 +127,12 @@ struct aura_srv_req_queue {
  */
 struct aura_srv_listener_conf {
     struct {
-        int *fds;
+        struct aura_srv_listener *entries;
         size_t cnt;
         size_t cap;
-    } fd_pool;
+    } listeners_pool;
     struct {
-        struct aura_srv_tls_iden *idens;
+        struct aura_srv_tls_iden *entries;
         size_t cnt;
         size_t cap;
     } tls_pool;
@@ -161,35 +148,41 @@ struct aura_srv_ctx {
     struct aura_srv_global_conf *glob_conf;
     struct aura_evt_loop *evt_loop;
     struct aura_srv_listener_conf *listener_conf;
-
+    struct aura_memory_ctx *mc;
     struct {
-        size_t idle_timeouts;          /* number of http idle timeouts */
-        size_t read_closed;            /* premature close on read */
-        size_t write_closed;           /* premature close on write */
+        size_t idle_timeouts; /* number of http idle timeouts */
+        size_t read_closed;   /* premature close on read */
+        size_t write_closed;  /* premature close on write */
+        size_t handshake_cnt;
+        size_t read_cnt;
+        size_t write_cnt;
+        size_t timeout_cnt;
         size_t aura_server_errors[10]; /** @todo: define AURA_SERVER_ERRORS */
     } h2;
 
-    struct aura_srv_req_queue queues; /* Queues according to stage (handshake...etc) */
-    size_t handshake_cnt;
-    size_t read_cnt;
-    size_t write_cnt;
-    size_t timeout_cnt;
+    struct aura_srv_req_queue queues;          /* Queues according to stage (handshake...etc) */
+    struct aura_completion_queue completions;  /* List of completions queued by runtime engines */
+    struct aura_intern_tab *static_intern_tab; /* Intern table for hpack static strings */
+    struct aura_hpack_static_table static_tab; /* Hpack static table with interned strings */
+
     bool internal;     /* Internal request from daemon */
     uint64_t inflight; /* requests inflight */
-
     struct aura_srv_metrics_bucket metrics;
+    struct aura_timer_wheel timer_wheel;
+    struct aura_srv_optimizer optimizer;
+    uint64_t next_task_id;
 };
 
 /**
  * Global aura server configuration structure
  */
 struct aura_srv_global_conf {
-    struct aura_iovec server_name; /* Aura server name */
-    size_t max_req_size;           /* max size of accepted request, e.g, POST */
-    time_t boot_time;              /* server boot time */
-    bool shutdown_requested;       /* if shutdown has been requested */
-
-    struct aura_srv_sock *fdmap[A_MAX_FDS];
+    struct aura_iovec server_name; /* Server name */
+    struct aura_srv_ctx *srv_ctx;
+    size_t max_req_size;     /* max size of accepted request, e.g, POST */
+    time_t boot_time;        /* server boot time */
+    bool shutdown_requested; /* if shutdown has been requested */
+    struct aura_conn *conn_map[A_MAX_FDS];
     struct {
         struct aura_srv_host_conf *hosts;
         size_t cnt;
@@ -203,13 +196,14 @@ struct aura_srv_global_conf {
 
     struct aura_memory_ctx mem_ctx;
     struct aura_iovec user;
-
-    struct aura_iovec aura_app_path;
-    struct aura_iovec aura_db_path;
-    AURA_DBHANDLE db_handle;
-
-    struct aura_timer_wheel timer_wheel;
-    struct aura_srv_optimizer optimizer;
 };
+
+static inline struct aura_srv_listener *aura_check_if_listener(struct aura_srv_listener_conf *lc, int fd) {
+    for (int i = 0; i < lc->listeners_pool.cnt; ++i) {
+        if (lc->listeners_pool.entries[i].fd == fd)
+            return &lc->listeners_pool.entries[i];
+    }
+    return NULL;
+}
 
 #endif

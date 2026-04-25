@@ -4,6 +4,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "blobber_lib.h"
+#include "http_lib.h"
 #include "openssl/bio.h"
 #include "openssl/err.h"
 #include "openssl/ssl.h"
@@ -15,22 +16,58 @@
 #include <signal.h>
 #include <stdbool.h>
 
+#define A_ADDR_UNSET_IPV4 0xFFFFFFFF
+#define A_ADDR_UNSET_IPv6 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+#define A_PORT_UNSET 0
+
+/* yaml listeners container */
+struct aura_yml_srv_listeners {
+    struct {
+        uint32_t address; /* @todo: support ipv6 with a union type */
+        int port;
+        a_transport_protocol protocol;
+        bool tls;
+        bool quic;
+    } *entries;
+    uint32_t cnt;
+    uint32_t cap;
+};
+
+/* yaml tls tags container */
+struct aura_yml_tls_tags {
+    char **entries;
+    uint32_t cnt;
+    uint32_t cap;
+};
+
+/* yaml hosts container */
+struct aura_yml_srv_hosts {
+    struct {
+        char *name;
+        char *tls_tag;
+    } *entries;
+    uint32_t cnt;
+    uint32_t cap;
+};
+
 /**
  * User data to validate mandatory fields and related yaml fields
  * like tls identites and hosts relationships...
  */
 struct aura_yml_usr_data_ctx {
-    bool seen_aura_version;
-    bool seen_svr_env;
-    bool seen_srv_addr;
-    bool seen_srv_port;
-    bool seen_tls_identities;
-    bool seen_any_key_file;
-    bool expect_key;
-    bool seen_hosts;
-    bool seen_ciphers;
-    bool is_aes128gcmsha256_set; /* RFC 8446 9.1 stuff! */
-    bool extract;
+    bool seen_aura_version;                  /* yaml version */
+    bool seen_svr_env;                       /* server environment set */
+    bool seen_listeners;                     /* server listeners */
+    struct aura_yml_srv_listeners listeners; /* store listeners */
+    bool seen_tls_identities;                /* any defined tls identities*/
+    bool seen_any_key_file;                  /* key file for a tls identity */
+    bool expect_key;                         /* expect to parse a key as next token */
+    bool seen_ciphers;                       /* tls ciphers */
+    bool is_aes128gcmsha256_set;             /* RFC 8446 Mandatory cipher suite! */
+    struct aura_yml_tls_tags tls_tags;       /* tls tags */
+    bool seen_hosts;                         /* server hosts */
+    struct aura_yml_srv_hosts hosts;
+    bool extract; /* extract the parsed values for use later */
     aura_rax_tree_t *parse_tree;
     st_aura_b_builder builder;
     struct aura_yml_node *node_arr;
@@ -47,15 +84,14 @@ struct aura_yml_usr_data_ctx {
  * the other as well
  */
 enum srv_node_idx {
-    A_IDX_NONE,
+    A_IDX_SERVER_NONE,
     A_IDX_SERVER_NAME,
-    A_IDX_SERVER_PORT,
-    A_IDX_SERVER_ADDR,
-    A_IDX_SERVER_TO_READ,
-    A_IDX_SERVER_TO_WRITE,
-    A_IDX_TLS_IDEN,
-    A_IDX_TLS_CIPHERS,
-    A_IDX_HOSTS
+    A_IDX_SERVER_READ_TO,     // read timeout
+    A_IDX_SERVER_WRITE_TO,    // write timeout
+    A_IDX_SERVER_LISTENERS,   // socket listeners
+    A_IDX_SERVER_TLS_IDEN,    // tls identities
+    A_IDX_SERVER_TLS_CIPHERS, // tls ciphers
+    A_IDX_SERVER_HOSTS        // hosts
 };
 
 typedef void (*cmd_cb)(int fd, pid_t pid);
@@ -68,7 +104,7 @@ struct srv_start_arg {
 };
 
 int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, struct srv_start_arg *p);
-int aura_dmn_server_stop(struct aura_msg *msg, int srv_fd, int cli_fd, pid_t srv_pid);
+int aura_dmn_server_stop(struct aura_msg *msg, int *srv_fd, int cli_fd, pid_t srv_pid);
 int aura_dmn_server_status(int srv_fd, int cli_fd);
 
 /* validate server config */

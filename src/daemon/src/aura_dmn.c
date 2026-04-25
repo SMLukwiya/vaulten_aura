@@ -37,12 +37,16 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
             aura_dmn_system_stop(cli_fd, &glob_conf);
             return 0;
 
+        case A_CMD_SERVER_VALIDATE_CONF:
+            aura_dmn_server_config_validate(msg->fd, cli_fd);
+            return 0;
+
         case A_CMD_SERVER_START:
             aura_dmn_start_server(msg, cli_fd, (struct srv_start_arg *)arg);
             return 0;
 
         case A_CMD_SERVER_STOP:
-            aura_dmn_server_stop(msg, glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd, cli_fd, glob_conf.server_pid);
+            aura_dmn_server_stop(msg, &glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd, cli_fd, glob_conf.server_pid);
             return 0;
 
         case A_CMD_SERVER_STATUS:
@@ -77,10 +81,6 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
             aura_dmn_function_list(glob_conf.db_handle, &msg->data, cli_fd);
             return 0;
 
-        case A_CMD_SERVER_VALIDATE_CONF:
-            aura_dmn_server_config_validate(msg->fd, cli_fd);
-            return 0;
-
         case A_CMD_DB_FETCH_REQUEST:
             aura_dmn_fetch_request(glob_conf.db_handle, &msg->data, cli_fd);
             return 0;
@@ -105,7 +105,7 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
  */
 static void a_sig_ch_handler(int signo) {
     if (waitpid(glob_conf.server_pid, NULL, 0) != glob_conf.server_pid) {
-        sys_exit(true, errno, "a_sig_ch_handler: waitpid error: %d", glob_conf.server_pid);
+        sys_debug(true, errno, "a_sig_ch_handler: waitpid error: %d", glob_conf.server_pid);
     }
     glob_conf.server_pid = 0;
     if (glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd == -1)
@@ -163,6 +163,7 @@ int aura_daemon() {
       .cb = a_setup_sockfd,
     };
 
+    memset(&glob_conf, 0, sizeof(glob_conf));
     lock_file_fd = open(AURA_PID, O_RDWR | O_CREAT, LOCKMODE);
     if (lock_file_fd < 0)
         sys_exit(false, errno, "aura_daemon: lock_file error");
@@ -205,7 +206,7 @@ int aura_daemon() {
 
     /* set up memory context */
     aura_memory_ctx_init(&glob_conf.mc);
-    if (aura_create_dynamic_slab_alloc_caches(&glob_conf.mc) == false)
+    if (aura_create_dynamic_slab_alloc_caches(&glob_conf.mc) < 0)
         sys_exit(true, errno, "aura_daemon: aura_create_dynamic_slab_alloc_caches error:");
 
     /* check app paths */

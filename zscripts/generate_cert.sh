@@ -77,7 +77,7 @@ openssl genpkey \
 
 openssl req \
     -new \
-    -subj "/CN=leaf CA" \
+    -subj "/CN=vaultenaura.local CA" \
     -addext "basicConstraints=critical,CA:FALSE" \
     -key "$leaf_key_file" \
     -out "$leaf_csr_file"

@@ -1,8 +1,8 @@
 #ifndef AURA_EVT_LOOP_H
 #define AURA_EVT_LOOP_H
 
+#include "../infra/timer/timer_srv.h"
 #include "time_lib.h"
-#include "timer_srv.h"
 
 #include <stdbool.h>
 #include <stdint.h>

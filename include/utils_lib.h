@@ -23,7 +23,7 @@
 #define a_min(x, y) ((x) > (y) ? (y) : (x))
 #define a_max(x, y) ((x) > (y) ? (x) : (y))
 
-#define a_ceil(x) ((x % 2) ? ((x / 2) + 1) : x / 2)
+#define a_ceil(x) (((x) % 2) ? (((x) / 2) + 1) : (x) / 2)
 
 #define a_is_power_of_two(x) ((x) != 0 && (((x) & ((x) - 1)) == 0))
 
@@ -49,52 +49,6 @@ static inline uint64_t a_next_power_of_two(uint32_t num) {
     num |= num >> 16;
     num++;
     return num;
-}
-
-/* wrapper around strtoul */
-static inline size_t aura_strtoul(const char *nptr, size_t len) {
-    size_t res;
-    char *endptr = NULL;
-
-    if (len == 0)
-        goto err_out;
-
-    res = strtoul(nptr, &endptr, 10);
-    if (endptr != NULL || endptr == nptr)
-        goto err_out;
-
-    if (errno == ERANGE || errno == EINVAL)
-        goto err_out;
-
-    return res;
-
-err_out:
-    return SIZE_MAX;
-}
-
-/* compare two strings converting the first one to lower case */
-static inline bool aura_lc_str_is_eq(const char *target, size_t target_len, const char *other, size_t other_len) {
-    if (target_len != other_len)
-        return false;
-
-    for (; other_len != 0; --other_len)
-        if (tolower(*target++) != *other++)
-            return false;
-    return true;
-}
-
-/* wrapper around memcmp */
-static inline bool aura_mem_is_eq(const void *target, size_t target_len, const void *other, size_t other_len) {
-    const char *t = (const char *)target;
-    const char *o = (const char *)other;
-
-    if (target_len != other_len)
-        return false;
-
-    if (t[0] != o[0])
-        return false;
-
-    return memcmp(target + 1, other + 1, target_len - 1) == 0;
 }
 
 int aura_set_fd_flag(int fd, int flag);

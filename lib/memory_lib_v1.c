@@ -11,7 +11,6 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/types.h>
-#include <unistd.h>
 
 void aura_memory_ctx_dump(struct aura_memory_ctx *mc) {
     struct aura_slab_cache *sc;
@@ -39,7 +38,8 @@ void aura_memory_ctx_destroy(struct aura_memory_ctx *mem_ctx) {
         aura_slab_cache_destroy(mem_ctx->dynamic_slab_caches[i]);
     }
 
-    a_list_for_each_safe_to_delete(sc, _sc, &mem_ctx->slab_cache_list, cache_list) {
+    while (!a_list_is_empty(&mem_ctx->slab_cache_list)) {
+        a_list_dequeue(sc, &mem_ctx->slab_cache_list, cache_list);
         aura_slab_cache_destroy(sc);
     }
     mem_ctx->base = NULL;
@@ -118,17 +118,27 @@ inline int aura_anon_set_seals(int fd, uint32_t flags) {}
 #define A_MAX_SLIDING_BUF_SIZE (1024 * 1024 * 16)
 #define A_SLIDING_BUF_ALIGNMENT 64
 
-bool aura_sliding_buffer_create(struct aura_memory_ctx *mc, struct aura_sliding_buf *buf, size_t initial_cap) {
+struct aura_sliding_buf *aura_sliding_buffer_create(struct aura_memory_ctx *mc, size_t initial_cap, bool is_fixed) {
+    struct aura_sliding_buf *buf;
+
+    buf = aura_alloc(mc, sizeof(*buf));
+    if (!buf)
+        return NULL;
 
     buf->data = NULL;
     if (initial_cap > 0) {
         initial_cap = A_ALIGN(initial_cap, A_SLIDING_BUF_ALIGNMENT);
-        if (initial_cap > A_MAX_SLIDING_BUF_SIZE)
-            return false;
+        if (initial_cap > A_MAX_SLIDING_BUF_SIZE) {
+            aura_free(buf);
+            return NULL;
+        }
 
         buf->data = aura_alloc(mc, initial_cap);
-        if (!buf->data)
-            return false;
+        if (!buf->data) {
+            aura_free(buf);
+            return NULL;
+        }
+        memset(buf->data, 0, initial_cap);
     }
 
     buf->mem_ctx = mc;
@@ -136,8 +146,9 @@ bool aura_sliding_buffer_create(struct aura_memory_ctx *mc, struct aura_sliding_
     buf->start = buf->end = 0;
     buf->watermark = 0;
     buf->valid = true;
+    buf->is_fixed = is_fixed;
 
-    return true;
+    return buf;
 }
 
 void aura_sliding_buffer_destroy(struct aura_sliding_buf *buf) {
@@ -147,8 +158,7 @@ void aura_sliding_buffer_destroy(struct aura_sliding_buf *buf) {
     if (buf->data)
         aura_free(buf->data);
 
-    memset(buf, 0, sizeof(*buf));
-    buf->valid = false;
+    aura_free(buf);
 }
 
 void aura_sliding_buffer_reset(struct aura_sliding_buf *buf) {
@@ -157,27 +167,11 @@ void aura_sliding_buffer_reset(struct aura_sliding_buf *buf) {
         buf->watermark = 0;
 }
 
-bool aura_sliding_buffer_ensure_capacity(struct aura_sliding_buf *buf, size_t needed) {
-    size_t avail_write, avail_total;
-    size_t required_cap;
-
-    avail_write = aura_sliding_buffer_available_write(buf);
-    if (avail_write >= needed)
-        return true;
-
-    /* Try compaction first */
-    avail_total = buf->cap - (buf->end - buf->start);
-    if (avail_total >= needed) {
-        aura_sliding_buffer_compact(buf);
-        return true;
-    }
-
-    /* Resize otherwise */
-    required_cap = buf->end - buf->start + needed;
-    return aura_sliding_buffer_resize(buf, required_cap);
-}
-
-bool aura_sliding_buffer_resize(struct aura_sliding_buf *buf, size_t new_cap) {
+/**
+ * Resize buf to accomodate new capacity(@new_cap).
+ * Returns true if successful otherwise false.
+ */
+static inline bool aura_sliding_buffer_resize(struct aura_sliding_buf *buf, size_t new_cap) {
     uint8_t *data;
 
     if (new_cap > A_MAX_SLIDING_BUF_SIZE)
@@ -196,6 +190,30 @@ bool aura_sliding_buffer_resize(struct aura_sliding_buf *buf, size_t new_cap) {
     return true;
 }
 
+bool aura_sliding_buffer_ensure_capacity(struct aura_sliding_buf *buf, size_t needed) {
+    size_t avail_write, avail_total;
+    size_t required_cap;
+
+    avail_write = aura_sliding_buffer_available_write(buf);
+    if (avail_write >= needed)
+        return true;
+
+    /* Try compaction first */
+    avail_total = buf->cap - (buf->end - buf->start);
+    if (avail_total >= needed) {
+        aura_sliding_buffer_compact(buf);
+        return true;
+    }
+
+    /* size can not be adjusted */
+    if (buf->is_fixed)
+        return false;
+
+    /* Resize otherwise */
+    required_cap = buf->end - buf->start + needed;
+    return aura_sliding_buffer_resize(buf, required_cap);
+}
+
 void aura_sliding_buffer_compact(struct aura_sliding_buf *buf) {
     size_t data_len;
 
@@ -210,9 +228,12 @@ void aura_sliding_buffer_compact(struct aura_sliding_buf *buf) {
     buf->end = data_len;
 }
 
-size_t aura_sliding_buffer_append(struct aura_sliding_buf *buf, const uint8_t *data, size_t len) {
-    if (!aura_sliding_buffer_ensure_capacity(buf, len))
+ssize_t aura_sliding_buffer_append(struct aura_sliding_buf *buf, const uint8_t *data, size_t len) {
+    if (len == 0)
         return 0;
+
+    if (!aura_sliding_buffer_ensure_capacity(buf, len))
+        return -1;
 
     memcpy(buf->data + buf->end, data, len);
     buf->end += len;
@@ -223,8 +244,8 @@ size_t aura_sliding_buffer_append(struct aura_sliding_buf *buf, const uint8_t *d
     return len;
 }
 
-size_t aura_sliding_buffer_append_from_fd(struct aura_sliding_buf *buf, int fd, size_t max_len) {
-    size_t avail_write, to_read;
+ssize_t aura_sliding_buffer_append_from_fd(struct aura_sliding_buf *buf, int fd, size_t max_len) {
+    ssize_t avail_write, to_read;
     ssize_t bytes_read;
     uint8_t *write_ptr;
 
@@ -232,7 +253,7 @@ size_t aura_sliding_buffer_append_from_fd(struct aura_sliding_buf *buf, int fd, 
     write_ptr = aura_sliding_buffer_write_pointer(buf);
     if (avail_write == 0) {
         if (!aura_sliding_buffer_ensure_capacity(buf, max_len))
-            return 0;
+            return -1;
         avail_write = aura_sliding_buffer_available_write(buf);
     }
 
@@ -320,6 +341,16 @@ size_t aura_sliding_buffer_commit_write(struct aura_sliding_buf *buf, size_t len
     if (buf->end > buf->watermark)
         buf->watermark = buf->end;
 
+    return len;
+}
+
+size_t aura_sliding_buffer_uncommit_write(struct aura_sliding_buf *buf, size_t len) {
+    size_t read_len;
+
+    read_len = aura_sliding_buffer_available_read(buf);
+    len = a_min(len, read_len);
+
+    buf->end -= len;
     return len;
 }
 

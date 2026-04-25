@@ -3,7 +3,7 @@ version: v1beta1
 function:
   name: aura_hello_api
   description: Aura Hello function deploy configs JS
-  version: 1
+  version: 3
   host: vaultenaura.local
   # runtime: "js"
   entrypoint: index.js

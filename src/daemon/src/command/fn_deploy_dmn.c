@@ -6,7 +6,6 @@
 #include "function_lib.h"
 #include "ipc_lib.h"
 #include "quickjs.h"
-#include "runtime_lib.h"
 #include "unix_socket_lib.h"
 #include "utils_lib.h"
 

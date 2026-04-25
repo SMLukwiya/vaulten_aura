@@ -12,35 +12,43 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/radix_v1_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/memory_lib_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/slab_lib_v1.c
-    ${vaulten_aura_SOURCE_DIR}/lib/hash_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/hasher_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/db/db.c
     ${vaulten_aura_SOURCE_DIR}/lib/db/db_broker.c
     ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/encrypt_lib.c
-    # ${vaulten_aura_SOURCE_DIR}/lib/runtime_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/ipc_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/function_v1_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/heap_lib_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/url_lib.c
 )
 
 add_executable(aura_server 
-    src/main.c
-    src/socket_srv.c
-    src/evt_loop_srv.c
-    src/epoll_srv.c
-    src/header_srv.c
-    src/h2/h2_srv.c
-    src/h2/frame.c
-    src/h2/stream.c
-    src/h2/connection.c
-    src/h2/hpack_srv.c
-    src/h2/scheduler.c
-    src/route_srv.c
-    exec/workers/worker_man.c # not sure where this belongs for now
-    exec/runtime/quickjs/qjs_rt.c #not sure where this belongs for now
-    exec/runtime/quickjs/js_bindings.c 
-    src/timer_srv.c
+    # src/main.c
+    main.c
+    net/socket_srv.c
+    net/epoll_srv.c
+    net/tls_srv.c
+    srv/evt_loop_srv.c
+    srv/route_srv.c
+    srv/interned.c
+    protocol/connection.c
+    protocol/h2/header_srv.c
+    protocol/h2/session.c
+    protocol/h2/h2_srv.c
+    protocol/h2/h2_cli.c
+    protocol/h2/frame.c
+    protocol/h2/stream.c
+    protocol/h2/hpack_srv.c
+    protocol/h2/scheduler.c
+    runtime/worker_man.c
+    runtime/runtime.c
+    runtime/request.c
+    runtime/task.c
+    runtime/quickjs/qjs_rt.c
+    runtime/quickjs/js_bindings.c 
+    infra/timer/timer_srv.c
     src/optimization_srv.c
 
     ${lib_sources}

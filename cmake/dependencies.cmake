@@ -1,3 +1,7 @@
+# Disable test for third party libraries
+set(OLD_BUILD_TESTING ${BUILD_TESTING})
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+
 # Quickjs
 set(QUICKJS_SOURCE_FILES
     ${PROJECT_SOURCE_DIR}/deps/quickjs/cutils.c
@@ -48,3 +52,5 @@ include_directories(
     deps/picotls/deps/cifra/src
     deps/picotls/deps/micro-ecc
 )
+
+set(BUILD_TESTING ${OLD_BUILD_TESTING} CACHE BOOL "" FORCE)

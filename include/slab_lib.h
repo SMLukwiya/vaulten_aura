@@ -106,10 +106,11 @@ struct aura_slab_info {
  *
  */
 typedef enum {
-    A_SLAB_CACHE_ID_DYAMIC = 1,
-    A_SLAB_CACHE_ID_SOCK = 2,
-    A_SLAB_CACHE_ID_CONNECTION = 3,
-    A_SLAB_CACHE_ID_STREAM = 4
+    A_SLAB_CACHE_ID_DYNAMIC = 1,
+    // A_SLAB_CACHE_ID_SOCK,
+    A_SLAB_CACHE_GENERIC_CONNECTION,
+    A_SLAB_CACHE_ID_CONNECTION,
+    A_SLAB_CACHE_ID_STREAM,
 } aura_slab_cache_id;
 
 /**
@@ -228,7 +229,7 @@ struct aura_slab_cache *aura_slab_cache_create(struct aura_memory_ctx *m_ctx, ui
 /**
  * Create caches for dynamic slab pool
  */
-bool aura_create_dynamic_slab_alloc_caches(struct aura_memory_ctx *m_ctx);
+int aura_create_dynamic_slab_alloc_caches(struct aura_memory_ctx *m_ctx);
 void aura_slab_cache_destroy(struct aura_slab_cache *sc);
 void *aura_slab_alloc(struct aura_slab_cache *sc);
 

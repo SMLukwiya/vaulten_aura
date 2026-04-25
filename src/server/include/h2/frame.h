@@ -65,19 +65,11 @@
 #define a_h2_priority_is_exclusive(n) (n & 0x80000000)
 #define a_h2_connection_is_closing(state) ((state) == A_H2_STATE_CONN_CLOSING)
 
-#define a_h2_frame_is_padded(flags) ((flags & A_H2_FRAME_FLAG_PADDED) != 0)
+#define aura_h2_frame_is_padded(flags) ((flags & A_H2_FRAME_FLAG_PADDED) != 0)
 #define a_h2_frame_has_priority(flags) ((flags & A_H2_FRAME_FLAG_PRIORITY) != 0)
-#define a_h2_frame_is_acknowledgement(flags) ((flags & A_H2_FRAME_FLAG_ACK) != 0)
-#define a_h2_frame_is_end_stream(flags) (((flags) & A_H2_FRAME_FLAG_END_STREAM) != 0)
-#define a_h2_frame_is_end_headers(flags) (((flags) & A_H2_FRAME_FLAG_END_HEADERS) != 0)
-
-#define a_h2_stream_is_push_stream(id) (((id) & 0x1) == 0) /** @todo: remove */
-#define a_h2_stream_is_even_numbered(id) (((id) & 0x1) == 0)
-#define a_h2_stream_is_odd_numbered(id) (((id) & 0x1) == 1)
-// #define a_h2_stream_is_idle(state) (((state) & A_H2_STREAM_STATE_IDLE) != 0)
-#define a_h2_stream_is_open(state) (((state) & A_H2_STREAM_STATE_OPEN) != 0)
-#define a_h2_stream_is_closed(state) (((state) & A_H2_STREAM_STATE_CLOSED) != 0)
-#define a_h2_stream_is_half_closed(state) ((((state) & A_H2_STREAM_STATE_HALF_CLOSED_LOCAL) != 0) || (((state) & A_H2_STREAM_STATE_HALF_CLOSED_REMOTE) != 0))
+#define aura_h2_frame_is_acknowledgement(flags) ((flags & A_H2_FRAME_FLAG_ACK) != 0)
+#define aura_h2_frame_is_end_stream(flags) (((flags) & A_H2_FRAME_FLAG_END_STREAM) != 0)
+#define aura_h2_frame_is_end_headers(flags) (((flags) & A_H2_FRAME_FLAG_END_HEADERS) != 0)
 
 typedef enum {
     A_H2_HEADER_STARTER, /* Starting header category, the one used for request or response initiation */
@@ -212,14 +204,6 @@ void aura_dump_h2_frame(struct aura_h2_frame *f);
 void aura_dump_h2_settings(struct aura_h2_settings *s);
 
 /**/
-void aura_encode_rst_stream_frame(uint8_t *dest, uint32_t frame_len, uint32_t stream_id, uint32_t err_num);
-/**/
-void aura_h2_encode_ping_frame(uint8_t *dest, uint32_t frame_len, bool is_ack, const uint8_t *opaque_data);
-// /**/
-void aura_h2_encode_settings_frame(uint8_t *dest, uint32_t frame_len, struct aura_h2_settings_payload *settings, size_t num_of_settings);
-// /**/
-void aura_h2_encode_window_update_frame(uint8_t *dest, uint32_t frame_len, uint32_t stream_id, uint32_t increment_size);
-// /**/
 uint8_t *aura_encode_frame_header(uint8_t *dest, size_t dest_len, uint8_t type, uint8_t flags, uint32_t stream_id);
 
 /**
@@ -235,14 +219,19 @@ int aura_h2_parse_frame_header(struct aura_h2_in_frame *in_frame,
                                const uint8_t *src, size_t src_len,
                                size_t max_frame_size, int *frame_len);
 
-/* -------------------- */
-struct aura_h2_out_frame *aura_encode_control_frame(struct aura_sliding_buf *buf, uint8_t type, uint8_t flags, uint32_t stream_id,
-                                                    uint32_t frame_len, const uint8_t *payload, uint32_t payload_len);
+uint8_t *aura_encode_control_frame(struct aura_sliding_buf *buf, uint8_t type, uint8_t flags, uint32_t stream_id,
+                                   uint32_t frame_len, const uint8_t *payload, uint32_t payload_len);
 
 /** */
-struct aura_h2_out_frame *aura_produce_header_frame(struct aura_sliding_buf *buf, uint32_t stream_id, uint8_t type,
-                                                    uint8_t flags, const uint8_t *payload, uint32_t payload_len);
+int aura_produce_header_frame(struct aura_sliding_buf *buf, uint32_t stream_id, uint8_t type,
+                              uint8_t flags, const uint8_t *payload, uint32_t payload_len);
 
-struct aura_h2_out_frame *aura_encode_data_frame(struct aura_sliding_buf *buf, uint32_t stream_id, uint8_t flags,
-                                                 const uint8_t *payload, uint32_t payload_len, uint8_t pad_len);
+int aura_encode_data_frame(struct aura_sliding_buf *buf, uint32_t stream_id, uint8_t flags,
+                           const uint8_t *payload, uint32_t payload_len, uint8_t pad_len);
+
+static inline void aura_h2_out_frame_destroy(struct aura_h2_out_frame *frame) {
+    if (!frame)
+        return;
+    aura_free(frame);
+}
 #endif

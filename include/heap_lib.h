@@ -42,4 +42,6 @@ void *aura_min_heap_delete(struct aura_heap *hp);
 
 void aura_heap_dump(struct aura_heap *hp, bool is_daemon);
 
+bool aura_heap_entry_exists(struct aura_heap *hp, void *element);
+
 #endif

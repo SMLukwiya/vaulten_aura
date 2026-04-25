@@ -13,10 +13,11 @@ set(common_sources
 add_executable(test_aura_db
     db/basic.c
     ${vaulten_aura_SOURCE_DIR}/lib/db/db.c
-    ${vaulten_aura_SOURCE_DIR}/lib/hash_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/hasher_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/encrypt_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/slab_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
     ${common_sources}
 )
 target_link_libraries(test_aura_db PUBLIC OpenSSL::SSL OpenSSL::Crypto)
@@ -150,5 +151,28 @@ add_test(
 
 set_tests_properties(heap_test PROPERTIES
     LABELS "heap"
+    TIMEOUT 10
+)
+
+# ----------------------- URL LIB TEST ---------------------- #
+add_executable(test_aura_url
+    unit/url.c
+    ${vaulten_aura_SOURCE_DIR}/lib/url_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
+    ${common_sources}
+)
+
+target_include_directories(test_aura_url
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${PROJECT_INCLUDE_DIR}
+)
+
+add_test(
+    NAME url_test
+    COMMAND test_aura_url
+)
+
+set_tests_properties(url_test PROPERTIES
+    LABELS "url"
     TIMEOUT 10
 )

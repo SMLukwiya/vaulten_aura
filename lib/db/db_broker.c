@@ -25,7 +25,7 @@ static struct aura_db_broker_request *a_db_broker_construct_request(struct aura_
     memcpy(request->key.base, key->base, key->len);
     if (data) {
         request->data.len = data->len;
-        request->data.base = (char *)request + sizeof(*request) + key->len;
+        request->data.base = request->key.base + key->len;
         memcpy(request->data.base, data->base, data->len);
     } else {
         request->data.len = 0;
@@ -45,6 +45,7 @@ int aura_db_broker_fetch(struct aura_memory_ctx *mc, uint16_t ns, uint16_t schem
     void *resp_data;
     int res;
 
+    app_debug(true, 0, "aura_db_broker_fetch: key: %s<><>", key->base);
     request = a_db_broker_construct_request(mc, ns, schema_id, key, NULL, &len);
     if (!request)
         return -1;
@@ -86,7 +87,7 @@ int aura_db_broker_insert(struct aura_memory_ctx *mc, uint16_t ns, uint16_t sche
     /* Perform synchronous action */
     if (mode == A_DB_EXEC_DIRECT) {
         res = aura_msg_recv(dmn_fd, &msg);
-        if (res < 0)
+        if (res <= 0)
             return res;
     }
     return 0;

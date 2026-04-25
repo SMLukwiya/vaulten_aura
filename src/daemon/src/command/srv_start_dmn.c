@@ -7,6 +7,7 @@
 
 /*********************** */
 char server_started[] = "\x1B[1;32mServer started\x1B[0m";
+char server_start_failed[] = "\x1B[1;32mFailed to start server\x1B[0m";
 char server_stopped[] = "\x1B[1;32mServer stopped\x1B[0m";
 char server_stopped_failed[] = "\x1B[1;32mServer stop failed\x1B[0m";
 char server_up[] = "\x1B[1;32mServer up\x1B[0m";
@@ -26,14 +27,14 @@ extern int aura_server_validator_len;
  * is the root node.
  */
 int srv_conf_tab[] = {
+  [A_IDX_SERVER_NONE] = 0,
   [A_IDX_SERVER_NAME] = 0,
-  [A_IDX_SERVER_PORT] = 0,
-  [A_IDX_SERVER_ADDR] = 0,
-  [A_IDX_SERVER_TO_READ] = 0,
-  [A_IDX_SERVER_TO_WRITE] = 0,
-  [A_IDX_TLS_IDEN] = 0,
-  [A_IDX_TLS_CIPHERS] = 0,
-  [A_IDX_HOSTS] = 0,
+  [A_IDX_SERVER_READ_TO] = 0,     // read timeout
+  [A_IDX_SERVER_WRITE_TO] = 0,    // write timeout
+  [A_IDX_SERVER_LISTENERS] = 0,   // socket listeners
+  [A_IDX_SERVER_TLS_IDEN] = 0,    // tls identities
+  [A_IDX_SERVER_TLS_CIPHERS] = 0, // tls ciphers
+  [A_IDX_SERVER_HOSTS] = 0,       // hosts
 };
 
 struct aura_builder_stack srv_stack;
@@ -47,23 +48,25 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, struct srv_start_arg
     char *first_err = NULL;
     struct aura_msg_hdr hdr;
     bool fail_fast = true, extract = true;
-    uint32_t root_off, server_root, tls_root, host_root, config_size;
+    uint32_t root_off, server_root, listener_root, tls_root, host_root, config_size;
     pid_t pid;
     void *blob;
-    int res, sock_fds[2];
+    int res, ret_val, sock_fds[2];
 
     parser_err = aura_create_yml_error_ctx(fail_fast);
 
     a_srv_init_user_data_ctx(&usr_data, extract);
 
     res = aura_load_config_fd(msg->fd, aura_server_validator, aura_server_validator_len, parser_err, (void *)&usr_data);
+    close(msg->fd);
     if (res != 0) {
-        goto out;
+        goto err;
     }
 
     if (res == 0 && parser_err->err_cnt > 0) {
         first_err = parser_err->errors[0].message;
         aura_resp_send(cli_fd, (void *)first_err, strlen(first_err));
+        ret_val = -1;
         goto out;
     }
 
@@ -73,12 +76,15 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, struct srv_start_arg
     root_off = aura_blob_b_add_map(&usr_data.builder);
     /* Server */
     server_root = aura_build_blob_from_rax(usr_data.parse_tree, &usr_data.builder, usr_data.node_arr, "server", sizeof("server") - 1, &srv_stack, srv_conf_tab);
-    /* Tls */
+    /* listeners */
+    listener_root = aura_build_blob_from_rax(usr_data.parse_tree, &usr_data.builder, usr_data.node_arr, "listeners", sizeof("listeners") - 1, &srv_stack, srv_conf_tab);
+    /* tls */
     tls_root = aura_build_blob_from_rax(usr_data.parse_tree, &usr_data.builder, usr_data.node_arr, "tls", sizeof("tls") - 1, &srv_stack, srv_conf_tab);
     /* Host */
     host_root = aura_build_blob_from_rax(usr_data.parse_tree, &usr_data.builder, usr_data.node_arr, "hosts", sizeof("hosts") - 1, &srv_stack, srv_conf_tab);
 
     aura_blob_b_map_add_kv(&usr_data.builder, root_off, "server", server_root);
+    aura_blob_b_map_add_kv(&usr_data.builder, root_off, "listeners", listener_root);
     aura_blob_b_map_add_kv(&usr_data.builder, root_off, "tls", tls_root);
     aura_blob_b_map_add_kv(&usr_data.builder, root_off, "hosts", host_root);
 
@@ -99,8 +105,10 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, struct srv_start_arg
     // check if server already running using its pid
     pid = fork();
     if (pid < 0) {
+        close(sock_fds[0]);
+        close(sock_fds[1]);
         sys_alert(true, errno, "aura_dmn_start_server: fork error:");
-        goto out;
+        goto err;
     }
 
     if (pid == 0) {
@@ -114,6 +122,8 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, struct srv_start_arg
             sys_exit(true, errno, "aura_dmn_start_server: aura_child_wait error:");
         execlp("aura_server", "aura_server", fd_str, (char *)0);
         sys_alert(true, errno, "aura_dmn_start_server: Error starting server");
+        close(sock_fds[1]);
+        goto err;
     } else {
         /* callback to register fds[0] with poll */
         close(sock_fds[1]);
@@ -121,55 +131,74 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, struct srv_start_arg
 
         a_init_msg_hdr(hdr, config_size, A_MSG_CONF_DATA, 0);
         res = aura_msg_send(sock_fds[0], &hdr, config, config_size, -1);
-        /* alert server things are set */
+        if (res != 0) {
+            close(sock_fds[0]);
+            sys_debug(true, errno, "aura_dmn_start_server: send config error:");
+            goto err;
+        }
+        /* tell server things are set */
         res = aura_child_proceed(pid);
-        if (res == -1)
-            app_alert(true, errno, "aura_dmn_start_server: aura_child_proceed error:");
+        if (res == -1) {
+            sys_debug(true, errno, "aura_dmn_start_server: aura_child_proceed error:");
+            close(sock_fds[0]);
+            goto err;
+        }
 
         struct aura_msg res_msg;
-        res = aura_msg_recv(sock_fds[0], &res_msg);
+        if (aura_msg_recv(sock_fds[0], &res_msg) <= 0) {
+            close(sock_fds[0]);
+            goto err;
+        }
         if (res_msg.hdr.type != A_MSG_PING) {
             app_debug(true, 0, "aura_dmn_start_server: Incorrect msg hdr type: %d", res_msg.hdr.type);
-            goto out;
+            close(sock_fds[0]);
+            goto err;
         }
 
         res = aura_resp_send(cli_fd, (void *)server_started, sizeof(server_started) - 1);
-        return 0;
+        ret_val = 0;
+        goto out;
     }
+err:
+    res = aura_resp_send(cli_fd, (void *)server_start_failed, sizeof(server_start_failed) - 1);
+    ret_val = -1;
 out:
     close(cli_fd);
-    close(sock_fds[0]);
-    close(sock_fds[1]);
-    close(msg->fd);
     aura_free_yml_error_ctx(parser_err);
     a_srv_free_user_data_ctx(&usr_data);
-    return 1;
+    return ret_val;
 }
 
 /**
  *
  */
-int aura_dmn_server_stop(struct aura_msg *msg, int sock_fd, int cli_fd, pid_t srv_pid) {
+int aura_dmn_server_stop(struct aura_msg *msg, int *sock_fd, int cli_fd, pid_t srv_pid) {
     struct aura_msg_hdr hdr;
     int res, status;
     pid_t pid;
     void *data;
 
     if (srv_pid == 0) {
-        /** @todo: create correct message to return */
-        res = aura_resp_send(cli_fd, (void *)server_stopped, sizeof(server_stopped) - 1);
+        res = aura_resp_send(cli_fd, (void *)server_down, sizeof(server_down) - 1);
         close(cli_fd);
         return 0;
     }
 
     a_init_msg_hdr(hdr, 0, A_MSG_CMD_EXECUTE, A_CMD_SERVER_STOP);
-    res = aura_msg_send(sock_fd, &hdr, NULL, 0, -1);
+    res = aura_msg_send(*sock_fd, &hdr, NULL, 0, -1);
     if (res != 0) {
         res = aura_resp_send(cli_fd, (void *)server_stopped_failed, sizeof(server_stopped_failed) - 1);
-        return 1;
+        close(cli_fd);
+        return -1;
     }
 
+    /* close and reset server socket */
+    close(*sock_fd);
+    *sock_fd = -1;
+
+    /* respond to cli */
     res = aura_resp_send(cli_fd, (void *)server_stopped, sizeof(server_stopped) - 1);
+    close(cli_fd);
     return 0;
 }
 
@@ -190,7 +219,7 @@ int aura_dmn_server_status(int srv_fd, int cli_fd) {
 
     res = aura_msg_recv(srv_fd, &res_msg);
     if (res != 1) {
-        app_debug(true, errno, "aura_dmn_server_status: aura_msg_recv error:");
+        sys_debug(true, errno, "aura_dmn_server_status: aura_msg_recv error:");
         goto out;
     }
 
@@ -206,5 +235,5 @@ int aura_dmn_server_status(int srv_fd, int cli_fd) {
 out:
     aura_resp_send(cli_fd, server_down, sizeof(server_down) - 1);
     close(cli_fd);
-    return 1;
+    return -1;
 }

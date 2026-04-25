@@ -3,23 +3,36 @@ version: v1beta1
 server:
   name: edge-runtime
   environment: dev
-  port: 8080
-  addr: 0.0.0.0
   max_connections: 5000
   timeout:
     read: 30s
     write: 30s
     idle: 120s
 
+listeners:
+  - name: http-tcp
+    address: "0.0.0.0"
+    port: 8080
+    protocol: tcp
+    tls: false # disable TLS on this listener (optional)
+
+  - name: https-tcp
+    address: "0.0.0.0"
+    port: 8443
+    protocol: tcp
+    tls: true
+
+  # - name: https-quic
+  #   address: "0.0.0.0"
+  #   port: 8443
+  #   protocol: udp
+  #   quic: true # enables QUIC transport
+
 tls:
   identities:
     - cert_file: /home/lukwiya/studies/C/vaulten_aura/examples/config/cert_chain.pem
-      key_file: /home/lukwiya/studies/C/vaulten_aura/examples/config/aura_local_leaf_keypair.pem
+      key_file: /home/lukwiya/studies/C/vaulten_aura/examples/config/aura_leaf_keypair.pem
       tag: default
-    # - cert_file: /etc/edge-runtime/certs/server.crt
-    #   key_file: /etc/edge-runtime/certs/server.key
-  # - key_file: /etc/edge-runtime/certs/server.crt
-  #   cert_file: /etc/edge-runtime/certs/server.key
   cipher_suites:
     - TLS_AES_256_GCM_SHA384
     - TLS_CHACHA20_POLY1305_SHA256
@@ -30,7 +43,6 @@ hosts:
     http2_origin_frame:
       - "api.vaultenaura.local"
       - "admin.vaultenaura.local"
-  # - name: admin.example.com
 
 logging:
   level: info

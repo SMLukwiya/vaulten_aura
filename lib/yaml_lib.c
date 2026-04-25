@@ -231,7 +231,6 @@ static void a_handle_mapping_start(struct aura_yml_conf_parser *p, yaml_event_t 
     int *curr_idx;
     struct path_tracker *tr = &p->tracker;
     aura_yml_parse_state_t state, *curr_state = a_vector_peek(&tr->state_stack);
-    // char path[4096] = {0};
 
     if (curr_state && *curr_state == A_STATE_VALUE) {
         *curr_state = A_STATE_NESTED_MAPPING;
@@ -300,8 +299,6 @@ static void a_handle_sequence_start(struct aura_yml_conf_parser *p, yaml_event_t
       .full_path = tr->full_path,
       .str_val = NULL,
     };
-
-    // app_debug(true, 0, "SEQUENCE START: Path: %s", tr->current_path);
 
     /**
      * If the previous state was a mapping, another mapping
@@ -405,10 +402,10 @@ static void a_handle_scalar(struct aura_yml_conf_parser *p, yaml_event_t *evt) {
     struct path_tracker *tr = &p->tracker;
     aura_yml_parse_state_t *curr_state = (aura_yml_parse_state_t *)a_vector_peek(&tr->state_stack);
     const char *value = (const char *)evt->data.scalar.value;
-    int i;
+    int i, *curr_idx;
     aura_yml_parse_state_t *seq_ctx, *parent_ctx;
 
-    // app_debug(true, 0, "SCALAR VALUE: path: %s, value: %s", tr->full_path, value);
+    // app_debug(true, 0, "SCALAR VALUE: path: %s, value: %s, state: %d", tr->full_path, value, curr_state ? *curr_state : -1);
 
     seq_ctx = a_vector_pop(&tr->seq_context_stack);
     parent_ctx = a_vector_peek(&tr->seq_context_stack);
@@ -420,11 +417,18 @@ static void a_handle_scalar(struct aura_yml_conf_parser *p, yaml_event_t *evt) {
         a_update_full_path(tr, value);
         *curr_state = A_STATE_VALUE;
     } else if (curr_state && *curr_state == A_STATE_VALUE) {
+        curr_idx = a_vector_peek(&tr->index_stack);
         struct aura_yml_node yn = {
           .type = A_YAML_SCALAR,
           .key = get_map_key(tr->current_path),
           .full_path = tr->full_path,
           .str_val = value,
+          /**
+           * update value current index,
+           * current index has already been updated to the next value
+           * by the time we access it here, hence the -1.
+           */
+          .idx = curr_idx ? *curr_idx - 1 : 0,
         };
 
         /* run validator */
@@ -458,7 +462,7 @@ static void a_handle_scalar(struct aura_yml_conf_parser *p, yaml_event_t *evt) {
         *curr_state = A_STATE_KEY;
     } else if (curr_state && *curr_state == A_STATE_SEQUENCE) {
         char path[4096];
-        int *curr_idx = a_vector_peek(&tr->index_stack);
+        curr_idx = a_vector_peek(&tr->index_stack);
 
         if (curr_idx) {
             /**
@@ -471,6 +475,7 @@ static void a_handle_scalar(struct aura_yml_conf_parser *p, yaml_event_t *evt) {
               .key = get_map_key(tr->current_path),
               .full_path = path,
               .str_val = value,
+              .idx = *curr_idx, /* update correct value index */
             };
 
             /* run validator */
@@ -492,11 +497,12 @@ static void a_handle_scalar(struct aura_yml_conf_parser *p, yaml_event_t *evt) {
 /**
  *
  */
-static int a_yaml_parse_config(struct aura_yml_conf_parser *p, yaml_parser_t *yp) {
+static void a_yaml_parse_config(struct aura_yml_conf_parser *p, yaml_parser_t *yp) {
     yaml_event_t evt;
+    int res;
 
     do {
-        if (!yaml_parser_parse(yp, &evt)) {
+        if (!(res = yaml_parser_parse(yp, &evt))) {
             yaml_event_delete(&evt);
             break;
         }
@@ -505,10 +511,9 @@ static int a_yaml_parse_config(struct aura_yml_conf_parser *p, yaml_parser_t *yp
         case YAML_STREAM_END_EVENT:
             p->done = true;
             int last_idx = p->validator_cnt - 1;
-            /* parent validator is the last validator in the table */
-            // if (validator_is_empty(&p->validators[p->validator_cnt - 1].validator) || last_idx < 0)
-            // break;
-            // p->validators[last_idx].validator.cb(p, &evt, p->validators[last_idx].validator.v_ctx);
+            /* parent validator is the last validator in the table if present */
+            if (strcmp(p->validators[last_idx].path, "parent_validator") == 0)
+                p->validators[last_idx].cb(p, &evt, NULL);
             break;
         case YAML_MAPPING_START_EVENT:
             a_handle_mapping_start(p, &evt);
@@ -529,8 +534,6 @@ static int a_yaml_parse_config(struct aura_yml_conf_parser *p, yaml_parser_t *yp
 
         yaml_event_delete(&evt);
     } while (!p->in_panic && !p->done);
-
-    return 0;
 }
 
 /**/
@@ -578,7 +581,7 @@ static int a_load_config_(FILE *fp, struct aura_yml_validator validators[], size
     a_yaml_parse_config(&p, &yaml_parser);
 
     if (p.in_panic) {
-        ret_val = 0;
+        ret_val = 1;
         goto out;
     }
     ret_val = 0;

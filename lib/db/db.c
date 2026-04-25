@@ -1,9 +1,10 @@
 #include "db/db.h"
 #include "file_lib.h"
-#include "hash_lib.h"
+#include "hasher_lib.h"
 #include "list_lib.h"
 #include "memory_lib.h"
 #include "slab_lib.h"
+#include "string_lib.h"
 #include "time_lib.h"
 
 #include <dirent.h>
@@ -1016,6 +1017,7 @@ int aura_db_record_fetch(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_
     hash = a_fnv1a_hash(db->db_file_hdr.bucket_cnt, namespace, key);
     offset = db->buckets[hash].head_off;
 
+    app_debug(true, 0, "aura_db_record_fetch: key: %s: len: %lu", key->base, key->len);
     if (data_out) {
         memset(data_out, 0, sizeof(*data_out));
     }

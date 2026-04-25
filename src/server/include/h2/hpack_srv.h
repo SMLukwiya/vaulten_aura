@@ -6,6 +6,7 @@
 #include "h2/stream.h"
 #include "header_srv.h"
 #include "memory_lib.h"
+#include "token_srv.h"
 #include "types_lib.h"
 
 #include <assert.h>
@@ -37,23 +38,25 @@
 #define A_HPACK_PARSE_HEADERS_AUTHORITY_EXISTS 8
 #define A_HPACK_PARSE_HEADERS_PROTOCOL_EXISTS 16
 
-// #define a_hpack_is_pseudo_header(header) (likely(header[0] == ':'))
 #define a_horizontal_tab(c) (likely((uint8_t)c == 0x09))
 
-#define DYNAMIC_TABLE_UPDATE_SIZE 5
+#define A_DYNAMIC_TABLE_UPDATE_SIZE 5
 #define A_STATUS_HEADER_SIZE 5
 #define A_HEADER_TABLE_ENTRY_OVERHEAD 32
+#define A_DYNAMIC_TABLE_HEADER_OFFSET 62
+#define UINT64_MAX_STR "18446744073709551615"
+#define A_MAX_REQ_LEN 16384 /** @todo: subject to change */
 
 /**/
 typedef enum {
-    HPACK_INDEXED_HDR_FIELD,
-    HPACK_LITERAL_HDR_FIELD_INCR_INDEXING_INDEXED_NAME,
-    HPACK_LITERAL_HDR_FIELD_INCR_INDEXING_NEW_NAME,
-    HPACK_LITERAL_HDR_FIELD_WITHOUT_INDEXING_INDEXED_NAME,
-    HPACK_LITERAL_HDR_FIELD_WITHOUT_INDEXING_NEW_NAME,
-    HPACK_LITERAL_HDR_FIELD_NEVER_INDEXED_INDEXED_NAME,
-    HPACK_LITERAL_HDR_FIELD_NEVER_INDEXED_NEW_NAME,
-    HPACK_DYNAMIC_TABLE_SIZE_UPDATE
+    A_HPACK_INDEXED_HDR_FIELD,
+    A_HPACK_LITERAL_HDR_FIELD_INCR_INDEXING_INDEXED_NAME,
+    A_HPACK_LITERAL_HDR_FIELD_INCR_INDEXING_NEW_NAME,
+    A_HPACK_LITERAL_HDR_FIELD_WITHOUT_INDEXING_INDEXED_NAME,
+    A_HPACK_LITERAL_HDR_FIELD_WITHOUT_INDEXING_NEW_NAME,
+    A_HPACK_LITERAL_HDR_FIELD_NEVER_INDEXED_INDEXED_NAME,
+    A_HPACK_LITERAL_HDR_FIELD_NEVER_INDEXED_NEW_NAME,
+    A_HPACK_DYNAMIC_TABLE_SIZE_UPDATE
 } hpack_binary_format_rep;
 
 /**
@@ -63,111 +66,147 @@ typedef enum {
  * @name: name of the header
  * @value: value associated with the header
  */
-typedef int (*hpack_header_cb)(struct aura_h2_conn *conn, struct aura_h2_stream *stream,
-                               struct aura_iovec *name, struct aura_iovec *value);
+typedef int (*hpack_header_cb)(struct aura_h2_ctx *conn, struct aura_h2_stream *stream,
+                               const char *name, size_t name_len, const char *value, size_t val_len);
 
 /**
  * This order follows from the callback
  * table define in h2.c.
  * When adding new callbacks, maintain the order,
- * otherwise you quickly become a danger to society!!
+ * otherwise we are in danger!!
  */
 typedef enum {
-    HPACK_AUTHORITY_CB,
-    HPACK_METHOD_CB,
-    HPACK_PATH_CB,
-    HPACK_SCHEME_CB,
-    HPACK_STATUS_CB
-} hpack_cb_idx;
+    A_HPACK_AUTHORITY_CB,
+    A_HPACK_METHOD_CB,
+    A_HPACK_PATH_CB,
+    A_HPACK_SCHEME_CB,
+    A_HPACK_STATUS_CB
+} aura_hpack_cb_idx;
 
+/* Hpack errors */
 typedef enum {
-    HPACK_OK = 0,
-    HPACK_ERR_INVALID_NAME,
-    HPACK_ERR_INVALID_VALUE,
-    HPACK_ERR_CAN_CONTINUE,
-    HPACK_ERR_COMPRESSION,
-    HPACK_ERR_PROTOCOL,
-    HPACK_ERR_TRUNCATED,
-    HPACK_ERR_INCOMPLETE, /* not really an error! */
-    HPACK_ERR_PATH_EMPTY
-} hpack_err_t;
+    A_HPACK_OK = 0,
+    A_HPACK_INVALID_NAME_ERR,
+    A_HPACK_INVALID_VALUE_ERR,
+    A_HPACK_SOFT_ERR,
+    A_HPACK_COMPRESSION_ERR,
+    A_HPACK_PROTOCOL_ERR,
+    A_HPACK_TRUNCATED_ERR,
+    A_HPACK_PATH_EMPTY_ERR, /* Custom error */
+    A_HPACK_INTERNAL_ERR,
+} hpack_err_t2;
 
-/* Header Name Value Entry */
-struct aura_hdr_nv {
-    struct aura_iovec *name;
-    struct aura_iovec *value;
-    int32_t token;
-    uint32_t index;
-    uint32_t flags;
+/* hpack table entry structure */
+struct aura_hpack_table_entry {
+    struct aura_header_field *header_field;
+    int16_t index;
 };
 
-struct aura_hpack_hdr_table {
-    struct aura_hdr_nv *entries;
-    size_t num_of_entries;
-    size_t start_idx; /* start index for dynamic or static tables ([rfc7541]) */
-    size_t entry_cap;
-    size_t table_size;       /* (32 + entry_name_len + entry_value_len) * num_of_entries: [rfc7541] */
-    size_t max_size;         /* as determined by SETTINGS_HEADER_TABLE_SIZE setting */
-    size_t max_dynamic_size; /* determined by SETTINGS_HEADER_TABLE_SIZE and dynamic table size update */
+/* Hpack dynamic table structure */
+struct aura_hpack_dyn_table {
+    struct aura_hpack_table_entry *entries; /* Dynamic table entries */
+    size_t cnt;                             /* Current number of table entries */
+    size_t cap;
+    size_t tab_size;          /* (32 + name_len + val_len) * cnt */
+    size_t max_size;          /* dynamic size updates value */
+    size_t settings_tab_size; /* as determined by SETTINGS_HEADER_TABLE_SIZE setting */
 };
 
-/* request parser that uses given callback as decoder */
-int hpack_parse_request(struct aura_h2_conn *conn, struct aura_h2_stream *stream,
-                        const uint8_t *src, size_t len, hpack_header_cb cb[]);
+struct aura_hpack_static_table {
+    struct aura_hpack_table_entry entries[ARRAY_SIZE(rfc_static_table)];
+};
 
-/* response parser that uses given callback as the decoder */
-int hpack_parse_response(struct aura_h2_conn *conn, struct aura_h2_stream *stream,
-                         const uint8_t *src, size_t len, hpack_header_cb cb[], bool is_trailer);
+/**
+ * Parses requests received from the wire using hpack_header_cb
+ * to validate some of the received values for correctness
+ */
+int aura_hpack_parse_request(struct aura_h2_ctx *conn, struct aura_h2_stream *stream,
+                             const uint8_t *src, size_t len, hpack_header_cb cb[]);
 
-/* free hpack table header */
-void hpack_dispose_header_table(struct aura_hpack_hdr_table *hdr_tb);
+/**
+ * Parses response received from the wire using hpack_header_cb
+ * to validate some of the received values for correctness
+ */
+int aura_hpack_parse_response(struct aura_h2_ctx *h2_ctx, struct aura_h2_stream *stream,
+                              const uint8_t *src, size_t len, hpack_header_cb cb[], bool is_trailer);
 
-/* ---------- */
-/* Check if header value is a pseudo header */
-static inline bool aura_hpack_is_pseudo_header(char *header) {
-    return likely(header[0] == ':');
+/* Dispose dynamic hpack table header */
+void aura_hpack_header_tab_dispose(struct aura_hpack_dyn_table *hdr_tb);
+
+/**
+ * Encode content length
+ * literal header without indexing 'Indexed name'
+ */
+uint8_t *aura_encode_content_length(uint8_t *dest, size_t value);
+
+/**
+ * Checks if header entries are to be evicted so
+ * that the current size fits within the max table size
+ * Encode dynamic table update (for transmission to peer) after evictions
+ */
+uint8_t *aura_header_table_adjust_size(struct aura_hpack_dyn_table *tb, uint32_t new_cap, uint8_t *dest);
+
+/**
+ * Encode status code using literal header indexed
+ * and literal header without indexing as fallback
+ */
+uint8_t *aura_encode_status(uint8_t *dest, int status);
+
+/**
+ * Encode the given header set with the most
+ * memory appropriate method available
+ */
+uint8_t *aura_encode_header(struct aura_memory_ctx *mc, struct aura_hpack_static_table *static_tab,
+                            struct aura_hpack_dyn_table *dyn_tab, uint8_t *dest, struct aura_header_field *hdr);
+
+/**/
+int aura_hpack_load_static_table(struct aura_hpack_static_table *tab, struct aura_intern_tab *intern_tab);
+
+/* Returns true if header value is a pseudo header */
+static inline bool aura_hpack_is_pseudo_header(const char *header) {
+    return likely(*header == ':');
 }
 /**
  * Calculate spaces consumed by a single header entry
  */
-static inline size_t header_entry_size(size_t name_len, size_t value_len) {
+static inline size_t aura_header_entry_size(size_t name_len, size_t value_len) {
     return name_len + value_len + A_HEADER_TABLE_ENTRY_OVERHEAD;
 }
 
 /**
  * Calculate the total space consumed by the given set of headers
  */
-static inline size_t get_headers_size(const struct aura_http_hdr_set *hdrs, size_t num_of_hdrs) {
-    const struct aura_http_hdr_set *hdr;
-    size_t size;
+static inline size_t aura_get_headers_size(struct aura_header_field *hdrs, size_t num_of_hdrs) {
+    struct aura_header_field *hdr;
+    size_t size, name_len, value_len;
 
     if (!hdrs)
         return 0;
 
     size = 0;
-    for (hdr = hdrs; num_of_hdrs != 0; ++hdr, --num_of_hdrs)
-        size += header_entry_size(hdr->name->len, hdr->value->len);
-    return size;
-}
+    for (int i = 0; i <= num_of_hdrs; ++i) {
+        hdr = &hdrs[i];
+        name_len = hdr->name.interned->len;
 
-/**
- * Test if supplied value is indexed in
- * the static table
- */
-static inline bool value_exists_in_static_table(const struct aura_iovec *value) {
-    return &hpack_static_table[1].value <= value &&
-           value <= &hpack_static_table[(ARRAY_SIZE(hpack_static_table) - 1)].value;
+        if (hdr->value.interned)
+            value_len = hdr->value.interned->len;
+        else
+            value_len = hdr->value.raw.str->len;
+
+        size += aura_header_entry_size(name_len, value_len);
+    }
+    return size;
 }
 
 /**
  * Retrieve static table entry with the given token
  */
-static inline struct aura_hpack_static_table_entry *hpack_static_header_table_get(int32_t token) {
-    struct aura_hpack_static_table_entry *entry;
+static inline struct aura_hpack_table_entry *aura_hpack_static_tab_get_entry(struct aura_hpack_static_table *static_tab, int32_t token) {
+    struct aura_hpack_table_entry *entry;
 
-    for (int i = 0; i < ARRAY_SIZE(hpack_static_table); ++i) {
-        entry = &hpack_static_table[i];
-        if (entry->token == token)
+    for (int i = 0; i < ARRAY_SIZE(static_tab->entries); ++i) {
+        entry = &static_tab->entries[i];
+        if (entry->header_field->token == token)
             return entry;
     }
     return NULL;
@@ -177,77 +216,60 @@ static inline struct aura_hpack_static_table_entry *hpack_static_header_table_ge
  * Retrieve header table entry associated
  * with the given index
  */
-static inline struct aura_hdr_nv *hpack_header_table_get(struct aura_hpack_hdr_table *tb, size_t idx) {
-    struct aura_hdr_nv *entry;
-    size_t _idx;
+static inline struct aura_hpack_table_entry *aura_hpack_dyn_header_tab_get_entry(struct aura_hpack_dyn_table *tb, size_t idx) {
+    struct aura_hpack_table_entry *entry;
 
-    _idx = (tb->start_idx + idx) % tb->entry_cap;
-    entry = &tb->entries[_idx]; // + _idx;
-    A_BUG_ON_2(entry->name == NULL, true);
+    idx -= A_DYNAMIC_TABLE_HEADER_OFFSET;
+    entry = &tb->entries[idx];
     return entry;
 }
 
+/* Returns true if index decoded is invalid */
+static inline bool aura_hpack_tab_index_invalid(struct aura_hpack_dyn_table *tab, int64_t idx) {
+    return (idx < 1 || (idx - A_DYNAMIC_TABLE_HEADER_OFFSET) >= (int64_t)tab->cnt);
+}
+
 /**
- * Remove one dynamic table entry
+ * Remove dynamic table entry
  */
-static inline void hpack_header_table_evict_one(struct aura_hpack_hdr_table *tb) {
-    struct aura_hdr_nv *entry;
+static inline void aura_hpack_header_table_evict_one(struct aura_hpack_dyn_table *tb) {
+    struct aura_hpack_table_entry *entry;
+    char *name, value;
+    size_t name_len, value_len;
 
-    A_BUG_ON_2(tb->num_of_entries == 0, true);
+    A_BUG_ON_2(tb->cnt == 0, true);
 
-    entry = hpack_header_table_get(tb, --tb->num_of_entries);
-    tb->table_size -= entry->name->len + entry->value->len + A_HEADER_TABLE_ENTRY_OVERHEAD;
+    entry = aura_hpack_dyn_header_tab_get_entry(tb, --tb->cnt);
+    name_len = entry->header_field->name.interned->len;
 
-    if (!iovec_is_token(entry->name)) {
-        aura_iovec_destroy(entry->name);
+    if (entry->header_field->value_interned) {
+        value_len = entry->header_field->name.interned->len;
+    } else {
+        value_len = entry->header_field->value.raw.str->len;
     }
-    if (!value_exists_in_static_table(entry->value)) {
-        aura_iovec_destroy(entry->value);
-    }
+
+    tb->tab_size -= name_len + value_len + A_HEADER_TABLE_ENTRY_OVERHEAD;
+
+    aura_header_field_destroy(entry->header_field);
     memset(entry, 0, sizeof(*entry));
 }
 
 /**
- * Encode content length
- * literal header without indexing 'Indexed name'
+ * Check if header value contains only valid characters
+ * Returns false otherwise
  */
-static inline uint8_t *encode_content_length(uint8_t *dest, size_t value) {
-    char buf[32];
-    char *p = buf + sizeof(buf);
-    size_t l;
-
-    do {
-        *--p = '0' + value % 10;
-    } while ((value /= 10) != 0);
-    l = buf + sizeof(buf) - p;
-
-    *dest++ = 0x0f; /* 15 */
-    *dest++ = 0x0d; /* + 13 = 28(index) */
-    *dest++ = (uint8_t)l;
-    memcpy(dest, p, l);
-    dest += l;
-
-    return dest;
+static inline bool aura_hpack_header_value_valid(const char *s, size_t len) {
+    if (len != 0 && (isspace(s[0]) || a_horizontal_tab(s[0]) || isspace(s[len - 1]) || a_horizontal_tab(s[len - 1])))
+        return false;
+    return true;
 }
 
-/**
- * Checks if header entries are to be evicted so
- * that the current size fits within the max table size
- * Encode dynamic table update (for transmission to peer) after evictions
- */
-uint8_t *header_table_adjust_size(struct aura_hpack_hdr_table *tb, uint32_t new_cap, uint8_t *dest);
+static inline bool aura_hpack_static_table_name_exists2(struct aura_hpack_static_table *tab, struct aura_interned_str *str) {
+    /**/
+}
 
-/**
- * Encode status code using literal header indexed
- * and literal header without indexing as fallback
- */
-uint8_t *encode_status(uint8_t *dest, int status);
-
-/**
- * Encode the given header set with the most
- * memory appropriate method available
- */
-uint8_t *encode_header(struct aura_memory_ctx *mc, struct aura_hpack_hdr_table *tb,
-                       uint8_t *dest, struct aura_http_hdr_set *hdr);
+struct aura_header_field *aura_header_find_or_create(struct aura_memory_ctx *mc, struct aura_hpack_static_table *static_tab,
+                                                     struct aura_hpack_dyn_table *dyn_tab, struct aura_intern_tab *intern_tab,
+                                                     char *name, size_t name_len, char *val, size_t val_len);
 
 #endif

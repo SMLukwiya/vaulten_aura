@@ -309,6 +309,10 @@ int aura_fn_meta_parse(void *meta, struct aura_fn_meta *fn_meta) {
     uint32_t kv_cnt, kv_idx, arr_cnt, arr_idx;
     const char *kv_key, *kv_val;
 
+    app_debug(true, 0, "aura_fn_meta_parse: %p<<<<", meta);
+    if (!meta)
+        return -1;
+
     nodes = aura_blob_get_nodes(meta);
     kv_pairs = aura_blob_get_kvs(meta);
     arrs = aura_blob_get_arrs(meta);
@@ -496,6 +500,10 @@ int aura_fn_config_parse(void *config, struct aura_fn_config *fn_config) {
     uint32_t kv_cnt, kv_idx, arr_cnt, arr_idx;
     const char *kv_key, *kv_val;
 
+    app_debug(true, 0, "aura_fn_config_parse: %p<<<<", config);
+    if (!config)
+        return -1;
+
     nodes = aura_blob_get_nodes(config);
     kv_pairs = aura_blob_get_kvs(config);
     arrs = aura_blob_get_arrs(config);
@@ -653,6 +661,8 @@ struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, struct aura_memory
         return NULL;
     }
 
+    data.base = NULL;
+    data.len = 0;
     /* Function version not provided */
     if (fn_version == UINT32_MAX) {
         /** Loop reverse to get the latest function version  */
@@ -720,10 +730,13 @@ struct aura_fn_petite *aura_fn_petite_fetch_broker(struct aura_memory_ctx *mc, c
     struct aura_fn_petite *fn_petite;
     struct aura_db_rec *rec;
     struct aura_iovec key, data_out;
-    char buf[2000];
+    char buf[2046];
     int res;
 
+    memset(buf, 0, sizeof(buf));
     snprintf(buf, sizeof(buf) - 1, "%s:%u", fn_name, fn_version);
+    key.base = buf;
+    key.len = strlen(buf);
     res = aura_db_broker_fetch(mc, A_DB_NS_FN, A_DB_SCHEMA_FN_PETITE_V1, &key, &data_out, sock_fd);
     if (res < 0) {
         return NULL;
@@ -930,6 +943,7 @@ struct aura_fn *aura_fn_load_broker(struct aura_memory_ctx *mc, const char *fn_n
 
     /* Meta */
     memset(buf, 0, sizeof(buf));
+    memset(fn, 0, sizeof(*fn));
     snprintf(buf, sizeof(buf), "%s:%u", fn_name, fn_version);
     key.base = buf;
     key.len = strlen(buf);
@@ -1021,7 +1035,7 @@ struct aura_fn_stat *aura_fn_stat_fetch_broker(struct aura_memory_ctx *mc, const
     char buf[2000];
     int res;
 
-    app_debug(true, 0, "aura_fn_stat_fetch_broker <<<<");
+    memset(buf, 0, sizeof(buf));
     snprintf(buf, sizeof(buf), "%s:%u", fn_name, fn_version);
     key.base = buf;
     key.len = strlen(buf);

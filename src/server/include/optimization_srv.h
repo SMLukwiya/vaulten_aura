@@ -3,6 +3,7 @@
 
 #include "memory_lib.h"
 #include "slab_lib.h"
+#include "utils_lib.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -66,5 +67,64 @@ struct aura_tls_record_batch {
      */
     bool iov_ready;
 };
+
+/* === */
+
+#define A_INTEGRAL_LIMIT 1000
+
+/* Server optimizer struct */
+struct aura_srv_optimizer {
+    int min_accept;
+    int max_accept;
+    int conc;
+    int conc_max;
+    int conc_min;
+
+    float error_integral;
+
+    float alpha; /* EMWA smoothing factor */
+    float kp;    /* Proportional gain */
+    float ki;    /* Integral gain */
+    float kf;
+
+    double prev_tp;
+    double prev_latency;
+    int prev_conc;
+
+    float tp_threshold;
+    float tp_drop_threshold;
+    float latency_threshold;
+    uint8_t min_consecutive_cnt;
+    uint8_t knee_counter;
+
+    bool knee_detected;
+    int knee_concurrency;
+
+    double target_latency_us;
+    double ewma_latency;
+
+    uint64_t last_timestamp_us; /* Last run of optmizer */
+
+    uint32_t current_accept_budget;
+
+    float knee_margin_ratio;
+    uint8_t knee_holdoff; /* Hold time after knee detection */
+    uint8_t knee_holdoff_counter;
+    float min_delta_conc;    /* Minimum change to compute slopes */
+    float tp_slope_ema;      /* Filtered slope for noise reduction */
+    float latency_slope_ema; /* Filtered slope for noise reduction */
+    float slope_alpha;       /* EWMA factor for slope */
+    float error_deadzone;    /* Limit concurrency hunt near steady state */
+};
+
+void aura_srv_opt_init(struct aura_srv_optimizer *opt);
+
+void aura_srv_opt_req_complete(struct aura_srv_optimizer *opt, double latenc_ms);
+
+void aura_srv_opt_update(struct aura_srv_optimizer *opt, uint64_t now, double throughput, uint32_t inflight);
+
+int64_t aura_srv_opt_get_candidate_epoll_timeout(struct aura_srv_optimizer *opt);
+
+uint64_t aura_srv_opt_get_accept_budget(struct aura_srv_optimizer *opt, uint64_t inflight);
 
 #endif

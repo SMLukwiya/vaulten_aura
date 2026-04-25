@@ -113,16 +113,17 @@ struct aura_yml_node {
     uint32_t tab_entry; /* table entry for 0(1) lookup */
     uint8_t type;       /* node type */
     uint8_t val_type;   /* value type for this node */
+    uint32_t idx;       /* current index of entry in a sequence */
 };
 
-typedef void (*aura_hook_cb_2)(struct aura_yml_conf_parser *p, yaml_event_t *e, struct aura_yml_node *yn);
+typedef void (*aura_validator_cb)(struct aura_yml_conf_parser *p, yaml_event_t *e, struct aura_yml_node *yn);
 
 /**
  * Defines the validator associated with a path
  */
 struct aura_yml_validator {
     const char *path;
-    aura_hook_cb_2 cb;
+    aura_validator_cb cb; /* validator function to run for given path */
 };
 
 /**
@@ -130,6 +131,7 @@ struct aura_yml_validator {
  * Especially useful to handle nested structure
  */
 typedef enum {
+    A_STATE_NONE,
     A_STATE_KEY,
     A_STATE_VALUE,
     A_STATE_SEQUENCE,

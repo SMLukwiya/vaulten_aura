@@ -178,7 +178,9 @@ int aura_msg_recv(int sock_fd, struct aura_msg *aura_msg) {
     char *payload;
     ssize_t n_received;
 
+    memset(&msg, 0, sizeof(msg));
     memset(aura_msg, 0, sizeof(struct aura_msg));
+    memset(iov, 0, sizeof(iov));
 
 #if defined(CREDOPT)
     const int on = 1;
