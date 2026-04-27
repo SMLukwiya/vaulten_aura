@@ -58,12 +58,28 @@ static inline void a_list_move_tail(struct aura_list_head *head, struct aura_lis
     a_list_add_tail(head, entry);
 }
 
+static inline void a_list_move_bulk_tail(struct aura_list_head *head, struct aura_list_head *first, struct aura_list_head *last) {
+    /* detach first and last */
+    first->prev->next = last->next;
+    last->next->prev = first->prev;
+
+    head->prev->next = first;
+    first->prev = head->prev;
+    last->next = head;
+    head->prev = last;
+}
+
 static inline bool a_list_is_empty(struct aura_list_head *head) {
     return head->next == head;
 }
 
 static inline bool a_entry_is_last(struct aura_list_head *head, struct aura_list_head *entry) {
     return entry->next == head;
+}
+
+/* Test if list has a single entry */
+static inline bool aura_list_is_singular(struct aura_list_head *head) {
+    return !a_list_is_empty(head) && (head->next == head->prev);
 }
 
 #define a_list_entry(ptr, type, member) a_container_of(ptr, type, member)

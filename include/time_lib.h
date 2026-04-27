@@ -17,8 +17,14 @@
 /* Returns true if time a is after time b */
 #define a_time_after(a, b) ((long)((b) - (a)) < 0)
 
+/* Returns true if time a is after or equal to time b */
+#define a_time_after_eq(a, b) ((long)((b) - (a)) <= 0)
+
 /* Returns true if time a is before time b */
 #define a_time_before(a, b) a_time_after(b, a)
+
+/* Returns true if time a is before or equal to time b */
+#define a_time_before_eq(a, b) a_time_after_eq(b, a)
 
 struct aura_time_window {
     time_t start;
