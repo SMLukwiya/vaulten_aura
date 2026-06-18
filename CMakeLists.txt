@@ -16,7 +16,7 @@ if (OPENSSL_VERSION VERSION_LESS "3.0.0")
     )
 endif()
 
-#test
+# test
 enable_testing()
 
 include(cmake/dependencies.cmake)
@@ -37,7 +37,7 @@ add_subdirectory(src/cli)
 add_subdirectory(src/daemon)
 add_subdirectory(src/server)
 
-set(CMAKE_C_FLAGS_DEBUG "-O0")
+set(CMAKE_C_FLAGS_DEBUG "-O0 -g")
 set(CMAKE_C_FLAGS_RELEASE "-O2")
 
 # installation

@@ -109,7 +109,7 @@ bool is_valid_utf_8_string(const unsigned char *str) {
     return 1;
 }
 
-char *aura_strdup(struct aura_memory_ctx *mc, const char *str) {
+char *aura_strdup(struct aura_mem_ctx *mc, const char *str) {
     char *copy;
     size_t len;
 
@@ -119,7 +119,7 @@ char *aura_strdup(struct aura_memory_ctx *mc, const char *str) {
     return copy;
 }
 
-char *aura_strndup(struct aura_memory_ctx *mc, const char *str, size_t len) {
+char *aura_strndup(struct aura_mem_ctx *mc, const char *str, size_t len) {
     char *copy;
     size_t _len;
 
@@ -138,7 +138,7 @@ char *aura_strndup(struct aura_memory_ctx *mc, const char *str, size_t len) {
     return copy;
 }
 
-char *aura_str_touppercase(struct aura_memory_ctx *mc, char *str, size_t len) {
+char *aura_str_touppercase(struct aura_mem_ctx *mc, const char *str, size_t len) {
     char *s;
 
     if (!str || len == 0)
@@ -155,7 +155,7 @@ char *aura_str_touppercase(struct aura_memory_ctx *mc, char *str, size_t len) {
     return s;
 }
 
-char *aura_str_tolowercase(struct aura_memory_ctx *mc, char *str, size_t len) {
+char *aura_str_tolowercase(struct aura_mem_ctx *mc, const char *str, size_t len) {
     char *s;
 
     if (!str || len == 0)
@@ -172,7 +172,7 @@ char *aura_str_tolowercase(struct aura_memory_ctx *mc, char *str, size_t len) {
     return s;
 }
 
-void *aura_memcpy(struct aura_memory_ctx *mc, void *data, size_t len) {
+void *aura_memcpy(struct aura_mem_ctx *mc, const void *data, size_t len) {
     void *dest;
 
     if (!data || len == 0)

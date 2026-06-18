@@ -1,8 +1,16 @@
-#if defined(SOLARIS) /* Solaris 10 */
-#define _XOPEN_SOURCE 600
-#else
-#define _XOPEN_SOURCE 700
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
 #endif
+
+#include <alloca.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <signal.h>
+#include <strings.h>
+#include <sys/resource.h>
+#include <sys/socket.h>
+#include <sys/timerfd.h>
 
 #include "blobber_lib.h"
 #include "connection.h"
@@ -11,8 +19,9 @@
 #include "error_lib.h"
 #include "evt_loop_srv.h"
 #include "function_lib.h"
-#include "h2/h2_srv.h"
+#include "h2/server.h"
 #include "heap_lib.h"
+#include "host.h"
 #include "ipc_lib.h"
 #include "memory_lib.h"
 #include "openssl/err.h"
@@ -35,25 +44,17 @@
 #include "types_lib.h"
 #include "unix_socket_lib.h"
 
-#include <alloca.h>
-#include <dirent.h>
-#include <fcntl.h>
-#include <signal.h>
-#include <strings.h>
-#include <sys/timerfd.h>
-#include <time.h>
-
 #define A_MAX_PRELOAD_FN_CNT 5
 
-/* global server configs */
-struct aura_srv_global_conf *glob_conf;
+/* Max nr of open FD */
+static long AURA_OPEN_MAX = 0;
 
 /**/
-int aura_ocsp_timer_fd = -1;
+static int aura_ocsp_timer_fd = -1;
 
 /**
  * We update ocsp via the same epoll setup for the general server
- * call after daemonize as timer is not inherited
+ * call after aura_daemonize as timer is not inherited
  */
 static void a_create_ocsp_timer_fd(int64_t interval_sec) {
     struct itimerspec t;
@@ -179,14 +180,36 @@ static void a_handle_ocsp_timer_event(int timer_fd, struct aura_ocsp_updater *up
         a_trigger_ocsp_update(updater);
 }
 
+static int a_conn_pool_init(struct aura_srv_conn_pool *pool, struct aura_mem_ctx *mc) {
+    struct aura_rh_map_key key;
+
+    memset(pool, 0, sizeof(*pool));
+
+    pthread_mutex_init(&pool->mutex, NULL);
+
+    if (aura_rh_map_init(&pool->pool, mc, 16, A_RH_KEY_STR, true) < 0)
+        return -1;
+
+    return 0;
+}
+
+static void a_conn_pool_destroy(struct aura_srv_conn_pool *pool) {
+    if (!pool)
+        return;
+
+    pthread_mutex_destroy(&pool->mutex);
+    aura_rh_map_destroy(&pool->pool);
+}
+
 /**
  * check for host configuration that handles the request
  * and return a pointer to it
  */
-struct aura_srv_host_conf *a_resolve_sni(struct aura_srv_listener_conf *lc, const char *server_name) {
+struct aura_srv_host_conf *a_resolve_sni(struct aura_srv_listeners_conf *lc, const char *server_name) {
     aura_rax_node_t *host_node;
 
-    host_node = aura_rax_lookup(lc->sni, server_name, sizeof(server_name) - 1);
+    app_debug(true, 0, "A_RESOLVE_SNI servername=%s, len=%u", server_name, strlen(server_name));
+    host_node = aura_rax_lookup(lc->sni, server_name, strlen(server_name));
     if (!host_node)
         return NULL;
 
@@ -222,7 +245,7 @@ static struct addrinfo *a_resolve_address(const char *hostname, const char *serv
  */
 struct aura_on_client_hello_ptls {
     ptls_on_client_hello_t super;
-    struct aura_srv_listener_conf *listener;
+    struct aura_srv_listeners_conf *listener;
 };
 
 /**
@@ -231,7 +254,7 @@ struct aura_on_client_hello_ptls {
 static int a_on_client_hello(ptls_on_client_hello_t *self, ptls_t *tls_conn, ptls_on_client_hello_parameters_t *hello_params) {
     struct aura_srv_host_conf *host_config;
     struct aura_srv_tls_iden *chosen_tls_identity, *tls_identity;
-    struct aura_srv_listener_conf *lc;
+    struct aura_srv_listeners_conf *lc;
     struct aura_on_client_hello_ptls *super_self_st;
     bool prefer_raw_public_key;
     struct aura_conn *conn_data;
@@ -581,7 +604,7 @@ struct aura_ptls_super_ctx {
 /**
  *
  */
-static int a_setup_tls(struct aura_srv_listener_conf *lc, ptls_key_exchange_algorithm_t **key_ex,
+static int a_setup_tls(struct aura_srv_listeners_conf *lc, ptls_key_exchange_algorithm_t **key_ex,
                        ptls_cipher_suite_t **cipher_suites, ptls_ech_create_opener_t *ech_create_opener,
                        ptls_iovec_t ech_retry_configs, unsigned int server_cipher_preference,
                        ptls_iovec_t raw_public_key, struct aura_srv_tls_iden *iden,
@@ -713,12 +736,13 @@ static int a_setup_tls(struct aura_srv_listener_conf *lc, ptls_key_exchange_algo
  * Test if the listener config provided can
  * allow creating a new listener
  */
-static bool a_listener_is_new(struct aura_srv_listener_conf *lc, struct sockaddr *addr, socklen_t addr_len) {
+static bool a_listener_is_new(struct aura_srv_listeners_conf *lc,
+                              struct sockaddr *addr, socklen_t addr_len) {
     int i;
     struct sockaddr *a;
     struct sockaddr_in *ip4_a, *ip4_b;
 
-    for (i = 0; i < glob_conf->host_pool.cnt; ++i) {
+    for (i = 0; i < lc->listeners_pool.cnt; ++i) {
         a = &lc->listeners_pool.entries[i].addr;
 
         if (lc->listeners_pool.entries[i].addr_len != addr_len)
@@ -779,7 +803,7 @@ exception:
     return -1;
 }
 
-int a_listener_init(struct aura_srv_listener *listener, struct aura_srv_listener_conf *lc) {
+int a_listener_init(struct aura_srv_listener *listener, struct aura_srv_listeners_conf *lc) {
     struct addrinfo *ailist, *aiptr;
     int type, protocol;
     int reuse = 1;
@@ -805,13 +829,22 @@ int a_listener_init(struct aura_srv_listener *listener, struct aura_srv_listener
         return -1;
     }
 
-    if (listener->tls)
+    switch (listener->protocol) {
+    case A_PROTOCOL_TCP:
+        // if (listener->tls)
         listener->on_event = aura_conn_tcp_listener_event_handler;
-    else
-        listener->on_event = aura_conn_listener_event_handler;
+        // else
+        //     listener->on_event = aura_conn_listener_event_handler;
+        break;
+
+    case A_PROTOCOL_UDP:
+    default:
+        break;
+    }
 
     listener->addr_len = aiptr->ai_addrlen;
-    memcpy(&listener->addr, aiptr->ai_addr, sizeof(*aiptr->ai_addr));
+    // memcpy(&listener->addr, aiptr->ai_addr, sizeof(*aiptr->ai_addr));
+    memcpy(&listener->addr, aiptr->ai_addr, sizeof(struct sockaddr));
 
     return 0;
 }
@@ -914,7 +947,7 @@ static ptls_cipher_suite_t **a_parse_ciphers_suites(const aura_blob_param_st *bl
  * Test if provided tls identity pair (cert and key)
  * are new
  */
-static bool a_tls_is_new(struct aura_srv_listener_conf *lc, const char *cert_file, const char *key_file) {
+static bool a_tls_is_new(struct aura_srv_listeners_conf *lc, const char *cert_file, const char *key_file) {
     if (lc->tls_pool.entries == NULL)
         return true;
 
@@ -929,7 +962,7 @@ static bool a_tls_is_new(struct aura_srv_listener_conf *lc, const char *cert_fil
     return false;
 }
 
-static struct aura_srv_tls_iden *a_get_tls_iden_slot(struct aura_srv_listener_conf *lc) {
+static struct aura_srv_tls_iden *a_get_tls_iden_slot(struct aura_srv_listeners_conf *lc) {
     if (lc->tls_pool.cnt >= lc->tls_pool.cap) {
         lc->tls_pool.cap = lc->tls_pool.cap == 0 ? 5 : lc->tls_pool.cap * 2;
         lc->tls_pool.entries = realloc(lc->tls_pool.entries, sizeof(struct aura_srv_tls_iden) * lc->tls_pool.cap);
@@ -946,7 +979,7 @@ static struct aura_srv_tls_iden *a_get_tls_iden_slot(struct aura_srv_listener_co
 static int a_tls_add_iden(const aura_blob_param_st *blob, const st_aura_blob_node *tls_ident_entry_node,
                           ptls_key_exchange_algorithm_t **key_ex, ptls_cipher_suite_t **cs,
                           ptls_ech_create_opener_t *create_opener, ptls_iovec_t retry_configs,
-                          struct aura_srv_listener_conf *lc) {
+                          struct aura_srv_listeners_conf *lc) {
 
     struct aura_srv_tls_iden *iden;
     const st_aura_blob_node *entry_node;
@@ -1000,65 +1033,9 @@ err:
 }
 
 /**
- * Add host configuration to the global config list
- * and return the offset of the newly added conf
- */
-static inline struct aura_srv_host_conf *a_host_conf_get_slot(void) {
-
-    if (glob_conf->host_pool.cnt >= glob_conf->host_pool.cap) {
-        glob_conf->host_pool.cap = glob_conf->host_pool.cap == 0 ? 5 : glob_conf->host_pool.cap * 2;
-        glob_conf->host_pool.hosts = realloc(glob_conf->host_pool.hosts, sizeof(struct aura_srv_host_conf) * glob_conf->host_pool.cap);
-        if (!glob_conf->host_pool.hosts)
-            return NULL;
-    }
-
-    return &glob_conf->host_pool.hosts[glob_conf->host_pool.cnt++];
-}
-
-/**
- * Create host conf for this hostname, insert into global
- * host conf table and return the offset of the added conf
- */
-static int a_create_host_config(struct aura_srv_listener_conf *lc, const char *hostname,
-                                uint32_t default_tls_idx, struct aura_iovec *h2_frames) {
-    struct aura_srv_host_conf *host;
-    bool res;
-
-    host = a_host_conf_get_slot();
-    if (!host)
-        return -1;
-
-    host->hostname.base = strdup(hostname);
-    host->hostname.len = strlen(hostname);
-    host->def_tls_off = default_tls_idx;
-    if (aura_router_init(&host->router, glob_conf->srv_ctx) < 0)
-        return -1;
-
-    if (h2_frames != NULL)
-        host->h2_origin_frame = h2_frames;
-
-    /* add host + conf to listener sni map */
-    aura_rax_insert(lc->sni, hostname, sizeof(hostname) - 1, A_RAX_NODE_TYPE_SPARSE, a_rax_data_init_ptr(host));
-
-    return 0;
-}
-
-static inline struct aura_srv_listener *a_get_listener_slot(struct aura_srv_listener_conf *lc) {
-    if (lc->listeners_pool.cnt >= lc->listeners_pool.cap) {
-        lc->listeners_pool.cap = lc->listeners_pool.cap == 0 ? 5 : lc->listeners_pool.cap * 2;
-        lc->listeners_pool.entries = realloc(lc->listeners_pool.entries, sizeof(*lc->listeners_pool.entries) * lc->listeners_pool.cap);
-        if (!lc->listeners_pool.entries) {
-            return NULL;
-        }
-    }
-
-    return &lc->listeners_pool.entries[lc->listeners_pool.cnt++];
-}
-
-/**
  * Parse configs received from daemon
  */
-static void a_setup_configs(void *config, struct aura_srv_listener_conf *lc) {
+static int a_setup_configs(struct aura_srv_global_ctx *gc, void *config) {
     const st_aura_blob_node *nodes, *server_name_node, *server_port_node, *cert_file_node, *key_file_node;
     const st_aura_blob_kv_pair *kv_pairs, *kv;
     const st_aura_blob_arr_entry *arrs;
@@ -1074,6 +1051,8 @@ static void a_setup_configs(void *config, struct aura_srv_listener_conf *lc) {
         ptls_ech_create_opener_t *create_opener;
         ptls_iovec_t retry_configs;
     } ech = {NULL};
+
+    struct aura_srv_listeners_conf *lc = &gc->listeners;
 
     nodes = aura_blob_get_nodes(config);
     kv_pairs = aura_blob_get_kvs(config);
@@ -1119,7 +1098,8 @@ static void a_setup_configs(void *config, struct aura_srv_listener_conf *lc) {
 
             res = a_tls_add_iden(&blob_arg, tls_ident_entry_node, key_exchanges, cipher_suites, ech.create_opener, ech.retry_configs, lc);
             if (res < 0) {
-                sys_exit(true, errno, "a_setup_configs: a_get_tls_iden_slot error");
+                sys_debug(true, errno, "a_setup_configs: tls iden slot err");
+                return -1;
             }
         }
     }
@@ -1139,9 +1119,11 @@ static void a_setup_configs(void *config, struct aura_srv_listener_conf *lc) {
             kv_cnt = listener_node->map.kv_cnt;
             kv_idx = listener_node->map.kv_idx;
 
-            listener = a_get_listener_slot(lc);
-            if (!listener)
-                sys_exit(true, 0, "a_setup_configs: a_get_listener_slot error:");
+            listener = aura_listener_conf_create(&lc->listeners_pool);
+            if (!listener) {
+                sys_debug(true, 0, "a_setup_configs: listener conf creation err:");
+                return -1;
+            }
 
             for (j = 0; j < kv_cnt; ++j) {
                 kv = &kv_pairs[kv_idx + j];
@@ -1171,30 +1153,38 @@ static void a_setup_configs(void *config, struct aura_srv_listener_conf *lc) {
                 if (strcmp(key, "protocol") == 0) {
                     const char *protocol;
                     protocol = strtab + entry_node->str_offset;
-                    if (aura_scan_str(protocol, "%" SCNu8, &listener->protocol) != 1)
-                        sys_exit(true, errno, "a_setup_config: aura_scan_str protocol error:");
+                    if (aura_scan_str(protocol, "%" SCNu8, &listener->protocol) != 1) {
+                        sys_debug(true, errno, "a_setup_config: config protocol err:");
+                        return -1;
+                    }
                     continue;
                 }
 
                 if (strcmp(key, "tls") == 0) {
                     const char *tls;
                     tls = strtab + entry_node->str_offset;
-                    if (aura_scan_str(tls, "%" SCNu8, &listener->tls) != 1)
-                        sys_exit(true, errno, "a_setup_config: aura_scan_str tls error:");
+                    if (aura_scan_str(tls, "%" SCNu8, &listener->tls) != 1) {
+                        sys_debug(true, errno, "a_setup_config: tls boolean value invalid:");
+                        return -1;
+                    }
                     continue;
                 }
 
                 if (strcmp(key, "quic") == 0) {
                     const char *quic;
                     quic = strtab + entry_node->str_offset;
-                    if (aura_scan_str(quic, "%" SCNu8, &listener->quic) != 1)
-                        sys_exit(true, errno, "a_setup_config: aura_scan_str quic error:");
+                    if (aura_scan_str(quic, "%" SCNu8, &listener->quic) != 1) {
+                        sys_debug(true, errno, "a_setup_config: quic boolean value invalid:");
+                        return -1;
+                    }
                     continue;
                 }
             }
 
-            if (a_listener_init(listener, lc) < 0)
-                sys_exit(true, errno, "a_setup_configs: a_listener_init error:");
+            if (a_listener_init(listener, lc) < 0) {
+                sys_debug(true, errno, "a_setup_configs: listener init err:");
+                return -1;
+            }
         }
     }
 
@@ -1242,102 +1232,106 @@ static void a_setup_configs(void *config, struct aura_srv_listener_conf *lc) {
 
                 if (strcmp(key, "http2_origin_frame") == 0) {
                     h2_origin_frames = a_build_h2_origin_frame(&blob_arg, entry_node);
-                    if (!h2_origin_frames)
-                        sys_exit(true, errno, "a_setup_configs: a_build_h2_origin_frame for %s", hostname);
+                    if (!h2_origin_frames) {
+                        sys_debug(true, errno, "a_setup_configs: building origin frame for %s err", hostname);
+                        return -1;
+                    }
                 }
             }
 
             /* add host */
-            res = a_create_host_config(lc, hostname, tls_idx, h2_origin_frames);
-            if (res < 0)
-                sys_exit(true, errno, "a_setup_configs: a_create_host_config error: %s", hostname);
+            struct aura_srv_host_conf *host_conf;
+            host_conf = aura_host_config_create(&gc->host_pool, hostname, tls_idx, h2_origin_frames);
+            if (!host_conf < 0) {
+                sys_debug(true, errno, "a_setup_configs: host config create err: %s", hostname);
+                return -1;
+            }
+            /* set server context */
+            host_conf->router.srv_ctx = gc->srv_ctx;
+
+            /* add host + conf to listener sni map */
+            if (!aura_rax_insert(lc->sni, hostname, strlen(hostname), A_RAX_NODE_TYPE_SPARSE, a_rax_data_init_ptr(host_conf))) {
+                sys_debug(true, errno, "a_setup_configs: sni insert for hostname: %s err", hostname);
+                return -1;
+            }
 
             /* ocsp */
-            struct aura_ocsp_updater ocsp_updater; // attached to host
+            struct aura_ocsp_updater ocsp_updater; // attached to hoste, strlen(hostname), host_conf);
         }
     }
 
     aura_install_signal_handler(SIGINT, SIG_IGN);
     aura_install_signal_handler(SIGQUIT, SIG_IGN);
     aura_install_signal_handler(SIGTERM, a_server_shutdown);
-
-    /** @todo: could move to glob_conf init */
-    if (glob_conf->user.base != NULL) {
-        int err;
-        err = aura_drop_privileges(glob_conf->user.base);
-        if (err == 1) {
-            app_exit(true, errno, "a_setup_configs: aura_drop_privileges error");
-        } else if (err == 2) {
-            app_exit(true, 0, "Refusing to run as root, failed to drop to 'nobody', set user in the server config");
-        }
-        glob_conf->user.len = strlen(glob_conf->user.base);
-    } else {
-        if (getuid() == 0)
-            app_exit(true, 0, "Refusing to run as root, failed to drop to 'nobody', set user in the server config");
-    }
-
-    /**/
 }
 
 /**
  * Setup global server context
  */
-struct aura_srv_ctx *a_server_ctx_init(st_aura_evt_loop *loop, struct aura_srv_listener_conf *lc) {
-    struct aura_srv_ctx *ctx;
+static int a_server_ctx_init(struct aura_srv_global_ctx *gc, struct aura_srv_ctx *ctx, int dmn_fd) {
+    struct aura_mem_ctx *mc = &gc->mem_ctx;
 
-    ctx = calloc(1, sizeof(*ctx));
-    if (!ctx)
-        return NULL;
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->glob_conf = gc;
+    ctx->next_task_id = 1;
+    gc->srv_ctx = ctx;
 
-    ctx->h2.idle_timeouts = 0;
-    ctx->h2.read_closed = 0;
-    ctx->h2.write_closed = 0;
-    ctx->h2.handshake_cnt = 0;
-    ctx->h2.read_cnt = 0;
-    ctx->h2.write_cnt = 0;
-
-    ctx->static_intern_tab = aura_intern_tab_create(&glob_conf->mem_ctx, 128);
-    if (!ctx->static_intern_tab)
-        return NULL;
-
-    if (aura_hpack_load_static_table(&ctx->static_tab, ctx->static_intern_tab) < 0)
-        return NULL;
-
-    aura_timer_wheel_init(&ctx->timer_wheel);
-    aura_srv_opt_init(&ctx->optimizer);
-    if (aura_completion_queue_init(&ctx->completions) < 0) {
-        return NULL;
+    if (aura_hpack_load_static_table(mc) < 0) {
+        sys_debug(true, errno, "a_server_ctx_init: load static table err");
+        return -1;
     }
 
-    ctx->glob_conf = glob_conf;
-    glob_conf->srv_ctx = ctx;
-    ctx->evt_loop = loop;
-    ctx->listener_conf = lc;
-    ctx->inflight = 0;
-    ctx->mc = &glob_conf->mem_ctx;
-    ctx->next_task_id = 1;
-    //
-    a_list_head_init(&ctx->queues.active);
-    a_list_head_init(&ctx->queues.reap);
-    // a_list_head_init(&ctx->tasks);
-    //
-    loop->srv_ctx = ctx;
+    if (aura_completion_queue_init(&ctx->completions) < 0) {
+        sys_debug(true, errno, "a_server_ctx_init: completion queue err");
+        return -1;
+    }
 
-    return ctx;
-}
+    /* Create event loop */
+    ctx->evt_loop = aura_evt_loop_create(ctx, AURA_OPEN_MAX);
+    if (!ctx->evt_loop) {
+        sys_debug(true, errno, "a_server_ctx_init: evt_loop err");
+        return -1;
+    }
 
-/**
- *
- */
-static inline void a_close_idle_connections(struct aura_srv_ctx *ctx) {
-    /**/
+    ctx->conn_tab = aura_dyn_dense_pool_create(A_CONN_TAB_DEFAULT_SZ, sizeof(struct aura_conn_tab_ent));
+    if (!ctx->conn_tab) {
+        sys_debug(true, errno, "a_server_ctx_init: conn table err");
+        return -1;
+    }
+
+    if (aura_rh_map_init(&ctx->conn_pool.pool, mc, 32, A_RH_KEY_STR, true) < 0) {
+        sys_debug(true, errno, "a_server_ctx_init: conn pool err");
+        return -1;
+    }
+
+    aura_pending_req_coordinator_init(&ctx->req_coord);
+
+    ctx->dmn_peer = aura_ipc_peer_create(dmn_fd);
+    if (!ctx->dmn_peer) {
+        sys_debug(true, errno, "a_server_ctx_init: dmn_peer err");
+        return -1;
+    }
+
+    /* Add to epoll */
+    if (aura_evt_loop_add(ctx->evt_loop, dmn_fd, ctx->dmn_peer, AURA_EVENT_READ) < 0) {
+        sys_debug(true, errno, "a_server_ctx_init: evt loop add dmn fd err");
+        return -1;
+    }
+
+    aura_timer_wheel_init(&ctx->timer_wheel);
+
+    aura_list_head_init(&ctx->queues.handshake);
+    aura_list_head_init(&ctx->queues.active);
+    aura_list_head_init(&ctx->queues.reap);
+
+    return 0;
 }
 
 /* Find host by hostname */
-static inline struct aura_srv_host_conf *a_find_host(const char *hostname) {
-    for (int i = 0; i < glob_conf->host_pool.cnt; ++i) {
-        if (strcasecmp(hostname, glob_conf->host_pool.hosts[i].hostname.base) == 0) {
-            return &glob_conf->host_pool.hosts[i];
+static inline struct aura_srv_host_conf *a_find_host(struct aura_srv_global_ctx *gc, const char *hostname) {
+    for (int i = 0; i < gc->host_pool.cnt; ++i) {
+        if (strcasecmp(hostname, gc->host_pool.hosts[i].hostname.base) == 0) {
+            return &gc->host_pool.hosts[i];
         }
     }
 
@@ -1358,19 +1352,24 @@ void a_load_fn_destructor(const void *stat) {
 /**
  * Load top k busy functions
  */
-static void a_preload_functions(struct aura_memory_ctx *mc, int dmn_sock_fd) {
-    struct aura_heap *heap;
+static void a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd) {
+    struct aura_mem_ctx *mc = &gc->mem_ctx;
+    struct aura_heap *hp;
     struct aura_functions *fns, fns_copy;
     struct aura_fn_stat *fn_stat;
+    struct aura_heap_ent *hp_ent;
     struct aura_fn_stat_wrapper *aux_stat, *_aux_stat;
     struct aura_fn *fn;
     struct aura_srv_host_conf *host;
-    int res, error;
+    int rv, error;
     int i, j;
 
-    heap = aura_heap_create(A_MAX_PRELOAD_FN_CNT, aura_fn_stat_compare);
-    if (!heap)
-        sys_exit(true, errno, "a_preload_functions error:");
+    hp = aura_alloc(&gc->mem_ctx, sizeof(*hp));
+    if (!hp)
+        sys_exit(true, errno, "a_preload_functions error : heap alloc");
+
+    if (aura_heap_init(hp, &gc->mem_ctx, A_MAX_PRELOAD_FN_CNT, aura_fn_stat_compare, A_HP_TYPE_MAX_HEAP) < 0)
+        sys_exit(true, errno, "a_preload_functions error : aura_heap_init");
 
     fns = aura_fn_list_fetch_broker(mc, dmn_sock_fd, &error);
     /* No functions deployed yet! */
@@ -1419,21 +1418,25 @@ static void a_preload_functions(struct aura_memory_ctx *mc, int dmn_sock_fd) {
         aux_stat->fn_name = aura_strdup(mc, fns_copy.funcs[i].fn_name);
         aux_stat->fn_version = fns_copy.funcs[i].fn_version;
 
-        if (!aura_heap_is_full(heap)) {
-            aura_min_heap_push(heap, aux_stat);
+        if (!aura_heap_is_full(hp)) {
+            aura_heap_push(hp, &aux_stat->hp_ent);
             continue;
         }
 
         /**
          * If the heap is full, check if the current stat is "higher" than the
          * min of the heap, if so, replace the min with the current stat.
+         * @todo: this will not necessary load the best 5 functions
+         * because we evict the best fn so far and not the worst
          */
-        _aux_stat = aura_heap_peek(heap);
-        if (aura_heap_is_full(heap) && aura_fn_stat_compare((void *)aux_stat, (void *)_aux_stat) > 0) {
-            _aux_stat = aura_min_heap_delete(heap);
+        hp_ent = aura_heap_peek(hp);
+        _aux_stat = aura_container_of(hp_ent, struct aura_fn_stat_wrapper, hp_ent); // aura_heap_peek(hp);
+        if (aura_heap_is_full(hp) && aura_fn_stat_compare((void *)aux_stat, (void *)_aux_stat) > 0) {
+            hp_ent = aura_heap_pop(hp);
+            _aux_stat = aura_container_of(hp_ent, struct aura_fn_stat_wrapper, hp_ent);
             a_load_fn_destructor(_aux_stat);
 
-            aura_min_heap_push(heap, aux_stat);
+            assert(aura_heap_push(hp, &aux_stat->hp_ent) == 0);
             continue;
         }
 
@@ -1447,12 +1450,14 @@ static void a_preload_functions(struct aura_memory_ctx *mc, int dmn_sock_fd) {
     /**
      * Add the loaded functions to their respective routes
      */
-    aura_heap_for_each(heap, aux_stat) {
+    // aura_heap_for_each(hp, aux_stat) {
+    aura_heap_for_each(hp, hp_ent) {
+        aux_stat = aura_container_of(hp_ent, struct aura_fn_stat_wrapper, hp_ent);
         fn = aura_fn_load_broker(mc, aux_stat->fn_name, aux_stat->fn_version, dmn_sock_fd);
         if (!fn) {
             /* Technically should not be possible! */
         } else {
-            host = a_find_host(fn->meta.host);
+            host = a_find_host(gc, fn->meta.host);
             if (!host) {
                 aura_fn_destroy(fn);
                 continue;
@@ -1467,7 +1472,8 @@ static void a_preload_functions(struct aura_memory_ctx *mc, int dmn_sock_fd) {
     free(fns_copy.funcs);
 
     /* Clean up heap */
-    aura_heap_destroy(heap, a_load_fn_destructor);
+    // aura_heap_destroy(hp, a_load_fn_destructor);
+    aura_heap_destroy(hp);
 }
 
 /**
@@ -1478,19 +1484,21 @@ static inline void a_handle_internal_request(st_aura_evt_loop *loop) {
     struct aura_msg_hdr hdr, res_hdr;
     int res;
 
-    res = aura_msg_recv(loop->dmn_fd, &msg);
+    res = aura_msg_recv(loop->srv_ctx->dmn_peer->fd, &msg);
     if (res <= 0) {
         sys_debug(true, errno, "a_handle_internal_request: aura_msg_recv: res: %d", res);
-        loop->srv_ctx->internal = false;
-        aura_evt_loop_stop(loop);
+        aura_set_internal_request_inactive(loop->srv_ctx);
+        /** @todo: should this kill this server */
+        // aura_evt_loop_stop(loop);
         return;
     }
+
     hdr = msg.hdr;
 
     switch (hdr.type) {
     case A_MSG_PING:
         a_init_msg_hdr(res_hdr, 0, A_MSG_PING, 0);
-        aura_msg_send(loop->dmn_fd, &res_hdr, NULL, 0, -1);
+        aura_msg_send(loop->srv_ctx->dmn_peer->fd, &res_hdr, NULL, 0, -1);
         break;
 
     case A_MSG_CMD_EXECUTE:
@@ -1511,40 +1519,51 @@ static inline void a_handle_internal_request(st_aura_evt_loop *loop) {
     default:
         app_debug(true, 0, "Unknown msg type %d", hdr.type);
     }
-    /* add back to evt loop */
-    aura_evt_loop_add(loop, loop->dmn_fd, AURA_EVENT_READ);
-    loop->srv_ctx->internal = false;
+
+    aura_set_internal_request_inactive(loop->srv_ctx);
 }
 
 /**
  * Setup global memory context
  */
-static int a_setup_memory_caches() {
+static int a_setup_memory_caches(struct aura_mem_ctx *mc) {
     struct aura_slab_cache *sc;
 
-    if (aura_create_dynamic_slab_alloc_caches(&glob_conf->mem_ctx) < 0)
+    if (aura_create_dynamic_slab_alloc_caches(mc) < 0)
         goto exception;
 
     /* socket slab cache */
-    sc = aura_slab_cache_create(&glob_conf->mem_ctx, A_SLAB_CACHE_GENERIC_CONNECTION, "generic connection", sizeof(struct aura_conn), NULL, 0);
+    sc = aura_slab_cache_create(mc, A_SLAB_CACHE_GENERIC_CONN, "generic connection", sizeof(struct aura_conn), NULL, 0);
     if (!sc)
         goto exception;
 
-    /* h2 connection slab cache */
-    sc = aura_slab_cache_create(&glob_conf->mem_ctx, A_SLAB_CACHE_ID_CONNECTION, "h2 connection", sizeof(struct aura_h2_ctx), NULL, 0);
+    /* h2 client connection slab cache */
+    sc = aura_slab_cache_create(mc, A_SLAB_CACHE_ID_H2_SERVER_CONN, "h2 server connection", sizeof(struct aura_h2_server_conn), NULL, 0);
+    if (!sc)
+        goto exception;
+
+    /* h2 client connection slab cache */
+    sc = aura_slab_cache_create(mc, A_SLAB_CACHE_ID_H2_CLIENT_CONN, "h2 client connection", sizeof(struct aura_h2_client_conn), NULL, 0);
     if (!sc)
         goto exception;
 
     /* stream slab cache */
-    sc = aura_slab_cache_create(&glob_conf->mem_ctx, A_SLAB_CACHE_ID_STREAM, "stream", sizeof(struct aura_h2_stream), NULL, 0);
+    sc = aura_slab_cache_create(mc, A_SLAB_CACHE_ID_H2_STREAM, "stream", sizeof(struct aura_h2_stream), NULL, 0);
     if (!sc)
         goto exception;
 
     return 0;
 
 exception:
-    aura_memory_ctx_destroy(&glob_conf->mem_ctx);
+    aura_mem_ctx_destroy(mc);
     return -1;
+}
+
+void aura_run_timer_wheel(struct aura_srv_ctx *srv_ctx) {
+    struct aura_timer_wheel *tw;
+
+    tw = &srv_ctx->timer_wheel;
+    aura_timers_run(tw);
 }
 
 /**
@@ -1561,26 +1580,33 @@ int a_run_loop(struct aura_srv_ctx *srv_ctx) {
 
     loop = srv_ctx->evt_loop;
     aura_evt_loop_start(loop);
+
     while (loop->running) {
-        a_close_idle_connections(srv_ctx);
+        aura_run_timer_wheel(srv_ctx);
+        aura_conn_process_completions(srv_ctx);
 
         t1 = aura_evt_loop_get_timeout(&srv_ctx->timer_wheel);
         t2 = aura_srv_opt_get_candidate_epoll_timeout(&srv_ctx->optimizer);
         max_accept = aura_srv_opt_get_accept_budget(&srv_ctx->optimizer, srv_ctx->inflight);
+
         /* Get the min of the two timeouts */
         timeout = a_min(t1, t2);
-
         aura_evt_loop_poll(loop, timeout, max_accept);
 
-        if (loop->srv_ctx->internal == true) {
+        if (loop->srv_ctx->dmn_peer->active) {
             a_handle_internal_request(loop);
         }
+
+        aura_conn_process_handshake_queue(srv_ctx);
 
         aura_conn_process_active_queue(srv_ctx);
 
         aura_conn_process_completions(srv_ctx);
 
         aura_conn_process_reap_queue(loop->srv_ctx);
+
+        aura_run_timer_wheel(srv_ctx);
+        aura_conn_process_completions(srv_ctx);
 
         /* handle others */
     }
@@ -1593,32 +1619,41 @@ int a_run_loop(struct aura_srv_ctx *srv_ctx) {
  * Setup default global configuration
  * substituted when config is parsed
  */
-static inline int a_glob_conf_init() {
-    int res;
+static inline int a_glob_conf_init(struct aura_srv_global_ctx *gc) {
+    memset(gc, 0, sizeof(*gc));
+    aura_mem_ctx_init(&gc->mem_ctx);
 
-    memset(glob_conf, 0, sizeof(struct aura_srv_global_conf));
-    glob_conf->boot_time = aura_now_ms(CLOCK_REALTIME);
-    glob_conf->shutdown_requested = false;
-    glob_conf->user.base = NULL;
-    glob_conf->user.len = 0;
+    gc->boot_time = aura_now_ms(CLOCK_MONOTONIC);
 
     /* init app memory context */
-    aura_memory_ctx_init(&glob_conf->mem_ctx);
-    return 0;
-}
 
-/**
- * Setup listener config
- */
-static inline int a_listener_conf_init(struct aura_srv_listener_conf *lc) {
-    memset(lc, 0, sizeof(*lc));
-    lc->sni = aura_rax_new();
-    if (!lc->sni)
+    if (a_setup_memory_caches(&gc->mem_ctx) < 0) {
+        sys_debug(true, errno, "main: a_setup_memory_caches error");
         return -1;
-    lc->listeners_pool.entries = NULL;
-    lc->tls_pool.entries = NULL;
-    lc->ptls = NULL;
-    lc->bpf_program = NULL;
+    }
+
+    gc->listeners.sni = aura_rax_new();
+    if (!gc->listeners.sni)
+        return -1;
+
+    aura_host_pool_init(&gc->host_pool);
+
+    gc->user.base = "nobody";
+    gc->user.len = sizeof("nobody") - 1;
+    if (gc->user.base != NULL) {
+        int err;
+        err = aura_drop_privileges(gc->user.base);
+        if (err == 1) {
+            app_exit(true, errno, "a_setup_configs: aura_drop_privileges error");
+        } else if (err == 2) {
+            app_exit(true, 0, "Refusing to run as root, failed to drop to 'nobody', set user in the server config");
+        }
+        gc->user.len = strlen(gc->user.base);
+    } else {
+        if (getuid() == 0)
+            app_exit(true, 0, "Refusing to run as root, failed to drop to 'nobody', set user in the server config");
+    }
+
     return 0;
 }
 
@@ -1626,87 +1661,65 @@ static inline int a_listener_conf_init(struct aura_srv_listener_conf *lc) {
  * Let us Begin
  */
 int main(int argc, char *argv[]) {
-    int res;
-    int sock_fd;
-    struct aura_msg msg;
-    struct aura_msg_hdr hdr;
-    void *config;
-    struct aura_srv_listener_conf *listener_conf;
+    struct aura_srv_global_ctx *gc;
     struct aura_srv_ctx *ctx;
-    st_aura_evt_loop *loop;
-    pthread_t sb_man_thread;
-    struct aura_sb_man_params *sb_man_params;
+    struct aura_msg_hdr hdr;
+    struct aura_msg msg;
+    struct rlimit rlimit;
+    void *config;
+    int dmn_fd, rv;
 
-    aura_scan_str(argv[1], "%" SCNu32, &sock_fd);
-    /** @todo: check against OPENMAX */
+    if (getrlimit(RLIMIT_NOFILE, &rlimit) < 0)
+        sys_exit(true, errno, "main: get resource limit err");
 
-    if (aura_msg_recv(sock_fd, &msg) <= 0)
-        goto err;
+    AURA_OPEN_MAX = rlimit.rlim_max;
+    if (AURA_OPEN_MAX == RLIM_INFINITY)
+        /* arbitrary value from seeing around! */
+        AURA_OPEN_MAX = 256;
+
+    aura_scan_str(argv[1], "%" SCNu32, &dmn_fd);
+    if (dmn_fd < 0 || dmn_fd > AURA_OPEN_MAX)
+        app_exit(true, 0, "main: dmn fd invalid value");
+
+    if (aura_msg_recv(dmn_fd, &msg) <= 0)
+        sys_exit(true, 0, "main: aura msg recv from dmn err");
+
+    gc = alloca(sizeof(*gc));
+    if (!gc)
+        sys_exit(true, errno, "main: global config err");
+
+    if (a_glob_conf_init(gc) < 0)
+        sys_exit(true, errno, "main: global config init err");
+
+    ctx = alloca(sizeof(struct aura_srv_ctx));
+    if (!ctx)
+        sys_exit(true, errno, "main: server ctx err");
+
+    if (a_server_ctx_init(gc, ctx, dmn_fd) < 0)
+        sys_exit(true, errno, "main: server ctx init err");
+
     config = msg.data.iov_base;
-
-    glob_conf = alloca(sizeof(*glob_conf));
-    if (!glob_conf) {
-        sys_debug(true, errno, "Failed to create global config");
-        goto err;
-    }
-
-    res = a_glob_conf_init();
-    if (res < 0) {
-        sys_debug(true, errno, "main: a_glob_conf_init error");
-        goto err;
-    }
-
-    res = a_setup_memory_caches();
-    if (res < 0) {
-        sys_debug(true, errno, "main: a_setup_memory_caches error");
-        goto err;
-    }
-
-    listener_conf = alloca(sizeof(*listener_conf));
-    if (!listener_conf)
-        goto err;
-
-    res = a_listener_conf_init(listener_conf);
-    if (res < 0) {
-        sys_debug(true, 0, "main: a_listener_conf_init error");
-        goto err;
-    }
-
-    /* Create event loop */
-    loop = aura_evt_loop_create(sock_fd, 100);
-    if (!loop) {
-        sys_debug(false, errno, "main: aura_evt_loop_create error");
-        goto err;
-    }
-
-    ctx = a_server_ctx_init(loop, listener_conf);
-    if (!ctx) {
-        sys_debug(true, errno, "main: a_server_ctx_init error");
-        goto err;
-    }
-
-    a_setup_configs(config, listener_conf);
+    if (a_setup_configs(gc, config) < 0)
+        sys_exit(true, 0, "main: config setup err");
     free(config);
 
     /* alert daemon we may have succeeded */
     a_init_msg_hdr(hdr, 0, A_MSG_PING, 0);
-    if (aura_msg_send(sock_fd, &hdr, NULL, 0, -1) < 0)
-        goto err;
+    if (aura_msg_send(dmn_fd, &hdr, NULL, 0, -1) < 0)
+        sys_exit(true, errno, "main: server msg send to dmn err");
 
     /* register fds to poll */
-    loop->ops->add(loop, sock_fd, AURA_EVENT_READ);
-    for (int i = 0; i < listener_conf->listeners_pool.cnt; ++i) {
-        aura_evt_loop_add(loop, listener_conf->listeners_pool.entries[i].fd, AURA_EVENT_READ);
+    for (int i = 0; i < gc->listeners.listeners_pool.cnt; ++i) {
+        aura_evt_loop_add(
+          ctx->evt_loop,
+          gc->listeners.listeners_pool.entries[i].fd,
+          &gc->listeners.listeners_pool.entries[i],
+          AURA_EVENT_READ);
     }
 
-    a_preload_functions(&glob_conf->mem_ctx, sock_fd);
+    a_preload_functions(gc, dmn_fd);
 
-    res = a_run_loop(ctx);
-    sys_debug(true, errno, "Server exiting");
-    close(sock_fd);
-    exit(res);
-err:
-    close(sock_fd);
-    sys_debug(true, errno, "Server exiting_error");
-    exit(1);
+    rv = a_run_loop(ctx);
+    sys_debug(true, errno, "AURA SERVER exiting: rv=%d", rv);
+    exit(rv);
 }

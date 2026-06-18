@@ -7,17 +7,18 @@ export default async function handler(req, res) {
 
     // const res = await fetch("https://jsonplaceholder.typicode.com/todos");
     try {
-        const res = await fetch("https://localhost:9443", {
+        const res_data = await fetch("https://localhost:9443", {
             headers: {
                 "Content-type": "application/json"
             }
         })
-        const data = res.json()
+        const data = res_data.json()
         console.log(data)
+        res.status = 200
+        return res.json({message: "Right back at you!"})
     } catch (err) {
         console.error("Js catch error: ", err)
+        res.status = 500
+        return res.json({error: err})
     }
-
-    res.status = 200
-    return res.json({message: "Right back at you!"})
 }

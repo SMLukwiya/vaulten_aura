@@ -1,14 +1,13 @@
 #ifndef AURA_DMN_SERVER_H
 #define AURA_DMN_SERVER_H
 
-#define _POSIX_C_SOURCE 200809L
-
 #include "blobber_lib.h"
 #include "http_lib.h"
 #include "openssl/bio.h"
 #include "openssl/err.h"
 #include "openssl/ssl.h"
 #include "picotls.h"
+#include "protocol.h"
 #include "radix_lib.h"
 #include "types_lib.h"
 #include "unix_socket_lib.h"

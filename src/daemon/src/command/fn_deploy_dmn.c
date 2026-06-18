@@ -13,8 +13,6 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-typedef JSModuleDef JSModuleDef;
-
 JSValue aura_js_std_await(JSContext *ctx, JSValue obj) {
     JSValue rv;
     int state;
@@ -382,7 +380,7 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
     case A_FN_OP_STATE_RUNNING:
         int error;
         size_t msg_len;
-        char *msg;
+        const char *msg;
 
         /* Parse config */
         first_err = NULL;
@@ -466,7 +464,6 @@ void aura_dmn_function_deploy(int dir_fd, int srv_fd, int cli_fd) {
             goto err;
         }
 
-        // bytecode = aura_qjs_create_bytecode(ctx, entry_script, entry_file_len, entry_file, &bytecode_len);
         JSValue obj = JS_Eval(ctx, entry_script, entry_file_len, entry_file, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
         JSValue exception, js_msg;
         const char *js_msg_str;

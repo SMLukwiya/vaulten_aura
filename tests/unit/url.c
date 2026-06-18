@@ -4,20 +4,17 @@
 #include "utils_lib.h"
 #include <assert.h>
 
-struct aura_memory_ctx mc;
+struct aura_mem_ctx mc;
 
-extern int aura_parse_host_port(struct aura_memory_ctx *mc, char *src, size_t len, struct aura_url *url);
+extern int aura_parse_host_port(struct aura_mem_ctx *mc, char *src, size_t len, struct aura_url *url);
 
 static void a_setup_mc(void) {
-    int res;
-
-    aura_memory_ctx_init(&mc);
-    res = aura_create_dynamic_slab_alloc_caches(&mc);
-    assert(res == 0);
+    aura_mem_ctx_init(&mc);
+    assert(aura_create_dynamic_slab_alloc_caches(&mc) == 0);
 }
 
 static void a_destroy_mc(void) {
-    aura_memory_ctx_destroy(&mc);
+    aura_mem_ctx_destroy(&mc);
 }
 
 static void a_test_url_normalizing(void) {

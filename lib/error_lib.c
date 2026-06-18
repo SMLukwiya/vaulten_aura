@@ -4,7 +4,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-void aura_log(bool daemon, int level, aura_log_action log_action, aura_log_type type, int error, const char *fmt, ...) {
+void aura_log(bool daemon, int level, aura_log_action log_action, aura_log_type type,
+              int error, const char *fmt, ...) {
     char buf[ERROR_BUFFER_SZ];
     va_list ap;
     bool should_exit = log_action == ACT_EXIT || log_action == ACT_DUMP;
@@ -25,9 +26,9 @@ void aura_log(bool daemon, int level, aura_log_action log_action, aura_log_type 
 
     if (error)
         if (is_app)
-            snprintf(buf + strlen(buf), ERROR_BUFFER_SZ - prefix_len - strlen(buf) - 1, ": %s", "aura app error");
+            snprintf(buf + strlen(buf), ERROR_BUFFER_SZ - prefix_len - strlen(buf) - 1, " (error: %s)", "aura app error");
         else if (is_sys)
-            snprintf(buf + strlen(buf), ERROR_BUFFER_SZ - prefix_len - strlen(buf) - 1, " %s", strerror(error));
+            snprintf(buf + strlen(buf), ERROR_BUFFER_SZ - prefix_len - strlen(buf) - 1, " (error: %s)", strerror(error));
 
     strcat(buf, "\n");
 

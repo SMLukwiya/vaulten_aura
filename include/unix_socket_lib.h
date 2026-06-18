@@ -122,7 +122,7 @@ void aura_unix_sock_close(int fd);
 int aura_msg_send(int sock_fd, struct aura_msg_hdr *aura_hdr, void *data, size_t data_len, int fd);
 int aura_msg_recv(int sock_fd, struct aura_msg *aura_msg);
 int aura_resp_send(int sock_fd, void *data, size_t len);
-int aura_recv_resp(struct aura_iovec *data_out, int sock_fd, struct aura_memory_ctx *mc);
+int aura_recv_resp(struct aura_iovec *data_out, int sock_fd, struct aura_mem_ctx *mc);
 void aura_msg_dump(struct aura_msg *msg, bool daemon);
 void aura_try_connect_or_error(int *fd);
 

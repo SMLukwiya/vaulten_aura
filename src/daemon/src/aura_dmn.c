@@ -168,8 +168,8 @@ int aura_daemon() {
     if (lock_file_fd < 0)
         sys_exit(false, errno, "aura_daemon: lock_file error");
 
-    if (already_running(lock_file_fd))
-        sys_exit(false, 0, "aura_daemon: already_running error");
+    if (aura_dmn_running(lock_file_fd))
+        sys_exit(false, 0, "aura_daemon: aura_dmn_running error");
 
     app_debug(false, 0, "Daemon tests"); /* probably after setting socket */
 
@@ -197,15 +197,15 @@ int aura_daemon() {
 
     aura_install_signal_handler(SIGCHLD, a_sig_ch_handler);
 
-    /* Daemonize */
-    daemonize("aurad", keep_fd, ARRAY_SIZE(keep_fd));
+    /* aura_daemonize */
+    aura_daemonize("aurad", keep_fd, ARRAY_SIZE(keep_fd));
 
-    res = set_pid_lock(lock_file_fd);
+    res = aura_dmn_set_pid_lock(lock_file_fd);
     if (res < 0)
-        sys_exit(true, errno, "aura_daemon: set_pid_lock error");
+        sys_exit(true, errno, "aura_daemon: aura_dmn_set_pid_lock error");
 
     /* set up memory context */
-    aura_memory_ctx_init(&glob_conf.mc);
+    aura_mem_ctx_init(&glob_conf.mc);
     if (aura_create_dynamic_slab_alloc_caches(&glob_conf.mc) < 0)
         sys_exit(true, errno, "aura_daemon: aura_create_dynamic_slab_alloc_caches error:");
 

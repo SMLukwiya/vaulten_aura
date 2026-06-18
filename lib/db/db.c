@@ -116,7 +116,7 @@ typedef struct {
     int db_fd;  /* fd for db file */
     int wal_fd; /* fd for WAL file */
     char *name; /* database file name */
-    struct aura_memory_ctx *mc;
+    struct aura_mem_ctx *mc;
     struct aura_db_hdr db_file_hdr;           /* database header */
     struct aura_db_wal_hdr wal_file_hdr;      /* WAL file header */
     struct aura_db_bucket_entry *buckets;     /* hash buckets */
@@ -352,7 +352,8 @@ static inline int a_db_headers_init(AURA_DB *db, size_t file_size) {
 /*
  * Open or create a database.  Structured kind of similar to open(2).
  */
-AURA_DBHANDLE aura_db_open(struct aura_memory_ctx *mc, const char *app_path, const char *db_pathname, int oflag, ...) {
+AURA_DBHANDLE aura_db_open(struct aura_mem_ctx *mc, const char *app_path,
+                           const char *db_pathname, int oflag, ...) {
     AURA_DB *db;
     DIR *dp;
     int db_namelen, mode, dir_fd;
@@ -395,7 +396,7 @@ AURA_DBHANDLE aura_db_open(struct aura_memory_ctx *mc, const char *app_path, con
     va_end(ap);
 
     /* init writer queue */
-    a_list_head_init(&db->writer_queue.db_list);
+    aura_list_head_init(&db->writer_queue.db_list);
 
     /* database file */
     db->db_fd = a_db_file_open(dir_fd, AURA_DB_FILE, &oflag, mode);
@@ -560,8 +561,9 @@ static inline off_t a_db_record_append(int fd, struct aura_db_rec_hdr *rec_hdr,
     return offset;
 }
 
-static inline struct aura_db_rec_hdr *a_db_record_cache_fetch(AURA_DB *db, uint16_t namespace, uint16_t schema_id,
-                                                              struct aura_iovec *key, off_t offset, uint32_t hash) {
+static inline struct aura_db_rec_hdr *a_db_record_cache_fetch(AURA_DB *db, uint16_t namespace,
+                                                              uint16_t schema_id, struct aura_iovec *key,
+                                                              off_t offset, uint32_t hash) {
     struct aura_db_rec_hdr *rec_hdr;
     ssize_t res;
     off_t cache_offset;
@@ -591,7 +593,8 @@ static inline struct aura_db_rec_hdr *a_db_record_cache_fetch(AURA_DB *db, uint1
 }
 
 static inline int a_db_record_cache_append(AURA_DB *db, struct aura_db_rec_hdr *rec_hdr,
-                                           struct aura_iovec *key, struct aura_iovec *data, uint32_t hash) {
+                                           struct aura_iovec *key, struct aura_iovec *data,
+                                           uint32_t hash) {
     off_t new_append_off;
     off_t file_offset; /* actual offset in the main db file */
 
@@ -648,8 +651,10 @@ static inline int a_db_record_cache_append(AURA_DB *db, struct aura_db_rec_hdr *
 }
 
 /** Construct DB record header */
-static inline int64_t a_db_record_header_init(AURA_DB *db, struct aura_db_rec_hdr *rec_hdr, uint16_t namespace, uint16_t schema_id, uint64_t job_id,
-                                              uint64_t prev_job_rec, struct aura_iovec *key, struct aura_iovec *data, uint16_t flags) {
+static inline int64_t a_db_record_header_init(AURA_DB *db, struct aura_db_rec_hdr *rec_hdr,
+                                              uint16_t namespace, uint16_t schema_id, uint64_t job_id,
+                                              uint64_t prev_job_rec, struct aura_iovec *key,
+                                              struct aura_iovec *data, uint16_t flags) {
     uint32_t hash, old_head;
     struct aura_iovec data_checksum;
 
@@ -687,8 +692,9 @@ static inline int64_t a_db_record_header_init(AURA_DB *db, struct aura_db_rec_hd
 /**
  * Append given record to WAL and cache
  */
-static off_t a_db_record_insert_core(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id, uint64_t job_id, uint64_t prev_job_rec,
-                                     uint16_t flags, aura_db_op op, struct aura_iovec *key, struct aura_iovec *data) {
+static off_t a_db_record_insert_core(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id,
+                                     uint64_t job_id, uint64_t prev_job_rec, uint16_t flags,
+                                     aura_db_op op, struct aura_iovec *key, struct aura_iovec *data) {
     struct aura_db_rec_hdr rec_hdr;
     uint32_t hash;
     AURA_DB *db;
@@ -722,8 +728,10 @@ static off_t a_db_record_insert_core(AURA_DBHANDLE _db, uint16_t namespace, uint
     return offset;
 }
 
-static int a_db_enqueue_request(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id, uint64_t job_id, uint64_t prev_job_rec,
-                                uint16_t flags, aura_db_op op, struct aura_iovec *key, struct aura_iovec *data, struct aura_db_completion *completion) {
+static int a_db_enqueue_request(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id,
+                                uint64_t job_id, uint64_t prev_job_rec, uint16_t flags,
+                                aura_db_op op, struct aura_iovec *key, struct aura_iovec *data,
+                                struct aura_db_completion *completion) {
     AURA_DB *db;
     struct aura_db_write_req *req;
 
@@ -733,7 +741,7 @@ static int a_db_enqueue_request(AURA_DBHANDLE _db, uint16_t namespace, uint16_t 
     if (!req)
         return -1;
 
-    a_list_head_init(&req->w_list);
+    aura_list_head_init(&req->w_list);
     req->namespace = namespace;
     req->schema_id = schema_id;
     req->op = op;
@@ -745,23 +753,25 @@ static int a_db_enqueue_request(AURA_DBHANDLE _db, uint16_t namespace, uint16_t 
     req->completion = completion;
 
     pthread_mutex_lock(&db->writer_queue.mutex);
-    a_list_add_tail(&db->writer_queue.db_list, &req->w_list);
+    aura_list_add_tail(&db->writer_queue.db_list, &req->w_list);
     pthread_cond_signal(&db->writer_queue.cond);
     pthread_mutex_unlock(&db->writer_queue.mutex);
 
     return 0;
 }
 
-ssize_t aura_db_record_insert(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id, uint64_t job_id, uint64_t prev_job_rec, aura_db_op op, struct aura_iovec *key,
-                              struct aura_iovec *data, aura_db_exec_mode exec_mode, struct aura_db_completion *comp) {
+ssize_t aura_db_record_insert(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id,
+                              uint64_t job_id, uint64_t prev_job_rec, aura_db_op op,
+                              struct aura_iovec *key, struct aura_iovec *data,
+                              aura_db_exec_mode exec_mode, struct aura_db_completion *comp) {
     if (exec_mode == A_DB_EXEC_DIRECT)
         return a_db_record_insert_core(_db, namespace, schema_id, job_id, prev_job_rec, A_DB_FLAG_NONE, op, key, data);
     else
         return a_db_enqueue_request(_db, namespace, schema_id, job_id, prev_job_rec, A_DB_FLAG_NONE, op, key, data, comp);
 }
 
-uint64_t aura_db_job_insert(AURA_DBHANDLE _db, uint32_t job_type, uint8_t state, uint64_t timeout, int error,
-                            aura_db_exec_mode exec_mode, struct aura_db_completion *completion) {
+uint64_t aura_db_job_insert(AURA_DBHANDLE _db, uint32_t job_type, uint8_t state, uint64_t timeout,
+                            int error, aura_db_exec_mode exec_mode, struct aura_db_completion *completion) {
     AURA_DB *db;
     struct aura_db_job_rec job;
     char job_key[2046], job_step_key[2046];
@@ -789,7 +799,16 @@ uint64_t aura_db_job_insert(AURA_DBHANDLE _db, uint32_t job_type, uint8_t state,
         data.base = (void *)&job;
         data.len = sizeof(job);
 
-        offset = a_db_record_insert_core(db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_V1, 0, 0, A_DB_FLAG_NONE, A_DB_JOB_OP_CREATE, &key, &data);
+        offset = a_db_record_insert_core(
+          db,
+          A_DB_NS_JOB,
+          A_DB_SCHEMA_JOB_V1,
+          0,
+          0,
+          A_DB_FLAG_NONE,
+          A_DB_JOB_OP_CREATE,
+          &key,
+          &data);
         if (offset < 0)
             return 0;
     } else if (exec_mode == A_DB_EXEC_ASYNC) {
@@ -807,7 +826,17 @@ uint64_t aura_db_job_insert(AURA_DBHANDLE _db, uint32_t job_type, uint8_t state,
         /* Copy over contents for queueing */
         memcpy(key_ptr->base, job_key, key_ptr->len);
         memcpy(data_ptr->base, &job, data_ptr->len);
-        res = a_db_enqueue_request(db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_V1, 0, 0, A_DB_FLAG_NONE, A_DB_JOB_OP_CREATE, key_ptr, data_ptr, completion);
+        res = a_db_enqueue_request(
+          db,
+          A_DB_NS_JOB,
+          A_DB_SCHEMA_JOB_V1,
+          0,
+          0,
+          A_DB_FLAG_NONE,
+          A_DB_JOB_OP_CREATE,
+          key_ptr,
+          data_ptr,
+          completion);
         if (res != 0) {
             aura_iovec_destroy(key_ptr);
             aura_iovec_destroy(data_ptr);
@@ -818,8 +847,9 @@ uint64_t aura_db_job_insert(AURA_DBHANDLE _db, uint32_t job_type, uint8_t state,
     return job.job_id;
 }
 
-int aura_db_job_update(AURA_DBHANDLE _db, uint64_t job_id, uint16_t state, int error, uint64_t rec_off,
-                       aura_db_exec_mode exec_mode, struct aura_db_completion *comp) {
+int aura_db_job_update(AURA_DBHANDLE _db, uint64_t job_id, uint16_t state,
+                       int error, uint64_t rec_off, aura_db_exec_mode exec_mode,
+                       struct aura_db_completion *comp) {
     AURA_DB *db;
     char buf[1024];
     struct aura_iovec key, data;
@@ -848,7 +878,16 @@ int aura_db_job_update(AURA_DBHANDLE _db, uint64_t job_id, uint16_t state, int e
         data.base = (void *)job_rec;
         data.len = sizeof(*job_rec);
 
-        offset = a_db_record_insert_core(db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_V1, 0, 0, A_DB_FLAG_NONE, A_DB_JOB_OP_STEP, &key, &data);
+        offset = a_db_record_insert_core(
+          db,
+          A_DB_NS_JOB,
+          A_DB_SCHEMA_JOB_V1,
+          0,
+          0,
+          A_DB_FLAG_NONE,
+          A_DB_JOB_OP_STEP,
+          &key,
+          &data);
         /* No longer needed */
         aura_free(job_rec);
         if (offset < 0)
@@ -871,7 +910,17 @@ int aura_db_job_update(AURA_DBHANDLE _db, uint64_t job_id, uint16_t state, int e
         memcpy(data_ptr->base, job_rec, data_ptr->len);
         /* No need for this record anymore */
         aura_free(job_rec);
-        res = a_db_enqueue_request(db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_V1, 0, 0, A_DB_FLAG_NONE, A_DB_JOB_OP_STEP, key_ptr, data_ptr, comp);
+        res = a_db_enqueue_request(
+          db,
+          A_DB_NS_JOB,
+          A_DB_SCHEMA_JOB_V1,
+          0,
+          0,
+          A_DB_FLAG_NONE,
+          A_DB_JOB_OP_STEP,
+          key_ptr,
+          data_ptr,
+          comp);
         if (res != 0) {
             aura_iovec_destroy(key_ptr);
             aura_iovec_destroy(data_ptr);
@@ -903,8 +952,9 @@ struct aura_db_job_rec *aura_db_job_fetch(AURA_DBHANDLE _db, uint64_t job_id, in
     return NULL;
 }
 
-int aura_db_job_step_insert(AURA_DBHANDLE _db, uint64_t job_id, uint32_t job_type, uint8_t step, struct aura_iovec *target,
-                            aura_db_exec_mode exec_mode, struct aura_db_completion *comp) {
+int aura_db_job_step_insert(AURA_DBHANDLE _db, uint64_t job_id, uint32_t job_type, uint8_t step,
+                            struct aura_iovec *target, aura_db_exec_mode exec_mode,
+                            struct aura_db_completion *comp) {
     AURA_DB *db;
     struct aura_iovec key, data;
     char job_step_key[2046];
@@ -933,7 +983,16 @@ int aura_db_job_step_insert(AURA_DBHANDLE _db, uint64_t job_id, uint32_t job_typ
         data.base = (void *)&job_step;
         data.len = sizeof(job_step);
 
-        offset = a_db_record_insert_core(_db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_STEP_V1, job_id, 0, A_DB_FLAG_NONE, A_DB_JOB_OP_EVENT, &key, &data);
+        offset = a_db_record_insert_core(
+          _db,
+          A_DB_NS_JOB,
+          A_DB_SCHEMA_JOB_STEP_V1,
+          job_id,
+          0,
+          A_DB_FLAG_NONE,
+          A_DB_JOB_OP_EVENT,
+          &key,
+          &data);
         if (offset < 0)
             return -1;
         return 0;
@@ -952,7 +1011,17 @@ int aura_db_job_step_insert(AURA_DBHANDLE _db, uint64_t job_id, uint32_t job_typ
         /* Copy over contents for queueing */
         memcpy(key_ptr->base, job_step_key, key_ptr->len);
         memcpy(data_ptr->base, &job_step, data_ptr->len);
-        res = a_db_enqueue_request(_db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_STEP_V1, job_id, 0, A_DB_FLAG_NONE, A_DB_JOB_OP_EVENT, key_ptr, data_ptr, comp);
+        res = a_db_enqueue_request(
+          _db,
+          A_DB_NS_JOB,
+          A_DB_SCHEMA_JOB_STEP_V1,
+          job_id,
+          0,
+          A_DB_FLAG_NONE,
+          A_DB_JOB_OP_EVENT,
+          key_ptr,
+          data_ptr,
+          comp);
         if (res != 0) {
             aura_iovec_destroy(key_ptr);
             aura_iovec_destroy(data_ptr);
@@ -962,7 +1031,8 @@ int aura_db_job_step_insert(AURA_DBHANDLE _db, uint64_t job_id, uint32_t job_typ
     }
 }
 
-struct aura_db_job_step_rec *aura_db_job_step_fetch(AURA_DBHANDLE _db, uint16_t job_type, struct aura_iovec *target) {
+struct aura_db_job_step_rec *aura_db_job_step_fetch(AURA_DBHANDLE _db, uint16_t job_type,
+                                                    struct aura_iovec *target) {
     struct aura_db_job_step_rec *job_step;
     struct aura_db_rec rec;
     struct aura_iovec key;
@@ -982,8 +1052,9 @@ struct aura_db_job_step_rec *aura_db_job_step_fetch(AURA_DBHANDLE _db, uint16_t 
     return (struct aura_db_job_step_rec *)rec.data.base;
 }
 
-static inline int a_db_construct_header(struct aura_db_rec_hdr *rec_hdr, aura_db_namespace namespace, aura_db_schema_id schema_id,
-                                        uint64_t old_head, struct aura_iovec *key, struct aura_iovec *data) {
+static inline int a_db_construct_header(struct aura_db_rec_hdr *rec_hdr, aura_db_namespace namespace,
+                                        aura_db_schema_id schema_id, uint64_t old_head,
+                                        struct aura_iovec *key, struct aura_iovec *data) {
     struct aura_iovec data_checksum;
 
     data_checksum = aura_calculate_digest(data);
@@ -1017,7 +1088,6 @@ int aura_db_record_fetch(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_
     hash = a_fnv1a_hash(db->db_file_hdr.bucket_cnt, namespace, key);
     offset = db->buckets[hash].head_off;
 
-    app_debug(true, 0, "aura_db_record_fetch: key: %s: len: %lu", key->base, key->len);
     if (data_out) {
         memset(data_out, 0, sizeof(*data_out));
     }
@@ -1105,17 +1175,28 @@ exception:
 }
 
 int aura_db_record_delete(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id, uint64_t job_id,
-                          struct aura_iovec *key, aura_db_exec_mode exec_mode, struct aura_db_completion *comp) {
+                          struct aura_iovec *key, aura_db_exec_mode exec_mode,
+                          struct aura_db_completion *comp) {
     AURA_DB *db;
     off_t offset;
     int res;
 
     db = (AURA_DB *)_db;
     if (exec_mode == A_DB_EXEC_DIRECT) {
-        offset = a_db_record_insert_core(_db, namespace, schema_id, job_id, 0, A_DB_FLAG_REC_TOMBSTONE, A_DB_OP_DELETE, key, NULL);
+        offset = a_db_record_insert_core(
+          _db,
+          namespace,
+          schema_id,
+          job_id,
+          0,
+          A_DB_FLAG_REC_TOMBSTONE,
+          A_DB_OP_DELETE,
+          key,
+          NULL);
         if (offset < 0)
             return -1;
         return 0;
+
     } else if (exec_mode == A_DB_EXEC_ASYNC) {
         struct aura_iovec *key_ptr;
 
@@ -1124,7 +1205,17 @@ int aura_db_record_delete(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema
             return -1;
 
         memcpy(key_ptr->base, key->base, key_ptr->len);
-        res = a_db_enqueue_request(_db, namespace, schema_id, job_id, 0, A_DB_FLAG_REC_TOMBSTONE, A_DB_OP_DELETE, key_ptr, NULL, comp);
+        res = a_db_enqueue_request(
+          _db,
+          namespace,
+          schema_id,
+          job_id,
+          0,
+          A_DB_FLAG_REC_TOMBSTONE,
+          A_DB_OP_DELETE,
+          key_ptr,
+          NULL,
+          comp);
         if (res < 0) {
             aura_iovec_destroy(key_ptr);
             return -1;
@@ -1135,7 +1226,8 @@ int aura_db_record_delete(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema
 
 /* Append to WAL file */
 static inline off_t a_db_wal_append(int wal_fd, struct aura_db_wal_rec_hdr *wal_rec_hdr,
-                                    struct aura_db_rec_hdr *rec_hdr, struct aura_iovec *key, struct aura_iovec *data) {
+                                    struct aura_db_rec_hdr *rec_hdr, struct aura_iovec *key,
+                                    struct aura_iovec *data) {
     off_t offset;
     struct iovec iov[5];
     ssize_t res;
@@ -1212,7 +1304,8 @@ struct aura_db_replay_tab {
     } records;
 };
 
-int a_db_replay_tab_add(struct aura_db_replay_tab *tab, uint64_t job_id, uint32_t state, off_t rec_off, size_t rec_len) {
+int a_db_replay_tab_add(struct aura_db_replay_tab *tab, uint64_t job_id,
+                        uint32_t state, off_t rec_off, size_t rec_len) {
 
     /* Insert into Job table */
     if (rec_off == 0) {
@@ -2006,7 +2099,7 @@ static void *a_db_writer_routine(void *arg) {
         timed_out = false;
         time_waited = 0;
 
-        while (a_list_is_empty(&db->writer_queue.db_list)) {
+        while (aura_list_is_empty(&db->writer_queue.db_list)) {
             res = pthread_cond_timedwait(&db->writer_queue.cond, &db->writer_queue.mutex, &ts);
 
             if (res == 0) {

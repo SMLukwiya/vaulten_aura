@@ -23,7 +23,7 @@ struct aura_interned_str_arena {
 
 /* Intern table structure */
 struct aura_intern_tab {
-    struct aura_memory_ctx *mc;
+    struct aura_mem_ctx *mc;
     struct aura_interned_str *entries;
     size_t cnt;                            /* number of entries */
     size_t cap;                            /* capacity of table (MUST be power of 2) */
@@ -39,12 +39,14 @@ static inline uint32_t aura_intern_tab_get_idx(uint32_t hash, size_t bucket_size
  * Create interned table structure
  * Ensure size is a multiple of 2 for now
  */
-struct aura_intern_tab *aura_intern_tab_create(struct aura_memory_ctx *mc, size_t size);
+struct aura_intern_tab *aura_intern_tab_create(struct aura_mem_ctx *mc, size_t size);
+int aura_intern_tab_create2(struct aura_intern_tab *tab, struct aura_mem_ctx *mc, size_t size);
 
 /**
  * Destroy intern tab and attached str arenas
  */
 void aura_intern_tab_destroy(struct aura_intern_tab *tab);
+void aura_intern_tab_destroy2(struct aura_intern_tab *tab);
 
 /**
  * Add provided string to intern table

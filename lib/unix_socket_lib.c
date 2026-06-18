@@ -2,64 +2,6 @@
 #include "error_lib.h"
 #include "string_lib.h"
 
-void aura_msghdr_dump(struct msghdr *msg, bool daemon) {
-    app_debug(daemon, 0, "msghdr dump:");
-    app_debug(daemon, 0, " msg_name: %p", msg->msg_name);
-    app_debug(daemon, 0, " msg_namelen: %d", msg->msg_namelen);
-    app_debug(daemon, 0, " msg_iov: %p", msg->msg_iov);
-    app_debug(daemon, 0, " msg_iovlen: %ld", msg->msg_iovlen);
-    app_debug(daemon, 0, " msg_control: %p", msg->msg_control);
-    app_debug(daemon, 0, " msg_controllen: %zu", msg->msg_controllen);
-    app_debug(daemon, 0, " msg_flags: %d", msg->msg_flags);
-
-    if (msg->msg_iov && msg->msg_iovlen > 0) {
-        for (size_t i = 0; i < msg->msg_iovlen; ++i) {
-            app_debug(daemon, 0, "  iov[%zu]: base = %p, len = %zu", i, msg->msg_iov[i].iov_base, msg->msg_iov[i].iov_len);
-        }
-    }
-
-    if (msg->msg_control && msg->msg_controllen > 0) {
-        struct cmsghdr *cmsg;
-        struct sock_cred *credp;
-
-        for (cmsg = CMSG_FIRSTHDR(msg); cmsg != NULL; cmsg = CMSG_NXTHDR(msg, cmsg)) {
-            app_debug(daemon, 0, "cmsg -> %ld", cmsg->cmsg_len);
-            switch (cmsg->cmsg_type) {
-            case SCM_RIGHTS:
-                app_debug(daemon, 0, "File descriptor");
-                app_debug(daemon, 0, "FD: %d", *(int *)CMSG_DATA(cmsg));
-                break;
-            case SCM_CRED_TYPE:
-                app_debug(daemon, 0, "Credentials");
-                credp = (struct sock_cred *)CMSG_DATA(cmsg);
-                app_debug(daemon, 0, "uid: %d", credp->uid);
-                app_debug(daemon, 0, "gid: %d", credp->gid);
-                app_debug(daemon, 0, "pid: %d", credp->pid);
-                break;
-            default:
-                app_debug(daemon, 0, "Unknown control type");
-            }
-        }
-    }
-}
-
-void aura_msg_dump(struct aura_msg *msg, bool daemon) {
-    app_debug(daemon, 0, "AURA MSG:");
-    app_debug(daemon, 0, "   message header:");
-    app_debug(daemon, 0, "       header length: %d", msg->hdr.len);
-    app_debug(daemon, 0, "       message type: %d", msg->hdr.type);
-    app_debug(daemon, 0, "       cmd type: %d", msg->hdr.cmd_type);
-    app_debug(daemon, 0, "       message version: %s", msg->hdr.version);
-    app_debug(daemon, 0, "   message credentials:");
-    app_debug(daemon, 0, "       uid: %d", msg->cred.uid);
-    app_debug(daemon, 0, "       gid: %d", msg->cred.gid);
-    app_debug(daemon, 0, "       pid: %d", msg->cred.pid);
-    app_debug(daemon, 0, "   message credentials:");
-    app_debug(daemon, 0, "   file desc: %d", msg->fd);
-    app_debug(daemon, 0, "   data: %p", msg->data.iov_base);
-    app_debug(daemon, 0, "   data len: %u", msg->data.iov_len);
-}
-
 /* Adds file descriptor as part of the message */
 static inline void a_integer_add(struct cmsghdr *cmsg, int value) {
     cmsg->cmsg_len = control_len(int);
@@ -258,7 +200,7 @@ int aura_msg_recv(int sock_fd, struct aura_msg *aura_msg) {
     return 1;
 }
 
-int aura_recv_resp(struct aura_iovec *data_out, int sock_fd, struct aura_memory_ctx *mc) {
+int aura_recv_resp(struct aura_iovec *data_out, int sock_fd, struct aura_mem_ctx *mc) {
     errno = 0;
     struct aura_msg_hdr hdr;
     struct msghdr msg;
@@ -482,4 +424,62 @@ void aura_try_connect_or_error(int *fd) {
         return;
     }
     *fd = cli_socket.sock_fd;
+}
+
+void aura_msghdr_dump(struct msghdr *msg, bool daemon) {
+    app_debug(daemon, 0, "msghdr dump:");
+    app_debug(daemon, 0, " msg_name: %p", msg->msg_name);
+    app_debug(daemon, 0, " msg_namelen: %d", msg->msg_namelen);
+    app_debug(daemon, 0, " msg_iov: %p", msg->msg_iov);
+    app_debug(daemon, 0, " msg_iovlen: %ld", msg->msg_iovlen);
+    app_debug(daemon, 0, " msg_control: %p", msg->msg_control);
+    app_debug(daemon, 0, " msg_controllen: %zu", msg->msg_controllen);
+    app_debug(daemon, 0, " msg_flags: %d", msg->msg_flags);
+
+    if (msg->msg_iov && msg->msg_iovlen > 0) {
+        for (size_t i = 0; i < msg->msg_iovlen; ++i) {
+            app_debug(daemon, 0, "  iov[%zu]: base = %p, len = %zu", i, msg->msg_iov[i].iov_base, msg->msg_iov[i].iov_len);
+        }
+    }
+
+    if (msg->msg_control && msg->msg_controllen > 0) {
+        struct cmsghdr *cmsg;
+        struct sock_cred *credp;
+
+        for (cmsg = CMSG_FIRSTHDR(msg); cmsg != NULL; cmsg = CMSG_NXTHDR(msg, cmsg)) {
+            app_debug(daemon, 0, "cmsg -> %ld", cmsg->cmsg_len);
+            switch (cmsg->cmsg_type) {
+            case SCM_RIGHTS:
+                app_debug(daemon, 0, "File descriptor");
+                app_debug(daemon, 0, "FD: %d", *(int *)CMSG_DATA(cmsg));
+                break;
+            case SCM_CRED_TYPE:
+                app_debug(daemon, 0, "Credentials");
+                credp = (struct sock_cred *)CMSG_DATA(cmsg);
+                app_debug(daemon, 0, "uid: %d", credp->uid);
+                app_debug(daemon, 0, "gid: %d", credp->gid);
+                app_debug(daemon, 0, "pid: %d", credp->pid);
+                break;
+            default:
+                app_debug(daemon, 0, "Unknown control type");
+            }
+        }
+    }
+}
+
+void aura_msg_dump(struct aura_msg *msg, bool daemon) {
+    app_debug(daemon, 0, "AURA MSG:");
+    app_debug(daemon, 0, "   message header:");
+    app_debug(daemon, 0, "       header length: %d", msg->hdr.len);
+    app_debug(daemon, 0, "       message type: %d", msg->hdr.type);
+    app_debug(daemon, 0, "       cmd type: %d", msg->hdr.cmd_type);
+    app_debug(daemon, 0, "       message version: %s", msg->hdr.version);
+    app_debug(daemon, 0, "   message credentials:");
+    app_debug(daemon, 0, "       uid: %d", msg->cred.uid);
+    app_debug(daemon, 0, "       gid: %d", msg->cred.gid);
+    app_debug(daemon, 0, "       pid: %d", msg->cred.pid);
+    app_debug(daemon, 0, "   message credentials:");
+    app_debug(daemon, 0, "   file desc: %d", msg->fd);
+    app_debug(daemon, 0, "   data: %p", msg->data.iov_base);
+    app_debug(daemon, 0, "   data len: %u", msg->data.iov_len);
 }

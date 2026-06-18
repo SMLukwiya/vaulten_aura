@@ -1,192 +1,194 @@
 #include "error_lib.h"
 #include "heap_lib.h"
+
+#include <assert.h>
 #include <stdlib.h>
 
-static inline int left(int i) {
-    return i << 1;
-}
+#ifndef a_max
+#define a_max(x, y) ((x) > (y) ? (x) : (y))
+#endif
 
-static inline int right(int i) {
-    return (i << 1) + 1;
-}
+#define left(x) (((x) << 1) + 1)
+#define right(x) (((x) << 1) + 2)
+#define parent(x) (((x) - 1) >> 1)
 
-static inline int parent(int i) {
-    return i >> 1;
-}
+int aura_heap_init(struct aura_heap *hp, struct aura_mem_ctx *mc, uint32_t cap,
+                   hp_compare_fn cmp, aura_heap_t hp_type) {
+    if (cap >= UINT32_MAX)
+        return -1;
 
-struct aura_heap *aura_heap_create(size_t capacity, compare_fn cmp) {
-    struct aura_heap *hp;
-    if ((hp = malloc(sizeof(struct aura_heap))) == NULL)
-        return NULL;
+    hp->entries = aura_alloc(mc, cap * sizeof(struct aura_heap_ent));
+    if (!hp->entries)
+        return -1;
 
-    if ((hp->data = malloc((capacity + 1) * sizeof(void *))) == NULL) {
-        free(hp);
-        return NULL;
-    }
-
-    hp->data[0] = NULL;
+    hp->mc = mc;
     hp->size = 0;
-    hp->cap = capacity + 1;
+    hp->cap = cap;
     hp->cmp = cmp;
-    hp->elem_size = sizeof(void *);
-    return hp;
+    hp->type = hp_type;
+    return 0;
 }
 
-void aura_heap_destroy(struct aura_heap *heap, destructor_fn destructor) {
-    if (!heap)
+void aura_heap_destroy(struct aura_heap *hp) {
+    if (!hp)
         return;
 
-    if (destructor)
-        for (int i = 1; i <= heap->size; ++i) {
-            destructor(heap->data[i]);
-        }
-
-    if (heap->data)
-        free(heap->data);
-    heap->data = NULL;
-    heap->cap = heap->size = 0;
+    memset(hp->entries, 0, hp->cap * sizeof(*hp->entries));
+    if (hp->entries)
+        aura_free(hp->entries);
+    hp->entries = NULL;
+    hp->cap = hp->size = 0;
 }
 
-static inline void swap(void **a, void **b) {
-    void *temp = *a;
+static inline void a_swap(struct aura_heap_ent **a, struct aura_heap_ent **b) {
+    struct aura_heap_ent *tmp = *a;
+
     *a = *b;
-    *b = temp;
+    (*a)->idx = (*b)->idx;
+    *b = tmp;
+    (*b)->idx = tmp->idx;
 }
 
-/* Build max heap by insertion */
-static void a_max_heap_insert(struct aura_heap *hp, size_t i) {
-    int _parent;
+static inline int a_hp_grow(struct aura_heap *hp) {
+    hp->cap = a_max(4, hp->cap * 2);
+    if (hp->cap >= UINT32_MAX)
+        return -1;
 
-    /**
-     * Only run when we have more than 1 item in heap
-     */
-    while (i > 1) {
-        _parent = parent(i);
-        if (hp->cmp(hp->data[i], hp->data[_parent]) > 0) {
-            swap(&hp->data[i], &hp->data[_parent]);
-            i = _parent;
-        } else
-            break;
+    hp->entries = aura_realloc(hp->mc, hp->entries, hp->cap * sizeof(struct aura_heap_ent));
+    if (!hp->entries)
+        return -1;
+
+    return 0;
+}
+
+static inline void a_hp_bubble_up(struct aura_heap *hp, size_t idx) {
+    size_t p;
+
+    if (hp->type == A_HP_TYPE_MIN_HEAP) {
+        while (idx > 0) {
+            p = parent(idx);
+            if (hp->cmp(hp->entries[p], hp->entries[idx]) < 0)
+                break;
+
+            a_swap(&hp->entries[p], &hp->entries[idx]);
+            idx = p;
+        }
+    } else {
+        while (idx > 0) {
+            p = parent(idx);
+            if (hp->cmp(hp->entries[p], hp->entries[idx]) > 0)
+                break;
+
+            a_swap(&hp->entries[p], &hp->entries[idx]);
+            idx = p;
+        }
     }
 }
 
-bool aura_max_heap_push(struct aura_heap *hp, void *element) {
+static inline void a_hp_bubble_down(struct aura_heap *hp, size_t idx) {
+    int i, l, r;
+
+    if (hp->type == A_HP_TYPE_MIN_HEAP) {
+        while (idx < hp->size) {
+            l = left(idx);
+            if (l >= hp->size)
+                break;
+
+            r = right(idx);
+            if (r < hp->size && hp->cmp(hp->entries[r], hp->entries[l]) < 0)
+                i = r;
+            else
+                i = l;
+
+            if (hp->cmp(hp->entries[i], hp->entries[idx]) > 0)
+                break;
+
+            a_swap(&hp->entries[i], &hp->entries[idx]);
+            idx = i;
+        }
+    } else {
+        while (idx < hp->size) {
+            l = left(idx);
+            if (l >= hp->size)
+                break;
+
+            r = right(idx);
+            if (r < hp->size && hp->cmp(hp->entries[r], hp->entries[l]) > 0)
+                i = r;
+            else
+                i = l;
+
+            if (hp->cmp(hp->entries[idx], hp->entries[i]) > 0)
+                break;
+
+            a_swap(&hp->entries[idx], &hp->entries[i]);
+            idx = i;
+        }
+    }
+}
+
+int aura_heap_push(struct aura_heap *hp, struct aura_heap_ent *e) {
+    size_t pos;
+
     if (aura_heap_is_full(hp))
-        return false;
+        if (a_hp_grow(hp) < 0)
+            return -1;
 
+    pos = hp->size;
+    hp->entries[pos] = e;
+    e->idx = pos;
     hp->size++;
-    hp->data[hp->size] = element;
-    a_max_heap_insert(hp, hp->size);
-    return true;
+    a_hp_bubble_up(hp, pos);
+
+    return 0;
 }
 
-static void a_max_heapify(struct aura_heap *hp, size_t i) {
-    int child;
-
-    while (i < hp->size) {
-        child = 2 * i;
-        if (child < hp->size && hp->cmp(hp->data[child + 1], hp->data[child]) > 0)
-            child++;
-
-        if (child <= hp->size && hp->cmp(hp->data[child], hp->data[i]) > 0) {
-            swap(&hp->data[i], &hp->data[child]);
-            i = child;
-        } else
-            break;
-    }
-}
-
-void *aura_max_heap_delete(struct aura_heap *hp) {
-    void *item;
-
+struct aura_heap_ent *aura_heap_peek(struct aura_heap *hp) {
     if (aura_heap_is_empty(hp))
         return NULL;
 
-    item = hp->data[1];
-    swap(&hp->data[1], &hp->data[hp->size]);
+    return hp->entries[0];
+}
+
+struct aura_heap_ent *aura_heap_pop(struct aura_heap *hp) {
+    if (aura_heap_is_empty(hp))
+        return NULL;
+
+    struct aura_heap_ent *e = hp->entries[0];
     --(hp->size);
-    a_max_heapify(hp, 1);
+    hp->entries[0] = hp->entries[hp->size];
+    hp->entries[0]->idx = hp->entries[hp->size]->idx;
 
-    return item;
+    e->idx = UINT32_MAX;
+    a_hp_bubble_down(hp, 0);
+
+    return e;
 }
 
-void *aura_heap_peek(struct aura_heap *hp) {
-    if (aura_heap_is_empty(hp))
-        return NULL;
+void aura_heap_del(struct aura_heap *hp, struct aura_heap_ent *e) {
+    assert(hp->entries[e->idx] == e);
 
-    return hp->data[1];
-}
+    --hp->size;
+    if (e->idx == hp->size)
+        return;
 
-/* Build min heap by insertion */
-static void a_min_heap_insert(struct aura_heap *hp, size_t i) {
-    int _parent;
-
-    while (i > 1) {
-        _parent = parent(i);
-        if (hp->cmp(hp->data[i], hp->data[_parent]) < 0) {
-            swap(&hp->data[i], &hp->data[_parent]);
-            i = _parent;
-        } else
-            break;
+    if (e->idx == 0) {
+        aura_heap_pop(hp);
+        return;
     }
-}
 
-bool aura_min_heap_push(struct aura_heap *hp, void *element) {
-    if (aura_heap_is_full(hp))
-        return false;
+    hp->entries[e->idx] = hp->entries[hp->size];
+    hp->entries[e->idx]->idx = hp->entries[hp->size]->idx;
 
-    hp->size++;
-    hp->data[hp->size] = element;
-    a_min_heap_insert(hp, hp->size);
-    return true;
-}
-
-static void a_min_heapify(struct aura_heap *hp, size_t i) {
-    int child;
-
-    while (i < hp->size) {
-        child = 2 * i;
-        if (child < hp->size && hp->cmp(hp->data[child + 1], hp->data[child]) < 0)
-            child++;
-
-        if (child <= hp->size && hp->cmp(hp->data[child], hp->data[i]) < 0) {
-            swap(&hp->data[i], &hp->data[child]);
-            i = child;
-        } else
-            break;
-    }
-}
-
-void *aura_min_heap_delete(struct aura_heap *hp) {
-    void *item;
-
-    if (aura_heap_is_empty(hp))
-        return NULL;
-
-    item = hp->data[1];
-    swap(&hp->data[1], &hp->data[hp->size]);
-    --(hp->size);
-    a_min_heapify(hp, 1);
-
-    return item;
-}
-
-bool aura_heap_entry_exists(struct aura_heap *hp, void *element) {
-    if (aura_heap_is_empty(hp))
-        return false;
-
-    for (int i = 0; i < hp->size; ++i) {
-        if (hp->data[i] == element)
-            return true;
-    }
-    return false;
+    a_hp_bubble_up(hp, e->idx);
+    a_hp_bubble_down(hp, e->idx);
+    e->idx = UINT32_MAX;
 }
 
 void aura_heap_dump(struct aura_heap *hp, bool is_daemon) {
     app_debug(is_daemon, 0, "AURA HEAP");
     app_debug(is_daemon, 0, "   Size: %lu", hp->size);
     app_debug(is_daemon, 0, "   Cap: %lu", hp->cap);
-    app_debug(is_daemon, 0, "   Elem size: %lu", hp->elem_size);
-    app_debug(is_daemon, 0, "   Data ptr: %p", hp->data);
+    app_debug(is_daemon, 0, "   Data ptr: %p", hp->entries);
     app_debug(is_daemon, 0, "   Cmp fn ptr: %p", hp->cmp);
 }

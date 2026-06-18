@@ -20,17 +20,12 @@ const st_aura_evt_loop_ops *a_get_backend_ops() {
 #endif
 }
 
-/**
- *
- */
-st_aura_evt_loop *aura_evt_loop_create(int dmn_sock_fd, int max_fds) {
-    app_debug(true, 0, "aura_evt_loop_create <<<");
+st_aura_evt_loop *aura_evt_loop_create(struct aura_srv_ctx *srv_ctx, int max_fds) {
     st_aura_evt_loop *loop;
 
-    loop = malloc(sizeof(*loop));
+    loop = calloc(1, sizeof(*loop));
     if (!loop)
         return NULL;
-    memset(loop, 0, sizeof(*loop));
 
     loop->ops = a_get_backend_ops();
     if (!loop->ops) {
@@ -38,17 +33,14 @@ st_aura_evt_loop *aura_evt_loop_create(int dmn_sock_fd, int max_fds) {
         return NULL;
     }
     loop->backend_type;
-    loop->dmn_fd = dmn_sock_fd;
     loop->max_fds = max_fds;
+    loop->srv_ctx = srv_ctx;
 
     /* initialize backend */
     loop->ops->init(loop);
     return loop;
 }
 
-/**
- *
- */
 void aura_evt_loop_destroy(st_aura_evt_loop *loop) {
     if (!loop)
         return;
@@ -67,58 +59,16 @@ int aura_evt_loop_add_timer(st_aura_evt_loop *loop, uint64_t timeout, aura_evt_l
 /**
  *
  */
-void aura_evt_loop_start(st_aura_evt_loop *loop) {
-    loop->running = true;
-}
-
-/**
- *
- */
-void aura_evt_loop_stop(st_aura_evt_loop *loop) {
-    loop->running = false;
-}
-
-/**
- *
- */
-int aura_evt_loop_add(st_aura_evt_loop *loop, int fd, int events) {
-    return loop->ops->add(loop, fd, events);
-}
-
-/**
- *
- */
-int aura_evt_loop_modify(st_aura_evt_loop *loop, int fd, int events) {
-    return loop->ops->modify(loop, fd, events);
-}
-
-/**
- *
- */
-int aura_evt_loop_remove(st_aura_evt_loop *loop, int fd) {
-    return loop->ops->remove(loop, fd);
-}
-
-/**
- *
- */
-int aura_evt_loop_poll(st_aura_evt_loop *loop, uint64_t timeout_ms, uint32_t max_accept) {
-    return loop->ops->poll(loop, timeout_ms, max_accept);
-}
-
-/**
- *
- */
 int64_t aura_evt_loop_get_timeout(struct aura_timer_wheel *tw) {
     uint64_t now;
 
-    if (tw->next_deadline_ms == UINT64_MAX)
+    if (tw->next_deadline == UINT64_MAX)
         return -1;
 
     now = aura_now_ms(CLOCK_MONOTONIC);
-    if (tw->next_deadline_ms <= now)
+    if (tw->next_deadline <= now)
         return 0;
 
-    uint64_t delta = tw->next_deadline_ms - now;
+    uint64_t delta = tw->next_deadline - now;
     return delta;
 }

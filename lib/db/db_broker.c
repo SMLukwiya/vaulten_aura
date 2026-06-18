@@ -2,8 +2,9 @@
 #include "db/db.h"
 #include "unix_socket_lib.h"
 
-static struct aura_db_broker_request *a_db_broker_construct_request(struct aura_memory_ctx *mc, uint16_t ns, uint16_t schema_id,
-                                                                    struct aura_iovec *key, struct aura_iovec *data, size_t *olen) {
+static struct aura_db_broker_request *a_db_broker_construct_request(struct aura_mem_ctx *mc, uint16_t ns,
+                                                                    uint16_t schema_id, struct aura_iovec *key,
+                                                                    struct aura_iovec *data, size_t *olen) {
     struct aura_db_broker_request *request;
     size_t len;
 
@@ -35,8 +36,9 @@ static struct aura_db_broker_request *a_db_broker_construct_request(struct aura_
     return request;
 }
 
-int aura_db_broker_fetch(struct aura_memory_ctx *mc, uint16_t ns, uint16_t schema_id,
-                         struct aura_iovec *key, struct aura_iovec *out_data, int dmn_fd) {
+int aura_db_broker_fetch(struct aura_mem_ctx *mc, uint16_t ns, uint16_t schema_id,
+                         struct aura_iovec *key, struct aura_iovec *out_data,
+                         int dmn_fd) {
     struct aura_db_broker_request *request;
     struct aura_msg_hdr msg_hdr;
     struct aura_msg msg;
@@ -45,7 +47,6 @@ int aura_db_broker_fetch(struct aura_memory_ctx *mc, uint16_t ns, uint16_t schem
     void *resp_data;
     int res;
 
-    app_debug(true, 0, "aura_db_broker_fetch: key: %s<><>", key->base);
     request = a_db_broker_construct_request(mc, ns, schema_id, key, NULL, &len);
     if (!request)
         return -1;
@@ -66,8 +67,9 @@ int aura_db_broker_fetch(struct aura_memory_ctx *mc, uint16_t ns, uint16_t schem
     return 0;
 }
 
-int aura_db_broker_insert(struct aura_memory_ctx *mc, uint16_t ns, uint16_t schema_id, uint64_t job_id, struct aura_iovec *key,
-                          struct aura_iovec *data, aura_db_exec_mode mode, struct aura_db_completion *cb, int dmn_fd) {
+int aura_db_broker_insert(struct aura_mem_ctx *mc, uint16_t ns, uint16_t schema_id, uint64_t job_id,
+                          struct aura_iovec *key, struct aura_iovec *data, aura_db_exec_mode mode,
+                          struct aura_db_completion *cb, int dmn_fd) {
     struct aura_db_broker_request *request;
     struct aura_msg_hdr msg_hdr;
     struct aura_msg msg;

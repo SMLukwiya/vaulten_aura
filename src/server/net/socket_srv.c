@@ -1,22 +1,8 @@
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
 #include "socket_srv.h"
-#include "bug_lib.h"
-#include "core.h"
 #include "error_lib.h"
-#include "evt_loop_srv.h"
-#include "h2/h2_srv.h"
 #include "server_srv.h"
-#include "slab_lib.h"
-#include "types_lib.h"
-#include "utils_lib.h"
 
-#include <netinet/tcp.h>
-
-#define USE_ACCEPT_4 1
-
-const struct aura_iovec aura_h2_alpn_protocols[] = {A_H2_APLN_PROTOCOLS};
+#define A_USE_ACCEPT_4
 
 static inline int a_set_no_tcp_delay_opt(int fd) {
     int on = 1;
@@ -30,7 +16,6 @@ int aura_sock_init(struct aura_srv_sock *sock, int fd, struct sockaddr *addr,
     memcpy(&sock->addr, addr, sizeof(*addr));
     sock->sock_fd = fd;
     sock->sock_len = addr_len;
-    sock->flags = flags;
     aura_set_fd_flag(sock->sock_fd, O_NONBLOCK | SOCK_NONBLOCK);
     res = a_set_no_tcp_delay_opt(fd);
     if (res != 0) {
@@ -50,12 +35,12 @@ int aura_socket_accept(struct aura_srv_sock *sock, int sock_fd, bool is_tls, int
     socklen_t cli_len = sizeof(cli_addr);
     int cli_fd;
 
-#ifdef USE_ACCEPT_4
+#ifdef A_USE_ACCEPT_4
     cli_fd = accept4(sock_fd, (struct sockaddr *)&cli_addr, &cli_len, SOCK_CLOEXEC | SOCK_NONBLOCK);
     if (cli_fd < 0)
         return -1;
 #else
-    if ((cli_fd = accept(server->sock_fd, (struct sockaddr *)&cli_addr, &cli_len)) < 0)
+    if ((cli_fd = accept(sock_fd, (struct sockaddr *)&cli_addr, &cli_len)) < 0)
         return NULL;
     aura_set_fd_flag(cli_fd, O_NONBLOCK);
     aura_set_fd_flag(cli_fd, FD_CLOEXEC);
@@ -74,7 +59,7 @@ ssize_t aura_read(int fd, void *buf, size_t len) {
     } while (n_read == -1 && errno == EINTR);
 
     if (n_read == -1) {
-        if (errno == EWOULDBLOCK) {
+        if (errno == EWOULDBLOCK || errno == EAGAIN) {
             return 0;
         } else {
             return -1;
@@ -99,19 +84,54 @@ ssize_t aura_write(int fd, void *buf, size_t len) {
         n_written = send(fd, buf, len, 0);
     } while (n_written == -1 && errno == EINTR);
 
-    if (n_written == -1) {
+    if (n_written != len) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return 0;
+            return n_written == -1 ? 0 : n_written;
         }
 
         sys_debug(true, errno, "aura write error");
         return -1;
     }
 
-    if (n_written == 0) {
-        sys_debug(true, errno, "write side closed");
-        return -1;
+    return n_written;
+}
+
+void aura_listener_pool_init(struct aura_srv_listener_pool *pool) {
+    memset(pool, 0, sizeof(*pool));
+}
+
+struct aura_srv_listener *aura_listener_conf_create(struct aura_srv_listener_pool *pool) {
+    struct aura_srv_listener *l;
+
+    if (pool->cnt >= pool->cap) {
+        pool->cap = pool->cap == 0 ? 5 : pool->cap * 2;
+        pool->entries = realloc(pool->entries, sizeof(*pool->entries) * pool->cap);
+        if (!pool->entries) {
+            return NULL;
+        }
     }
 
-    return n_written;
+    l = &pool->entries[pool->cnt++];
+    l->ev_src.ev_type = A_EV_TYPE_LISTENER;
+    return l;
+}
+
+void aura_listener_pool_destroy(struct aura_srv_listener_pool *pool) {
+    if (!pool)
+        return;
+
+    free(pool->entries);
+    memset(pool, 0, sizeof(*pool));
+}
+
+struct aura_ipc_peer *aura_ipc_peer_create(int fd) {
+    struct aura_ipc_peer *peer;
+
+    peer = calloc(1, sizeof(*peer));
+    if (!peer)
+        return NULL;
+
+    peer->ev_src.ev_type = A_EV_TYPE_IPC;
+    peer->fd = fd;
+    return peer;
 }

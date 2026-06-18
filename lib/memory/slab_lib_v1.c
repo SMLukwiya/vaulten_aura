@@ -68,7 +68,7 @@ static inline void a_calculate_sizes(struct aura_slab_cache *s) {
     s->slab_size = A_PAGE_SIZE << order;
 }
 
-struct aura_slab_cache *aura_slab_cache_create(struct aura_memory_ctx *m_ctx,
+struct aura_slab_cache *aura_slab_cache_create(struct aura_mem_ctx *m_ctx,
                                                uint8_t s_cache_id, const char *name,
                                                size_t obj_size, void (*ctor)(void *),
                                                uint32_t flags) {
@@ -91,11 +91,11 @@ struct aura_slab_cache *aura_slab_cache_create(struct aura_memory_ctx *m_ctx,
     s_cache->mem_ctx = m_ctx;
     a_calculate_sizes(s_cache);
 
-    a_list_head_init(&s_cache->cache_list);
-    a_list_head_init(&s_cache->full_list);
-    a_list_head_init(&s_cache->free_list);
-    a_list_head_init(&s_cache->partial_list);
-    a_list_add_tail(&m_ctx->slab_cache_list, &s_cache->cache_list);
+    aura_list_head_init(&s_cache->cache_list);
+    aura_list_head_init(&s_cache->full_list);
+    aura_list_head_init(&s_cache->free_list);
+    aura_list_head_init(&s_cache->partial_list);
+    aura_list_add_tail(&m_ctx->slab_cache_list, &s_cache->cache_list);
 
     return s_cache;
 }
@@ -182,7 +182,7 @@ struct aura_slab *a_slab_create(struct aura_slab_cache *sc) {
     // no debug stuff for now
 
     slab->slab_cache = sc;
-    a_list_head_init(&slab->slab_list);
+    aura_list_head_init(&slab->slab_list);
     obj_stride = sc->size;
 
     obj_start = a_setup_object(sc, obj_start);
@@ -197,7 +197,7 @@ struct aura_slab *a_slab_create(struct aura_slab_cache *sc) {
     sc->stats.total_memory += sc->slab_size + sizeof(*slab);
     /** @todo: calculate wasted memory */
     a_set_free_pointer(sc, p, NULL);
-    a_list_add_tail(&sc->free_list, &slab->slab_list);
+    aura_list_add_tail(&sc->free_list, &slab->slab_list);
 
     return slab;
 }
@@ -226,22 +226,24 @@ void aura_slab_cache_destroy(struct aura_slab_cache *sc) {
     if (unlikely(sc))
         return;
 
-    a_list_for_each_safe_to_delete(s, _s, &sc->free_list, slab_list) {
+    while (!aura_list_is_empty(&sc->free_list)) {
+        a_list_dequeue(s, &sc->free_list, slab_list);
         a_slab_destroy(s);
-        a_list_delete(&s->slab_list);
+        aura_list_delete(&s->slab_list);
     }
 
-    a_list_for_each_safe_to_delete(s, _s, &sc->partial_list, slab_list) {
+    while (!aura_list_is_empty(&sc->partial_list)) {
+        a_list_dequeue(s, &sc->partial_list, slab_list);
         a_slab_destroy(s);
-        a_list_delete(&s->slab_list);
+        aura_list_delete(&s->slab_list);
     }
 
-    a_list_for_each_safe_to_delete(s, _s, &sc->full_list, slab_list) {
+    while (!aura_list_is_empty(&sc->full_list)) {
+        a_list_dequeue(s, &sc->full_list, slab_list);
         a_slab_destroy(s);
-        a_list_delete(&s->slab_list);
+        aura_list_delete(&s->slab_list);
     }
-
-    a_list_delete(&sc->cache_list);
+    aura_list_delete(&sc->cache_list);
     free(sc);
 }
 
@@ -278,9 +280,9 @@ void *aura_slab_alloc(struct aura_slab_cache *sc) {
     void *obj, *next_free, *user_ptr;
 
     A_BUG_ON_2(!sc, true);
-    if (a_list_is_empty(&sc->partial_list)) {
+    if (aura_list_is_empty(&sc->partial_list)) {
         sc->stats.cache_misses++;
-        if (a_list_is_empty(&sc->free_list)) {
+        if (aura_list_is_empty(&sc->free_list)) {
             slab = a_slab_create(sc);
         } else {
             slab = a_list_first_entry(&sc->free_list, struct aura_slab, slab_list);
@@ -289,8 +291,8 @@ void *aura_slab_alloc(struct aura_slab_cache *sc) {
          * If we were on the free list,
          * we move to the partial list
          */
-        a_list_delete(&slab->slab_list);
-        a_list_add_tail(&sc->partial_list, &slab->slab_list);
+        aura_list_delete(&slab->slab_list);
+        aura_list_add_tail(&sc->partial_list, &slab->slab_list);
     } else {
         slab = a_list_first_entry(&sc->partial_list, struct aura_slab, slab_list);
     }
@@ -304,8 +306,8 @@ void *aura_slab_alloc(struct aura_slab_cache *sc) {
     A_BUG_ON_2(slab->in_use > sc->objs_per_slab, true);
 
     if (slab->in_use == sc->objs_per_slab) {
-        a_list_delete(&slab->slab_list);
-        a_list_add_tail(&sc->full_list, &slab->slab_list);
+        aura_list_delete(&slab->slab_list);
+        aura_list_add_tail(&sc->full_list, &slab->slab_list);
     }
 
     sc->stats.total_allocations++;
@@ -403,16 +405,16 @@ void aura_slab_free(void *ptr) {
 
     if (slab->in_use == sc->objs_per_slab) {
         /* If we were in full list, move to partial */
-        a_list_delete(&slab->slab_list);
-        a_list_add_tail(&sc->partial_list, &slab->slab_list);
+        aura_list_delete(&slab->slab_list);
+        aura_list_add_tail(&sc->partial_list, &slab->slab_list);
     } else if (slab->in_use == 1) {
-        a_list_delete(&slab->slab_list);
-        a_list_add_tail(&sc->free_list, &slab->slab_list);
+        aura_list_delete(&slab->slab_list);
+        aura_list_add_tail(&sc->free_list, &slab->slab_list);
     }
     slab->in_use--;
 }
 
-int aura_create_dynamic_slab_alloc_caches(struct aura_memory_ctx *m_ctx) {
+int aura_create_dynamic_slab_alloc_caches(struct aura_mem_ctx *m_ctx) {
     struct aura_slab_cache *sc;
     struct aura_slab *slab;
     uint32_t i, idx, max_size, obj_size;
@@ -440,7 +442,7 @@ int aura_create_dynamic_slab_alloc_caches(struct aura_memory_ctx *m_ctx) {
     return 0;
 }
 
-void *aura_alloc(struct aura_memory_ctx *mc, size_t size) {
+void *aura_alloc(struct aura_mem_ctx *mc, size_t size) {
     struct aura_slab_cache *sc;
     uint32_t index;
     void *ptr;
@@ -470,15 +472,19 @@ void *aura_alloc(struct aura_memory_ctx *mc, size_t size) {
     return ptr;
 }
 
-/** @todo: edge case, when switching over underlying systems, ensure data is copied over correctly */
-void *aura_realloc(struct aura_memory_ctx *mc, void *ptr, size_t size) {
+/* correct the pointer to its original value */
+static inline void *a_slab_realloc_get_correct_pointer(void *ptr) {
+    return ptr - (A_OBJECT_HEADER_SIZE + A_REDZONE_SIZE);
+}
+
+void *aura_realloc(struct aura_mem_ctx *mc, void *ptr, size_t size) {
     struct aura_slab_cache *sc;
     uint32_t index;
     void *_ptr;
     struct aura_object_hdr *hdr;
     size_t old_size;
 
-    if (ptr == NULL)
+    if (!ptr)
         return aura_alloc(mc, size);
 
     hdr = (struct aura_object_hdr *)(((char *)ptr) - A_OBJECT_HEADER_SIZE - A_REDZONE_SIZE);
@@ -487,7 +493,7 @@ void *aura_realloc(struct aura_memory_ctx *mc, void *ptr, size_t size) {
 
     if (index > 15) {
         if (hdr->mem_ctx == NULL) {
-            _ptr = realloc(ptr, size + A_OBJECT_HEADER_SIZE + A_REDZONE_SIZE);
+            _ptr = realloc(a_slab_realloc_get_correct_pointer(ptr), size + A_OBJECT_HEADER_SIZE + A_REDZONE_SIZE);
         } else {
             /* switching to malloc */
             _ptr = malloc(size + A_OBJECT_HEADER_SIZE + A_REDZONE_SIZE);
@@ -497,10 +503,11 @@ void *aura_realloc(struct aura_memory_ctx *mc, void *ptr, size_t size) {
         hdr = (struct aura_object_hdr *)_ptr;
         hdr->mem_ctx == NULL;
         hdr->size = size;
+        _ptr += A_OBJECT_HEADER_SIZE + A_REDZONE_SIZE;
     } else {
         if (hdr->mem_ctx == NULL) {
             _ptr = aura_alloc(mc, size);
-            memcpy(_ptr, ptr, old_size);
+            memcpy(_ptr, a_slab_realloc_get_correct_pointer(ptr), old_size);
             free(ptr);
         } else {
             _ptr = aura_alloc(mc, size);
@@ -523,7 +530,7 @@ void aura_free(void *ptr) {
     hdr = (struct aura_object_hdr *)(((char *)ptr) - A_OBJECT_HEADER_SIZE - A_REDZONE_SIZE);
     if (hdr->mem_ctx == NULL) {
         /* malloc allocated */
-        ptr -= (A_OBJECT_HEADER_SIZE + A_REDZONE_SIZE);
+        ptr = a_slab_realloc_get_correct_pointer(ptr);
         free(ptr);
     } else {
         aura_slab_free(ptr);

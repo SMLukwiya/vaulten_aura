@@ -1,4 +1,5 @@
 #include "connection.h"
+#include "core.h"
 #include "error_lib.h"
 #include "evt_loop_srv.h"
 #include "picotls.h"
@@ -25,7 +26,7 @@ static void aura_epoll_init(struct aura_evt_loop *evt_loop) {
     if (epoll->epoll_fd < 0)
         sys_exit(true, errno, "aura_epoll_init: epoll_create1() error:");
 
-    epoll->ep_events = malloc(evt_loop->max_fds * sizeof(struct epoll_event));
+    epoll->ep_events = calloc(1, evt_loop->max_fds * sizeof(struct epoll_event));
     if (!epoll->ep_events)
         sys_exit(true, errno, "aura_epoll_init: ep_events error:");
 
@@ -47,7 +48,7 @@ static void aura_epoll_destroy(struct aura_evt_loop *evt_loop) {
 /**
  *
  */
-int aura_epoll_add(struct aura_evt_loop *evt_loop, int fd, int events) {
+int aura_epoll_add(struct aura_evt_loop *evt_loop, int fd, void *data, int events) {
     struct aura_epoll_data *epoll = evt_loop->backend;
     struct epoll_event ep_ev;
     int res;
@@ -57,7 +58,7 @@ int aura_epoll_add(struct aura_evt_loop *evt_loop, int fd, int events) {
         return -1;
     }
     memset(&ep_ev, 0, sizeof(ep_ev));
-    ep_ev.data.fd = fd;
+    ep_ev.data.ptr = data;
 
     if (events & AURA_EVENT_READ)
         ep_ev.events |= EPOLLIN;
@@ -73,7 +74,7 @@ int aura_epoll_add(struct aura_evt_loop *evt_loop, int fd, int events) {
 /**
  *
  */
-static int aura_epoll_modify(struct aura_evt_loop *evt_loop, int fd, int events) {
+static int aura_epoll_modify(struct aura_evt_loop *evt_loop, int fd, void *data, int events) {
     struct aura_epoll_data *epoll = evt_loop->backend;
     struct epoll_event ep_ev;
     int res;
@@ -83,7 +84,7 @@ static int aura_epoll_modify(struct aura_evt_loop *evt_loop, int fd, int events)
         return -1;
     }
     memset(&ep_ev, 0, sizeof(ep_ev));
-    ep_ev.data.fd = fd;
+    ep_ev.data.ptr = data;
 
     if (events & AURA_EVENT_READ)
         ep_ev.events |= EPOLLIN;
@@ -116,15 +117,14 @@ int aura_epoll_remove(struct aura_evt_loop *evt_loop, int fd) {
     return res;
 }
 
-/**
- *
- */
+/**/
 int aura_epoll_poll(struct aura_evt_loop *evt_loop, int64_t timeout_ms, uint32_t max_accept) {
     int num_of_events, fd, rv;
     struct aura_conn *conn;
-    struct aura_srv_listener *listener;
     struct aura_epoll_data *epoll = evt_loop->backend;
     struct epoll_event ev;
+    struct aura_evt_source *ev_src;
+    struct aura_srv_listener *listener;
 
     num_of_events = epoll_wait(epoll->epoll_fd, epoll->ep_events, evt_loop->max_fds, timeout_ms);
     if (num_of_events < 0 && errno != EINTR)
@@ -132,15 +132,21 @@ int aura_epoll_poll(struct aura_evt_loop *evt_loop, int64_t timeout_ms, uint32_t
 
     for (int i = 0; i < num_of_events; ++i) {
         ev = epoll->ep_events[i];
-        fd = ev.data.fd;
+        /**
+         * cast to evt_source structure as
+         * evt_source is the first field on an epoll
+         * attached structure
+         */
+        ev_src = (struct aura_evt_source *)ev.data.ptr;
 
-        if (fd == evt_loop->dmn_fd && (ev.events & EPOLLIN)) {
-            evt_loop->srv_ctx->internal = true;
-            evt_loop->ops->remove(evt_loop, fd);
-            continue;
-        }
+        switch (ev_src->ev_type) {
+        case A_EV_TYPE_IPC:
+            if (ev.events & EPOLLIN)
+                aura_set_internal_request_active(evt_loop->srv_ctx);
+            break;
 
-        if ((listener = aura_check_if_listener(evt_loop->srv_ctx->listener_conf, fd)) != NULL) {
+        case A_EV_TYPE_LISTENER:
+            listener = (struct aura_srv_listener *)ev_src;
             for (int j = 0; j < max_accept; ++j) {
                 if (!listener->on_event)
                     continue;
@@ -155,31 +161,28 @@ int aura_epoll_poll(struct aura_evt_loop *evt_loop, int64_t timeout_ms, uint32_t
                     break;
                 }
             }
-            continue;
-        }
+            break;
 
-        conn = evt_loop->srv_ctx->glob_conf->conn_map[fd];
-        if (!conn) /* should not happen */ {
-            continue;
-        }
+        case A_EV_TYPE_CONN:
+            conn = (struct aura_conn *)ev_src;
 
-        /* Error or Hangup - immediate critical */
-        if (epoll->ep_events[i].events & (EPOLLERR | EPOLLHUP)) {
-            /* Remove from whatever list it was previously on */
-            a_list_delete(&conn->c_list);
-            aura_conn_transition_state(conn, A_CONN_STATE_CLOSING);
-            evt_loop->ops->remove(evt_loop, fd);
-            a_list_add_tail(&evt_loop->srv_ctx->queues.reap, &conn->c_list);
-            continue;
-        }
+            /* Error or Hangup - immediate critical */
+            if (ev.events & (EPOLLERR | EPOLLHUP)) {
+                /* Remove from whatever list it was previously on */
+                aura_conn_transition_state(conn, A_CONN_STATE_CLOSING);
+                evt_loop->ops->remove(evt_loop, fd);
+                aura_list_move(&evt_loop->srv_ctx->queues.reap, &conn->c_list);
+                break;
+            }
 
-        if (ev.events & EPOLLIN || ev.events & EPOLLOUT) {
-            /* delete from whatever queue (even if it's already in the right queue) */
-            a_list_delete(&conn->c_list);
-            /* Add to appropriate queue */
-            conn->in_active = true;
-            conn->in_reap = false;
-            a_list_add_tail(&evt_loop->srv_ctx->queues.active, &conn->c_list);
+            if (ev.events & EPOLLIN || ev.events & EPOLLOUT) {
+                /**/
+            }
+            break;
+
+        case A_EV_TYPE_NONE:
+            app_debug(true, 0, "aura_epoll_poll: unknown event type: %d", ev_src->ev_type);
+            break;
         }
     }
 }
@@ -188,10 +191,10 @@ int aura_epoll_poll(struct aura_evt_loop *evt_loop, int64_t timeout_ms, uint32_t
  *
  */
 const struct aura_evt_loop_ops epoll_ops = {
+  .init = aura_epoll_init,
   .add = aura_epoll_add,
   .destroy = aura_epoll_destroy,
-  .init = aura_epoll_init,
-  .modify = aura_epoll_add,
+  .modify = aura_epoll_modify,
   .remove = aura_epoll_remove,
   .poll = aura_epoll_poll,
 };

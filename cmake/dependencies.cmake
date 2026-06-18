@@ -30,18 +30,13 @@ target_compile_definitions(quickjs
 
 target_include_directories(quickjs
     PUBLIC ${PROJECT_SOURCE_DIR}/deps/quickjs
-    
 )
 
+# Link math lib to quickjs
 target_link_libraries(quickjs PUBLIC m)
 
 # Picotls
 add_subdirectory(${PROJECT_SOURCE_DIR}/deps/picotls
-    EXCLUDE_FROM_ALL
-)
-
-# Libyaml
-add_subdirectory(${PROJECT_SOURCE_DIR}/deps/libyaml
     EXCLUDE_FROM_ALL
 )
 
@@ -51,6 +46,43 @@ include_directories(
     deps/picotls/deps/cifra/src/ext
     deps/picotls/deps/cifra/src
     deps/picotls/deps/micro-ecc
+)
+
+# Libyaml
+# Libyaml fails to build for it's current version < 3
+# so we replace it with 3.10
+function(patch_libyaml_cmake)
+    set(LIBYAML_CMAKELISTS_FILE "${PROJECT_SOURCE_DIR}/deps/libyaml/CMakeLists.txt")
+
+    if(EXISTS "${LIBYAML_CMAKELISTS_FILE}")
+        file(READ "${LIBYAML_CMAKELISTS_FILE}" contents)
+
+        if(contents MATCHES "cmake_minimum_required\\(VERSION ([0-9]+(\\.[0-9]+)?)")
+            set(CURRENT_VERSION "${CMAKE_MATCH_1}")
+            
+            if(CURRENT_VERSION VERSION_LESS "3.10")
+                string(REGEX REPLACE
+                    "cmake_minimum_required\\(VERSION [^)]*\\)"
+                    "cmake_minimum_required(VERSION 3.10)"
+                    contents
+                    "${contents}")
+
+                file(WRITE "${LIBYAML_CMAKELISTS_FILE}" "${contents}")
+                message(STATUS "Patched libyaml from ${CURRENT_VERSION} to 3.10")
+            else()
+                message(STATUS "libyaml CMake version ${CURRENT_VERSION} is sufficient")
+            endif()
+        else()
+            message(WARNING "Could not find cmake_minimum_required in libyaml")
+        endif()
+    else()
+        message(WARNING "libyaml CMakeLists.txt not found")
+    endif()
+endfunction()
+
+patch_libyaml_cmake()
+add_subdirectory(${PROJECT_SOURCE_DIR}/deps/libyaml
+    EXCLUDE_FROM_ALL
 )
 
 set(BUILD_TESTING ${OLD_BUILD_TESTING} CACHE BOOL "" FORCE)

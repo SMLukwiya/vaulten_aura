@@ -2,6 +2,8 @@
 #define AURA_SRV_TASK_H
 
 #include "error_lib.h"
+#include "h2/stream.h"
+#include "header_srv.h"
 #include "list_lib.h"
 #include "memory_lib.h"
 #include "time_lib.h"
@@ -24,17 +26,18 @@ struct aura_task {
     a_task_protocol_t protocol;
     void *req_data;
     void *res_data;
-    void *stream;
-    void *conn;
+    uint32_t stream_id;
+    uint32_t conn_idx;
+    uint32_t conn_id;
     struct aura_list_head t_list;
     uint64_t started_at;
     uint64_t completed_at;
 };
 
 /* init task */
-struct aura_task *aura_task_create(struct aura_memory_ctx *mc, uint64_t next_id, void *conn,
-                                   void *stream, a_task_protocol_t prot, char *url, int method,
-                                   struct aura_header_vector *headers, char *body, size_t body_len);
+struct aura_task *aura_task_create(struct aura_h2_stream *stream, struct aura_mem_ctx *mc,
+                                   uint8_t *url, uint64_t next_id, uint32_t conn_id,
+                                   uint32_t conn_idx, a_task_protocol_t prot);
 
 /* destroy task */
 void aura_task_destroy(struct aura_task *task);

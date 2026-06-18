@@ -19,10 +19,9 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/db/db.c
     ${vaulten_aura_SOURCE_DIR}/lib/db/db_broker.c
     ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
-    # ${vaulten_aura_SOURCE_DIR}/lib/runtime_lib.c # remove this once I have a good place to put quickjs and other runtime stuff
     ${vaulten_aura_SOURCE_DIR}/lib/function_v1_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/memory_lib_v1.c
-    ${vaulten_aura_SOURCE_DIR}/lib/slab_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory/memory_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory/slab_lib_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
 )
 
@@ -54,6 +53,8 @@ target_link_libraries(aura_daemon
 
 target_include_directories(aura_daemon
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib/memory
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib
     PRIVATE ${PROJECT_INCLUDE_DIR}
 )
 

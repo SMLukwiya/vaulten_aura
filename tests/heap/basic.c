@@ -1,115 +1,138 @@
 #include "heap_lib.h"
+#include "list_lib.h"
 #include <assert.h>
 #include <stdlib.h>
 
-#define HP_CAP 10
+struct aura_mem_ctx mc;
 
 struct hp_testnode {
     int priority;
-    char name[16];
+    struct aura_heap_ent hp_ent;
 };
 
-static int a_hp_test_compare_fn(const void *elem1, const void *elem2) {
-    struct hp_testnode *_elem1, *_elem2;
-
-    _elem1 = (struct hp_testnode *)elem1;
-    _elem2 = (struct hp_testnode *)elem2;
-
-    return _elem1->priority - _elem2->priority;
+static void a_test_resources_create(void) {
+    aura_mem_ctx_init(&mc);
+    assert(aura_create_dynamic_slab_alloc_caches(&mc) == 0);
 }
 
-void a_hp_test_destructor_fn(const void *elem) {
-    /**
-     * This check for elem seems redundant, but just in case
-     */
+static void a_test_resources_destroy() {
+    aura_mem_ctx_destroy(&mc);
+}
+
+/* compare function */
+static int a_cmp_fn(struct aura_heap_ent *_e1, struct aura_heap_ent *_e2) {
+    struct hp_testnode *e1, *e2;
+
+    e1 = aura_container_of(_e1, struct hp_testnode, hp_ent);
+    e2 = aura_container_of(_e2, struct hp_testnode, hp_ent);
+
+    return e1->priority - e2->priority;
+}
+
+/* destructor function */
+void a_dtor_fn(const void *elem) {
     if (elem)
-        free((void *)elem);
+        aura_free((void *)elem);
 }
 
 static void a_test_max_heap_insert_delete(void) {
     struct aura_heap *hp;
+    struct aura_heap_ent *e;
     struct hp_testnode *node;
 
     int priorities[] = {20, 40, 30, 5, 10};
 
-    hp = aura_heap_create(5, a_hp_test_compare_fn);
+    hp = aura_alloc(&mc, sizeof(*hp));
     assert(hp != NULL);
+
+    assert(aura_heap_init(hp, &mc, 5, a_cmp_fn, A_HP_TYPE_MAX_HEAP) == 0);
     assert(hp->size == 0);
-    assert(hp->cap == 6); /* 5+1 for 1 indexed array */
+    assert(hp->cap == 5);
 
     /* INSERT */
     for (int i = 0; i < 5; ++i) {
-        node = malloc(sizeof(struct hp_testnode));
+        node = aura_alloc(&mc, sizeof(struct hp_testnode));
         node->priority = priorities[i];
-        bool rv = aura_max_heap_push(hp, (void *)node);
-        assert(rv == true);
+        assert(aura_heap_push(hp, &node->hp_ent) == 0);
     }
 
     /* ORDER */
     int largest_value = 40;
-    node = (struct hp_testnode *)aura_max_heap_delete(hp);
+    e = aura_heap_pop(hp);
+    node = aura_container_of(e, struct hp_testnode, hp_ent);
     assert(node->priority == largest_value);
-    free(node);
+    a_dtor_fn(node);
 
     largest_value = 30;
-    node = (struct hp_testnode *)aura_max_heap_delete(hp);
+    e = aura_heap_pop(hp);
+    node = aura_container_of(e, struct hp_testnode, hp_ent);
     assert(node->priority == largest_value);
-    free(node);
+    a_dtor_fn(node);
 
     while (hp->size > 0) {
-        node = (struct hp_testnode *)aura_max_heap_delete(hp);
-        assert(node != NULL);
+        e = aura_heap_pop(hp);
+        assert(e != NULL);
+        node = aura_container_of(e, struct hp_testnode, hp_ent);
         assert(node->priority <= largest_value);
         largest_value = node->priority;
-        free(node);
+        a_dtor_fn(node);
     }
 
-    aura_heap_destroy(hp, a_hp_test_destructor_fn);
+    aura_heap_destroy(hp);
 }
 
 static void a_test_min_heap_insert_delete(void) {
     struct aura_heap *hp;
+    struct aura_heap_ent *e;
     struct hp_testnode *node;
 
     int priorities[] = {20, 40, 30, 5, 10};
 
-    hp = aura_heap_create(5, a_hp_test_compare_fn);
+    hp = aura_alloc(&mc, sizeof(*hp));
     assert(hp != NULL);
+
+    assert(aura_heap_init(hp, &mc, 5, a_cmp_fn, A_HP_TYPE_MIN_HEAP) == 0);
     assert(hp->size == 0);
-    assert(hp->cap == 6);
+    assert(hp->cap == 5);
 
     /* INSERT */
     for (int i = 0; i < 5; ++i) {
-        node = malloc(sizeof(struct hp_testnode));
+        node = aura_alloc(&mc, sizeof(struct hp_testnode));
         node->priority = priorities[i];
-        bool rv = aura_min_heap_push(hp, (void *)node);
-        assert(rv == true);
+        assert(aura_heap_push(hp, &node->hp_ent) == 0);
     }
 
     /* ORDER */
     int smallest_value = 5;
-    node = (struct hp_testnode *)aura_min_heap_delete(hp);
+    e = aura_heap_pop(hp);
+    assert(e != NULL);
+    node = aura_container_of(e, struct hp_testnode, hp_ent);
     assert(node->priority == smallest_value);
-    free(node);
+    a_dtor_fn(node);
 
     smallest_value = 10;
-    node = (struct hp_testnode *)aura_min_heap_delete(hp);
+    e = aura_heap_pop(hp);
+    assert(e != NULL);
+    node = aura_container_of(e, struct hp_testnode, hp_ent);
     assert(node->priority == smallest_value);
-    free(node);
+    a_dtor_fn(node);
 
     while (hp->size > 0) {
-        node = (struct hp_testnode *)aura_min_heap_delete(hp);
-        assert(node != NULL);
+        e = aura_heap_pop(hp);
+        assert(e != NULL);
+        node = aura_container_of(e, struct hp_testnode, hp_ent);
         assert(node->priority >= smallest_value);
         smallest_value = node->priority;
-        free(node);
+        a_dtor_fn(node);
     }
 
-    aura_heap_destroy(hp, a_hp_test_destructor_fn);
+    aura_heap_destroy(hp);
 }
 
 int main(int argc, char **argv) {
+    a_test_resources_create();
     a_test_max_heap_insert_delete();
     a_test_min_heap_insert_delete();
+    a_test_resources_destroy();
     return 0;
 }

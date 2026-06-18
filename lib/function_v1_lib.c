@@ -113,7 +113,7 @@ struct aura_functions *aura_fn_list_fetch(AURA_DBHANDLE db, int *error) {
     return fns;
 }
 
-struct aura_functions *aura_fn_list_fetch_broker(struct aura_memory_ctx *mc, int dmn_sock_fd, int *error) {
+struct aura_functions *aura_fn_list_fetch_broker(struct aura_mem_ctx *mc, int dmn_sock_fd, int *error) {
     struct aura_functions *fns;
     struct aura_iovec key, data_out;
     int res;
@@ -131,7 +131,7 @@ struct aura_functions *aura_fn_list_fetch_broker(struct aura_memory_ctx *mc, int
     return fns;
 }
 
-int aura_fn_list_add(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *fn_name,
+int aura_fn_list_add(AURA_DBHANDLE db, struct aura_mem_ctx *mc, const char *fn_name,
                      uint32_t fn_version, uint64_t job_id, struct aura_db_completion *comp) {
     struct aura_functions *fns;
     struct aura_iovec key;
@@ -166,7 +166,17 @@ int aura_fn_list_add(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *f
         fns->funcs[0].job_id = job_id;
         fns->func_cnt = 1;
 
-        res = aura_db_record_insert(db, A_DB_NS_FN, A_DB_SCHEMA_FNS, job_id, 0, A_DB_OP_INSERT, key_ptr, data_ptr, A_DB_EXEC_ASYNC, comp);
+        res = aura_db_record_insert(
+          db,
+          A_DB_NS_FN,
+          A_DB_SCHEMA_FNS,
+          job_id,
+          0,
+          A_DB_OP_INSERT,
+          key_ptr,
+          data_ptr,
+          A_DB_EXEC_ASYNC,
+          comp);
         if (res != 0) {
             aura_iovec_destroy(key_ptr);
             aura_iovec_destroy(data_ptr);
@@ -203,7 +213,17 @@ int aura_fn_list_add(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *f
     fns_ptr->funcs[fns_ptr->func_cnt].job_id = job_id;
     fns_ptr->func_cnt++;
 
-    res = aura_db_record_insert(db, A_DB_NS_FN, A_DB_SCHEMA_FNS, job_id, 0, A_DB_OP_INSERT, key_ptr, data_ptr, A_DB_EXEC_ASYNC, comp);
+    res = aura_db_record_insert(
+      db,
+      A_DB_NS_FN,
+      A_DB_SCHEMA_FNS,
+      job_id,
+      0,
+      A_DB_OP_INSERT,
+      key_ptr,
+      data_ptr,
+      A_DB_EXEC_ASYNC,
+      comp);
     if (res != 0) {
         aura_iovec_destroy(key_ptr);
         aura_iovec_destroy(data_ptr);
@@ -220,7 +240,7 @@ out:
     return rv;
 }
 
-int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_memory_ctx *mc, uint64_t job_id,
+int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_mem_ctx *mc, uint64_t job_id,
                         const char *fn_name, uint32_t fn_version, struct aura_db_completion *comp) {
     struct aura_functions *fns;
     struct aura_iovec key;
@@ -284,7 +304,17 @@ int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_memory_ctx *mc, uint64_t j
     }
     fns_ptr->func_cnt = fns->func_cnt - 1;
 
-    res = aura_db_record_insert(db, A_DB_NS_FN, A_DB_SCHEMA_FNS, job_id, 0, A_DB_OP_INSERT, key_ptr, data_ptr, A_DB_EXEC_ASYNC, comp);
+    res = aura_db_record_insert(
+      db,
+      A_DB_NS_FN,
+      A_DB_SCHEMA_FNS,
+      job_id,
+      0,
+      A_DB_OP_INSERT,
+      key_ptr,
+      data_ptr,
+      A_DB_EXEC_ASYNC,
+      comp);
     if (res != 0) {
         aura_iovec_destroy(key_ptr);
         aura_iovec_destroy(data_ptr);
@@ -309,7 +339,6 @@ int aura_fn_meta_parse(void *meta, struct aura_fn_meta *fn_meta) {
     uint32_t kv_cnt, kv_idx, arr_cnt, arr_idx;
     const char *kv_key, *kv_val;
 
-    app_debug(true, 0, "aura_fn_meta_parse: %p<<<<", meta);
     if (!meta)
         return -1;
 
@@ -500,7 +529,6 @@ int aura_fn_config_parse(void *config, struct aura_fn_config *fn_config) {
     uint32_t kv_cnt, kv_idx, arr_cnt, arr_idx;
     const char *kv_key, *kv_val;
 
-    app_debug(true, 0, "aura_fn_config_parse: %p<<<<", config);
     if (!config)
         return -1;
 
@@ -646,7 +674,8 @@ void aura_fn_destroy(struct aura_fn *fn) {
     aura_free(fn->fn_code);
 }
 
-struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *fn_name, uint32_t fn_version, int *error) {
+struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
+                                            const char *fn_name, uint32_t fn_version, int *error) {
     struct aura_fn_petite *fn_petite;
     struct aura_functions *fns;
     struct aura_iovec key, data;
@@ -726,7 +755,8 @@ struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, struct aura_memory
     return (struct aura_fn_petite *)data.base;
 }
 
-struct aura_fn_petite *aura_fn_petite_fetch_broker(struct aura_memory_ctx *mc, const char *fn_name, uint32_t fn_version, int sock_fd) {
+struct aura_fn_petite *aura_fn_petite_fetch_broker(struct aura_mem_ctx *mc, const char *fn_name,
+                                                   uint32_t fn_version, int sock_fd) {
     struct aura_fn_petite *fn_petite;
     struct aura_db_rec *rec;
     struct aura_iovec key, data_out;
@@ -842,7 +872,8 @@ struct aura_iovec aura_fn_state_fetch(AURA_DBHANDLE db, const char *fn_name, uin
     return state;
 }
 
-struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *fn_name, uint32_t fn_version) {
+struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
+                             const char *fn_name, uint32_t fn_version) {
     struct aura_fn *fn;
     struct aura_iovec key;
     struct aura_db_rec rec;
@@ -928,7 +959,8 @@ struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const
     return fn;
 }
 
-struct aura_fn *aura_fn_load_broker(struct aura_memory_ctx *mc, const char *fn_name, uint32_t fn_version, int sock_fd) {
+struct aura_fn *aura_fn_load_broker(struct aura_mem_ctx *mc, const char *fn_name,
+                                    uint32_t fn_version, int sock_fd) {
     struct aura_fn *fn;
     struct aura_iovec key, data_out;
     char buf[2000];
@@ -1029,7 +1061,8 @@ struct aura_fn_stat *aura_fn_stat_fetch(AURA_DBHANDLE db, const char *fn_name, u
     return (struct aura_fn_stat *)rec.data.base;
 }
 
-struct aura_fn_stat *aura_fn_stat_fetch_broker(struct aura_memory_ctx *mc, const char *fn_name, uint32_t fn_version, int dmn_fd) {
+struct aura_fn_stat *aura_fn_stat_fetch_broker(struct aura_mem_ctx *mc, const char *fn_name,
+                                               uint32_t fn_version, int dmn_fd) {
     struct aura_fn_stat *fn_stat;
     struct aura_iovec key, data_out;
     char buf[2000];
@@ -1048,12 +1081,12 @@ struct aura_fn_stat *aura_fn_stat_fetch_broker(struct aura_memory_ctx *mc, const
     return fn_stat;
 }
 
-int aura_fn_stat_compare(const void *s1, const void *s2) {
+int aura_fn_stat_compare(struct aura_heap_ent *s1, struct aura_heap_ent *s2) {
     struct aura_fn_stat_wrapper *_s1;
     struct aura_fn_stat_wrapper *_s2;
 
-    _s1 = (struct aura_fn_stat_wrapper *)s1;
-    _s2 = (struct aura_fn_stat_wrapper *)s2;
+    _s1 = aura_container_of(s1, struct aura_fn_stat_wrapper, hp_ent);
+    _s2 = aura_container_of(s2, struct aura_fn_stat_wrapper, hp_ent);
 
     return _s1->fn_stat->invocations - _s2->fn_stat->invocations;
 }

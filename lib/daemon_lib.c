@@ -9,20 +9,20 @@
 
 void re_read_config() {}
 
-static inline int do_cleanup(char *pid_file) {
+static inline int a_do_cleanup(char *pid_file) {
     unlink(pid_file);
 }
 
-void aura_terminate(int signo) {
-    do_cleanup(AURA_PID);
+static void aura_dmn_terminate(int signo) {
+    a_do_cleanup(AURA_PID);
     exit(0);
 }
 
-void sighup(int signo) {
+void aura_dmn_sighup(int signo) {
     re_read_config();
 }
 
-void daemonize(const char *command, int keep_fds[], int keep_fd_count) {
+void aura_daemonize(const char *command, int keep_fds[], int keep_fd_count) {
     int i, fd, null_fd;
     pid_t pid;
     bool keep_fd;
@@ -55,7 +55,7 @@ void daemonize(const char *command, int keep_fds[], int keep_fd_count) {
     /* try to handle shutdown request gracefully */
     sigemptyset(&term_sa.sa_mask);
     term_sa.sa_flags = 0;
-    term_sa.sa_handler = aura_terminate;
+    term_sa.sa_handler = aura_dmn_terminate;
 
     if (sigaction(SIGTERM, &term_sa, NULL) < 0)
         exit(1);
@@ -93,12 +93,12 @@ void daemonize(const char *command, int keep_fds[], int keep_fd_count) {
 /**
  * check if daemon already has an instance running
  */
-pid_t already_running(int fd) {
-    return a_is_write_lockable(fd, 0, SEEK_SET, 0) != 1;
+bool aura_dmn_running(int fd) {
+    return !a_is_write_lockable(fd, 0, SEEK_SET, 0);
 }
 
 /* try and lock pid file */
-int set_pid_lock(int fd) {
+int aura_dmn_set_pid_lock(int fd) {
     char buf[16];
 
     if (a_lockfile(fd) < 0) {

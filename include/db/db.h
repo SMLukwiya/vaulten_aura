@@ -152,21 +152,25 @@ struct aura_db_job_step_rec {
 };
 
 /** Create or open a database */
-AURA_DBHANDLE aura_db_open(struct aura_memory_ctx *mc, const char *app_path, const char *db_pathname, int oflag, ...);
+AURA_DBHANDLE aura_db_open(struct aura_mem_ctx *mc, const char *app_path, const char *db_pathname, int oflag, ...);
 
 /**Store record with key and value into db */
-ssize_t aura_db_record_insert(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id, uint64_t job_id, uint64_t prev_job_rec, aura_db_op op,
-                              struct aura_iovec *key, struct aura_iovec *data, aura_db_exec_mode exec_mode, struct aura_db_completion *completion);
+ssize_t aura_db_record_insert(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id, uint64_t job_id,
+                              uint64_t prev_job_rec, aura_db_op op, struct aura_iovec *key,
+                              struct aura_iovec *data, aura_db_exec_mode exec_mode,
+                              struct aura_db_completion *completion);
 
 /** Close db release associated resources */
 void aura_db_close(AURA_DBHANDLE);
 
 /** Retrieve a record */
-int aura_db_record_fetch(AURA_DBHANDLE db, uint16_t namespace, uint16_t schema_id, struct aura_iovec *key, struct aura_db_rec *data_out);
+int aura_db_record_fetch(AURA_DBHANDLE db, uint16_t namespace, uint16_t schema_id,
+                         struct aura_iovec *key, struct aura_db_rec *data_out);
 
 /** Delete a record */
 int aura_db_record_delete(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id, uint64_t job_id,
-                          struct aura_iovec *key, aura_db_exec_mode exec_mode, struct aura_db_completion *comp);
+                          struct aura_iovec *key, aura_db_exec_mode exec_mode,
+                          struct aura_db_completion *comp);
 
 /* Get database true size */
 size_t aura_db_get_size(AURA_DBHANDLE db);
@@ -196,12 +200,14 @@ struct aura_db_job_rec *aura_db_job_fetch(AURA_DBHANDLE _db, uint64_t job_id, in
 
 /**/
 int aura_db_job_step_insert(AURA_DBHANDLE _db, uint64_t job_id, uint32_t job_type, uint8_t step,
-                            struct aura_iovec *target, aura_db_exec_mode exec_mode, struct aura_db_completion *comp);
+                            struct aura_iovec *target, aura_db_exec_mode exec_mode,
+                            struct aura_db_completion *comp);
 
 /**/
 int aura_db_job_update(AURA_DBHANDLE _db, uint64_t job_id, uint16_t state, int error, uint64_t rec_off,
                        aura_db_exec_mode exec_mode, struct aura_db_completion *comp);
 
 /**/
-struct aura_db_job_step_rec *aura_db_job_step_fetch(AURA_DBHANDLE _db, uint16_t job_type, struct aura_iovec *target);
+struct aura_db_job_step_rec *aura_db_job_step_fetch(AURA_DBHANDLE _db, uint16_t job_type,
+                                                    struct aura_iovec *target);
 #endif /* AURA_DB_H */

@@ -20,7 +20,7 @@ static inline int a_url_find_prev_slash(char *path, size_t len) {
     return 0;
 }
 
-struct aura_iovec aura_url_path_normalize(struct aura_memory_ctx *mc, char *path, size_t len) {
+struct aura_iovec aura_url_path_normalize(struct aura_mem_ctx *mc, char *path, size_t len) {
     char *src, *dest;
     struct aura_iovec normalized_path;
     size_t off, dest_off, prev_slash;
@@ -103,7 +103,7 @@ static int a_parse_scheme(const uint8_t *src, size_t len, int *scheme) {
     return rv;
 }
 
-static int a_parse_authority(struct aura_memory_ctx *mc, char *src, size_t len, struct aura_url *url) {
+static int a_parse_authority(struct aura_mem_ctx *mc, char *src, size_t len, struct aura_url *url) {
     char *start, *end, *ptr;
     uint32_t port;
 
@@ -159,11 +159,11 @@ static int a_parse_authority(struct aura_memory_ctx *mc, char *src, size_t len, 
     return (start - src);
 }
 
-int aura_parse_host_port(struct aura_memory_ctx *mc, char *src, size_t len, struct aura_url *url) {
+int aura_parse_host_port(struct aura_mem_ctx *mc, char *src, size_t len, struct aura_url *url) {
     return a_parse_authority(mc, src, len, url);
 }
 
-static int a_parse_path(struct aura_memory_ctx *mc, char *src, size_t len, struct aura_url *url) {
+static int a_parse_path(struct aura_mem_ctx *mc, char *src, size_t len, struct aura_url *url) {
     char *start, *end, *ptr;
     size_t _len;
 
@@ -197,7 +197,7 @@ static int a_parse_path(struct aura_memory_ctx *mc, char *src, size_t len, struc
     return (end - start);
 }
 
-static int a_parse_query(struct aura_memory_ctx *mc, char *src, size_t len, struct aura_url *url) {
+static int a_parse_query(struct aura_mem_ctx *mc, char *src, size_t len, struct aura_url *url) {
     char *start, *end;
 
     if (len == 0) {
@@ -228,7 +228,7 @@ int aura_url_get_default_port(struct aura_url *url) {
         return 0;
 }
 
-int aura_url_parse(struct aura_memory_ctx *mc, const char *url_str, size_t len, struct aura_url *url) {
+int aura_url_parse(struct aura_mem_ctx *mc, const char *url_str, size_t len, struct aura_url *url) {
     int res;
     char *start;
 
@@ -258,4 +258,18 @@ int aura_url_parse(struct aura_memory_ctx *mc, const char *url_str, size_t len, 
     start += res;
     len -= res;
     return a_parse_query(mc, start, len, url);
+}
+
+void aura_url_destroy(struct aura_url *parsed_url) {
+    if (!parsed_url)
+        return;
+
+    if (parsed_url->authority.host.base)
+        aura_free(parsed_url->authority.host.base);
+
+    if (parsed_url->path.base)
+        aura_free(parsed_url->path.base);
+
+    if (parsed_url->query.base)
+        aura_free(parsed_url->query.base);
 }

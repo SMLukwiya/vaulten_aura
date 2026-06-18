@@ -4,6 +4,7 @@
 #include "blobber_lib.h"
 #include "db/db.h"
 #include "error_lib.h"
+#include "heap_lib.h"
 #include "radix_lib.h"
 #include "time_lib.h"
 #include "types_lib.h"
@@ -91,11 +92,6 @@ struct aura_fn_runtime {
     aura_runtime_t value;
 };
 
-// const struct aura_fn_runtime runtimes[] = {
-//   {"js", JIT},
-//   {"native", NATIVE},
-//   {"wasm", WASM},
-// };
 extern const struct aura_fn_runtime runtimes[];
 
 /* Triggers */
@@ -109,12 +105,6 @@ struct aura_fn_trigger {
     const char *str;
     aura_trigger_t value;
 };
-
-// const struct aura_fn_trigger trigger_types[] = {
-//   {"http", A_TRIGGER_HTTP},
-//   {"cron", A_TRIGGER_CRON},
-//   {"queue", A_TRIGGER_QUEUE},
-// };
 
 extern const struct aura_fn_trigger trigger_types[];
 
@@ -161,12 +151,6 @@ struct aura_fn_backoff {
     const char *str;
     aura_fn_backoff_strategy_t value;
 };
-
-// const struct aura_fn_backoff backoff_opt[] = {
-//   {"none", BACKOFF_NONE},
-//   {"fixed", BACKOFF_FIXED},
-//   {"exponential", BACKOFF_EXPONENTIAL},
-// };
 
 extern const struct aura_fn_backoff backoff_opt[];
 
@@ -240,11 +224,6 @@ struct aura_fn_blue_green {
     aura_fn_blue_green_strategy_t value;
 };
 
-// const struct aura_fn_blue_green blue_green_opt[] = {
-//   {"blue", BLUE},
-//   {"green", GREEN},
-// };
-
 /** Network policy */
 typedef enum {
     ALLOW_ALL = 1,
@@ -256,12 +235,6 @@ struct aura_fn_network_policy {
     const char *str;
     aura_network_policy_t value;
 };
-
-// const struct aura_fn_network_policy network_policies[] = {
-//   {"allow_all", ALLOW_ALL},
-//   {"deny_all", DENY_ALL},
-//   {"whitelist", WHITELIST},
-// };
 
 extern const struct aura_fn_network_policy network_policies[];
 
@@ -503,6 +476,7 @@ struct aura_fn_stat {
 struct aura_fn_stat_wrapper {
     struct aura_fn_stat *fn_stat;
     const char *fn_name;
+    struct aura_heap_ent hp_ent;
     uint32_t fn_version;
 };
 
@@ -743,25 +717,25 @@ static void aura_fn_evt_response_dump(struct aura_fn_evt *evt, bool daemon) {
  * Get 'tiny' function meta data from
  * list of functions
  */
-struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, struct aura_memory_ctx *mc,
+struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
                                             const char *fn_name, uint32_t fn_version, int *error);
 
 /** Get the list of functions deployed in the system */
 struct aura_functions *aura_fn_list_fetch(AURA_DBHANDLE db, int *error);
 
 /** Add a new function to the list of deployed functions */
-int aura_fn_list_add(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *fn_name,
+int aura_fn_list_add(AURA_DBHANDLE db, struct aura_mem_ctx *mc, const char *fn_name,
                      uint32_t fn_version, uint64_t job_id, struct aura_db_completion *comp);
 
 /** Brokered fetch for the list of deployed functions */
-struct aura_functions *aura_fn_list_fetch_broker(struct aura_memory_ctx *mc, int dmn_sock_fd, int *error);
+struct aura_functions *aura_fn_list_fetch_broker(struct aura_mem_ctx *mc, int dmn_sock_fd, int *error);
 
 /** Remove a function from the list of deployed functions */
-int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_memory_ctx *mc, uint64_t job_id,
+int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_mem_ctx *mc, uint64_t job_id,
                         const char *fn_name, uint32_t fn_version, struct aura_db_completion *comp);
 
 /** */
-struct aura_fn_stat *aura_fn_stat_fetch_broker(struct aura_memory_ctx *mc, const char *fn_name, uint32_t fn_version, int dmn_fd);
+struct aura_fn_stat *aura_fn_stat_fetch_broker(struct aura_mem_ctx *mc, const char *fn_name, uint32_t fn_version, int dmn_fd);
 
 /**/
 struct aura_iovec aura_fn_meta_fetch(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version);
@@ -778,22 +752,23 @@ struct aura_iovec aura_fn_state_fetch(AURA_DBHANDLE db, const char *fn_name, uin
 /**
  * Load a function to memory
  */
-struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_memory_ctx *mc, const char *fn_name, uint32_t fn_version);
+struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_mem_ctx *mc, const char *fn_name, uint32_t fn_version);
 
 /** */
-struct aura_fn *aura_fn_load_broker(struct aura_memory_ctx *mc, const char *fn_name, uint32_t fn_version, int sock_fd);
+struct aura_fn *aura_fn_load_broker(struct aura_mem_ctx *mc, const char *fn_name, uint32_t fn_version, int sock_fd);
 
 /** Fetch function stats */
 struct aura_fn_stat *aura_fn_stat_fetch(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version);
 
 /* Compare function stats */
-int aura_fn_stat_compare(const void *s1, const void *s2);
+int aura_fn_stat_compare(struct aura_heap_ent *s1, struct aura_heap_ent *s2);
 
 /**/
 void aura_fn_stat_dump(struct aura_fn_stat *stats);
 
+/* ROLLBACK */
 struct aura_rollback_detector *rollback_detector_create(aura_rollback_cb cb);
-void rollback_detector_add_deployment(struct aura_rollback_detector *rbd, uint64_t fn_id, const char *version /* create a struct to pass error threshold stuff */);
+void rollback_detector_add_deployment(struct aura_rollback_detector *rbd, uint64_t fn_id, const char *version);
 void rollback_detector_record_metrics();
 void rollback_detector_evaluate();
 

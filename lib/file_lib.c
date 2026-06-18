@@ -32,7 +32,7 @@ bool aura_open_file(char *filename, int *fd) {
     return true;
 }
 
-uint8_t *aura_load_file(int fd, u_int64_t *len) {
+uint8_t *aura_load_file(int fd, size_t *len) {
     FILE *fp;
     int64_t _len;
     uint8_t *buf;

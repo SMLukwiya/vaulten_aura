@@ -9,27 +9,30 @@
 #define A_DIV_ROUND_UP(a, b) (((a) + (b) - 1) / (b))
 
 #define A_BITS_TO_LONG(bits) A_DIV_ROUND_UP((bits), A_BITS_PER_TYPE(long))
-#define A_CREATE_BITMAP(bits, name) unsigned long name[A_BITS_TO_LONG(bits)]
+#define A_BITMAP_CREATE(bits, name) unsigned long name[A_BITS_TO_LONG(bits)]
 
 #define A_BITS_PER_LONG A_BITS_PER_TYPE(long)
-#define A_BIT_MASK(pos) (UL(1) << ((pos) % A_BITS_PER_LONG))
+#define A_BIT_MASK(pos) (1UL << ((pos) % A_BITS_PER_LONG))
 #define A_BIT_WORD(pos) ((pos) / A_BITS_PER_LONG)
-
-#define A_GENMASK(h, l) (((~UL(0)) - (UL(1) << (l)) + 1) & (~UL(0) >> (A_BITS_PER_LONG - 1 - (h))))
+/**
+ * Generate a bitmap from
+ * @l(low) position upto @(h) high position
+ */
+#define A_BITMAP_GENMASK(h, l) (((1UL << ((h) - (l) + 1)) - 1) << (l))
 
 /**
  * set a bit in memory
  * @pos: the bit to set
  * @addr: the starting address
  */
-static inline void aura_set_bit(uint64_t pos, uint64_t *addr) {
+static inline void aura_bitmap_set_bit(uint64_t pos, uint64_t *addr) {
     uint64_t mask = A_BIT_MASK(pos);
     uint64_t *adr = (uint64_t *)addr + A_BIT_WORD(pos);
     *adr |= mask;
 }
 
 /* clear bit in memory */
-static inline void aura_clear_bit(uint64_t pos, uint64_t *addr) {
+static inline void aura_bitmap_clear_bit(uint64_t pos, uint64_t *addr) {
     uint64_t mask = A_BIT_MASK(pos);
     uint64_t *adr = (uint64_t *)addr + A_BIT_WORD(pos);
     *adr &= ~mask;
@@ -40,7 +43,7 @@ static inline void aura_clear_bit(uint64_t pos, uint64_t *addr) {
  * @pos: bit number to test
  * @addr: Starting address
  */
-static inline bool aura_test_bit(uint64_t pos, uint64_t *addr) {
+static inline bool aura_bitmap_test_bit(uint64_t pos, uint64_t *addr) {
     return 1UL & (addr[A_BIT_WORD(pos)] >> (pos & (A_BITS_PER_LONG - 1)));
 }
 
@@ -49,7 +52,7 @@ static inline bool aura_test_bit(uint64_t pos, uint64_t *addr) {
  * @pos: Bit to clear
  * @addr: Starting address
  */
-static inline bool aura_test_and_clear_bit(uint64_t pos, uint64_t *addr) {
+static inline bool aura_bitmap_test_and_clear_bit(uint64_t pos, uint64_t *addr) {
     uint64_t mask = A_BIT_MASK(pos);
     uint64_t *adr = ((uint64_t *)addr + A_BIT_WORD(pos));
     uint64_t old = *adr;
@@ -57,7 +60,7 @@ static inline bool aura_test_and_clear_bit(uint64_t pos, uint64_t *addr) {
     return (old & mask) != 0;
 }
 
-static inline uint32_t a_find_bit(uint64_t word) {
+static inline uint32_t a_bitmap_find_bit(uint64_t word) {
     uint32_t n = 0;
 
     if ((word & 0xffffffff) == 0) {
@@ -91,6 +94,38 @@ static inline uint32_t a_find_bit(uint64_t word) {
 }
 
 /**
+ * Returns number of leading 0-bits in x.
+ * NOTE: If x is 0, the result is undefined.
+ */
+static inline int a_clz32(unsigned int x) {
+    return __builtin_clz(x);
+}
+
+/**
+ * Returns the number of trailing 0-bits in x.
+ * NOTE: If x is 0, the result is undefined.
+ */
+static inline int a_ctz32(unsigned int x) {
+    return __builtin_ctz(x);
+}
+
+/**
+ * Returns number of leading 0-bits in x.
+ * NOTE: If x is 0, the result is undefined.
+ */
+static inline int a_clz64(unsigned long x) {
+    return __builtin_clzll(x);
+}
+
+/**
+ * Returns the number of trailing 0-bits in x.
+ * NOTE: If x is 0, the result is undefined.
+ */
+static inline int a_ctz64(unsigned long x) {
+    return __builtin_ctzll(x);
+}
+
+/**
  * find the next set bit in memory
  * @addr: address to search
  * @offset: bit number to start search from
@@ -99,15 +134,28 @@ static inline uint32_t a_find_bit(uint64_t word) {
  * - bit number of the next set bit
  * - @size if not bit is set
  */
-static inline uint64_t aura_find_next_bit(uint64_t *addr, uint64_t offset, uint64_t size) {
+static inline uint64_t aura_bitmap_find_next_bit(uint64_t *addr, uint64_t offset, uint64_t size) {
     uint64_t val;
 
     if (offset >= size)
         return size;
 
     /* check if any bit is set */
-    val = *addr & A_GENMASK(size - 1, offset);
-    return val ? a_find_bit(val) : size;
+    val = *addr & A_BITMAP_GENMASK(size - 1, offset);
+    // return val ? a_bitmap_find_bit(val) : size;
+    return val ? a_ctz64(val) : size;
+}
+
+static inline uint64_t aura_bitmap_find_next_empty_bit(uint64_t *addr, uint64_t offset, uint64_t size) {
+    uint64_t val;
+
+    if (offset >= size)
+        return size;
+
+    /* check if any bit is set */
+    val = *addr & A_BITMAP_GENMASK(size - 1, offset);
+    // return val ? a_bitmap_find_bit(val) : size;
+    return val ? a_ctz64(~val) : size;
 }
 
 #endif

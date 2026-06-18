@@ -10,8 +10,9 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/utils_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/blobber_v1_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/radix_v1_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/memory_lib_v1.c
-    ${vaulten_aura_SOURCE_DIR}/lib/slab_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory/memory_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory/slab_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory/sliding_buf.c
     ${vaulten_aura_SOURCE_DIR}/lib/hasher_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/db/db.c
     ${vaulten_aura_SOURCE_DIR}/lib/db/db_broker.c
@@ -22,10 +23,13 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/heap_lib_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/url_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/hashmap_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/dense_pool/dense_pool_dynamic_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/data_path/data_path.c
+    ${vaulten_aura_SOURCE_DIR}/lib/flight_queue.c
 )
 
-add_executable(aura_server 
-    # src/main.c
+add_executable(aura_server
     main.c
     net/socket_srv.c
     net/epoll_srv.c
@@ -33,40 +37,48 @@ add_executable(aura_server
     srv/evt_loop_srv.c
     srv/route_srv.c
     srv/interned.c
+    srv/request.c
+    srv/host.c
+    srv/pending_req.c
+    srv/optimizer.c
     protocol/connection.c
-    protocol/h2/header_srv.c
+    protocol/h2/header.c
     protocol/h2/session.c
-    protocol/h2/h2_srv.c
-    protocol/h2/h2_cli.c
+    protocol/h2/server.c
+    protocol/h2/client.c
     protocol/h2/frame.c
     protocol/h2/stream.c
-    protocol/h2/hpack_srv.c
+    protocol/h2/hpack.c
     protocol/h2/scheduler.c
     runtime/worker_man.c
     runtime/runtime.c
     runtime/request.c
     runtime/task.c
+    runtime/completion.c
     runtime/quickjs/qjs_rt.c
     runtime/quickjs/js_bindings.c 
     infra/timer/timer_srv.c
-    src/optimization_srv.c
-
     ${lib_sources}
 )
 
 target_link_libraries(aura_server 
     PRIVATE picotls-openssl picotls-fusion picotls-minicrypto picotls-core 
     PRIVATE quickjs 
-    PUBLIC OpenSSL::SSL OpenSSL::Crypto
+    PRIVATE OpenSSL::SSL OpenSSL::Crypto
 )
 
 target_include_directories(aura_server 
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include 
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib/memory
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib/dense_pool
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib/data_path
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib
     PRIVATE ${PROJECT_INCLUDE_DIR}
 )
 
 target_compile_definitions(aura_server 
     PRIVATE AURA_DATA_DIR="${DEFAULT_DATA_DIR}" # defined in global CMakeLists.txt
+    PRIVATE _POSIX_C_SOURCE=200809L
 )
 
 list(POP_BACK CMAKE_MESSAGE_INDENT)

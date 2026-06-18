@@ -4,13 +4,12 @@
 #include "string_lib.h"
 #include "task_srv.h"
 
-struct aura_task *aura_task_create(struct aura_memory_ctx *mc, uint64_t next_id, void *conn,
-                                   void *stream, a_task_protocol_t prot, char *url, int method,
-                                   struct aura_header_vector *headers, char *body, size_t body_len) {
+struct aura_task *aura_task_create(struct aura_h2_stream *stream, struct aura_mem_ctx *mc,
+                                   uint8_t *url, uint64_t next_id, uint32_t conn_id,
+                                   uint32_t conn_idx, a_task_protocol_t prot) {
     struct aura_task *task;
     Request *req;
     Response *resp;
-    app_debug(true, 0, "aura__task_create <<<<");
 
     /* Create request holder */
     req = aura_rt_create_req(mc);
@@ -25,30 +24,35 @@ struct aura_task *aura_task_create(struct aura_memory_ctx *mc, uint64_t next_id,
     }
 
     req->url.base = aura_strdup(mc, url);
-    req->method = method;
-    for (int i = 0; i < headers->cnt; ++i) {
-        struct aura_rt_header_field *hdr_slot;
-        struct aura_header_field *hdr_field;
+    req->method = stream->req.method;
 
-        hdr_slot = aura_rt_req_get_header_slot(mc, req);
-        if (!hdr_slot) {
+    req->headers.cnt = req->headers.cap = 0;
+    if (stream->req.headers.entries && stream->req.headers.cnt > 0) {
+        req->headers.entries = aura_alloc(mc, sizeof(*req->headers.entries) * stream->req.headers.cnt);
+        if (!req->headers.entries) {
             aura_rt_req_destroy(req);
-            aura_free(task);
+            aura_rt_res_destroy(resp);
             return NULL;
         }
-        hdr_field = &headers->entries[i];
-        hdr_slot->name.base = aura_strndup(mc, hdr_field->name.interned->data, hdr_field->name.interned->len);
-        if (hdr_field->value_interned)
-            hdr_slot->value.base = aura_strndup(mc, hdr_field->value.interned->data, hdr_field->value.interned->len);
-        else
-            hdr_slot->value.base = aura_strndup(mc, hdr_field->value.raw.str->base, hdr_field->value.raw.str->len);
+
+        // struct aura_basic_header *hdr_slot, *hdr_field;
+        /* Take ownership of headers */
+        for (int i = 0; i < stream->req.headers.cnt; ++i) {
+            req->headers.entries[i] = stream->req.headers.entries[i];
+            req->headers.cnt++;
+        }
+        /* Set header count on stream request to release headers */
+        stream->req.headers.cnt = 0;
     }
+
     req->body = NULL;
     req->body_len = 0;
     /* @todo: add the stuff on the requests */
     if (req->method == HTTP_POST) {
-        req->body = body;
-        req->body_len = body_len;
+        req->body = stream->req.body;
+        req->body_len = stream->req.content_length;
+        stream->req.body = NULL;
+        stream->req.content_length = 0;
     }
 
     task = aura_alloc(mc, sizeof(*task));
@@ -59,10 +63,11 @@ struct aura_task *aura_task_create(struct aura_memory_ctx *mc, uint64_t next_id,
     }
     memset(task, 0, sizeof(task));
 
-    a_list_head_init(&task->t_list);
+    aura_list_head_init(&task->t_list);
     task->id = next_id;
-    task->conn = conn;
-    task->stream = stream;
+    task->conn_id = conn_id;
+    task->conn_idx = conn_idx;
+    task->stream_id = stream->stream_id;
     task->req_data = req;
     task->res_data = resp;
     task->state = A_TASK_STATE_QUEUED;

@@ -15,8 +15,9 @@ struct aura_db_broker_request {
     struct aura_iovec data;
 };
 
-int aura_db_broker_fetch(struct aura_memory_ctx *mc, uint16_t ns, uint16_t schema_id,
-                         struct aura_iovec *key, struct aura_iovec *out_data, int dmn_fd);
+int aura_db_broker_fetch(struct aura_mem_ctx *mc, uint16_t ns, uint16_t schema_id,
+                         struct aura_iovec *key, struct aura_iovec *out_data,
+                         int dmn_fd);
 
 void aura_db_request_dump(struct aura_db_broker_request *req);
 

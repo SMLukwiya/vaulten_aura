@@ -3,6 +3,7 @@
 
 #include "types_lib.h"
 
+/* Parsed URL structure */
 struct aura_url {
     int scheme;
     struct {
@@ -13,10 +14,12 @@ struct aura_url {
     struct aura_iovec query;
 };
 
-struct aura_iovec aura_url_path_normalize(struct aura_memory_ctx *mc, char *path, size_t len);
+struct aura_iovec aura_url_path_normalize(struct aura_mem_ctx *mc, char *path, size_t len);
 
-int aura_url_parse(struct aura_memory_ctx *mc, const char *url_str, size_t len, struct aura_url *url);
+int aura_url_parse(struct aura_mem_ctx *mc, const char *url_str, size_t len, struct aura_url *url);
 
 int aura_url_get_default_port(struct aura_url *url);
+
+void aura_url_destroy(struct aura_url *parsed_url);
 
 #endif

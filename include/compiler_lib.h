@@ -1,12 +1,6 @@
 #ifndef AURA_COMPILER_TOOLS_H
 #define AURA_COMPILER_TOOLS_H
 
-/** @todo: Just GCC currently, Fill CLANG */
-
-#define __user
-#define __rcu
-#define __read_mostly
-
 #ifndef likely
 #define likely(x) __builtin_expect(!!(x), 1)
 #endif
@@ -57,6 +51,10 @@
 
 #ifndef __noreturn
 #define __noreturn __attribute__((noreturn))
+#endif
+
+#ifndef __attribute__
+#define __attribute__(X)
 #endif
 
 #endif

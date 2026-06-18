@@ -1,11 +1,6 @@
 #ifndef AURA_UTILS_H
 #define AURA_UTILS_H
 
-/**
- * @todo: some of this stuff are surely best placed in
- * other places.......
- */
-
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -20,8 +15,20 @@
 #include <unistd.h>
 
 #define ARRAY_SIZE(s) (sizeof(s) / sizeof(s[0]))
+#define ARR_CNT(s) (sizeof(s) / sizeof(s[0]))
+
+#ifndef a_min
 #define a_min(x, y) ((x) > (y) ? (y) : (x))
+#endif
+
+#ifndef a_max
 #define a_max(x, y) ((x) > (y) ? (x) : (y))
+#endif
+
+#ifndef a_clamp
+#define a_clamp(val, min, max) ((val) < (min) ? (min) : (val) > (max) ? (max) \
+                                                                      : (val))
+#endif
 
 #define a_ceil(x) (((x) % 2) ? (((x) / 2) + 1) : (x) / 2)
 
@@ -58,9 +65,6 @@ int aura_scan_str(const char *value, const char *fmt, ...);
 int aura_install_signal_handler(int signo, void (*handler)(int signo));
 
 /*------------------------------------------------------- */
-/**
- * Some Half-assed parent child sync stuff
- */
 
 #define A_PARENT_SYNC_CHAR "w"
 #define A_CHILD_SYNC_CHAR "z"

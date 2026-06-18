@@ -26,7 +26,7 @@
 
 /* Object header structure */
 struct aura_object_hdr {
-    struct aura_memory_ctx *mem_ctx;
+    struct aura_mem_ctx *mem_ctx;
     uint16_t size;
     uint8_t slab_cache_id;
     uint16_t slab_id;
@@ -82,7 +82,7 @@ struct aura_slab_cache {
     struct aura_list_head partial_list;
     struct aura_list_head free_list;
     char name[A_MAX_SLAB_NAME];
-    struct aura_memory_ctx *mem_ctx;
+    struct aura_mem_ctx *mem_ctx;
     uint8_t slab_cache_id;
     uint8_t flags;
 };
@@ -107,10 +107,10 @@ struct aura_slab_info {
  */
 typedef enum {
     A_SLAB_CACHE_ID_DYNAMIC = 1,
-    // A_SLAB_CACHE_ID_SOCK,
-    A_SLAB_CACHE_GENERIC_CONNECTION,
-    A_SLAB_CACHE_ID_CONNECTION,
-    A_SLAB_CACHE_ID_STREAM,
+    A_SLAB_CACHE_GENERIC_CONN,
+    A_SLAB_CACHE_ID_H2_SERVER_CONN,
+    A_SLAB_CACHE_ID_H2_CLIENT_CONN,
+    A_SLAB_CACHE_ID_H2_STREAM,
 } aura_slab_cache_id;
 
 /**
@@ -209,7 +209,7 @@ static inline unsigned objs_per_slab(const struct aura_slab_cache *cache) { /* i
  * Search for cache with the given ID
  * from the list of caches
  */
-static inline struct aura_slab_cache *aura_slab_cache_find_by_id(struct aura_memory_ctx *mc, uint8_t sc_id) {
+static inline struct aura_slab_cache *aura_slab_cache_find_by_id(struct aura_mem_ctx *mc, uint8_t sc_id) {
     struct aura_slab_cache *sc;
 
     a_list_for_each(sc, &mc->slab_cache_list, cache_list) {
@@ -224,12 +224,12 @@ static inline struct aura_slab_cache *aura_slab_cache_find_by_id(struct aura_mem
  * Creates a new slab cache with the provided name
  * and slab cache id
  */
-struct aura_slab_cache *aura_slab_cache_create(struct aura_memory_ctx *m_ctx, uint8_t s_cache_id, const char *name, size_t obj_size, void (*ctor)(void *), uint32_t flags);
+struct aura_slab_cache *aura_slab_cache_create(struct aura_mem_ctx *m_ctx, uint8_t s_cache_id, const char *name, size_t obj_size, void (*ctor)(void *), uint32_t flags);
 
 /**
  * Create caches for dynamic slab pool
  */
-int aura_create_dynamic_slab_alloc_caches(struct aura_memory_ctx *m_ctx);
+int aura_create_dynamic_slab_alloc_caches(struct aura_mem_ctx *m_ctx);
 void aura_slab_cache_destroy(struct aura_slab_cache *sc);
 void *aura_slab_alloc(struct aura_slab_cache *sc);
 
@@ -245,10 +245,10 @@ void aura_slab_free(void *ptr);
  * Gets memory from dynamic slab pool
  * returning NULL if it fails
  */
-void *aura_alloc(struct aura_memory_ctx *mc, size_t size);
+void *aura_alloc(struct aura_mem_ctx *mc, size_t size);
 
 /** */
-void *aura_realloc(struct aura_memory_ctx *mc, void *ptr, size_t size);
+void *aura_realloc(struct aura_mem_ctx *mc, void *ptr, size_t size);
 
 /**
  * Free memory pointed to by ptr

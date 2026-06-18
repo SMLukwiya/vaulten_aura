@@ -3,79 +3,74 @@
 #define str_lit(s) (s), (sizeof(s) - 1)
 #endif
 
-static const char *aura_hpack_static_table_strings[] = {
-  ":authority",
-  ":method",
-  "GET",
-  "POST",
-  ":path",
-  "/",
-  "/index.html",
-  ":scheme",
-  "http",
-  "https",
-  ":status",
-  "200",
-  "204",
-  "206",
-  "304",
-  "400",
-  "404",
-  "500",
-  "accept-charset",
-  "accept-encoding",
-  "gzip, deflate",
-  "accept-language",
-  "accept-ranges",
-  "accept",
-  "access-control-allow-origin",
-  "age",
-  "allow",
-  "authorization",
-  "cache-control",
-  "content-disposition",
-  "content-encoding",
-  "content-language",
-  "content-length",
-  "content-location",
-  "content-range",
-  "content-type",
-  "cookie",
-  "date",
-  "etag",
-  "expect",
-  "expires",
-  "from",
-  "host",
-  "if-match",
-  "if-modified-since",
-  "if-none-match",
-  "if-range",
-  "if-unmodified-since",
-  "last-modified",
-  "link",
-  "location",
-  "max-forwards",
-  "proxy-authenticate",
-  "proxy-authorization",
-  "range",
-  "referer",
-  "refresh",
-  "retry-after",
-  "server",
-  "set-cookie",
-  "strict-transport-security",
-  "transfer-encoding",
-  "user-agent",
-  "vary",
-  "via",
-  "www-authenticate",
+static const char *content_type_common_values[] = {
+  "application/json",
+  "text/plain",
+  "text/html",
+  "application/x-www-form-urlencoded",
+  "multipart/form-data",
+  "application/octet-stream",
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "text/css",
+  "application/javascript",
+};
+
+static const char *content_encoding_common_values[] = {
+  "gzip",
+  "br",
+  "deflate",
+  "identity",
+};
+
+static const char *accept_encoding_common_values[] = {
+  "gzip, deflate, br",
+  "gzip",
+  "br",
+};
+
+static const char *accept_common_values[] = {
+  "*/*",
+  "application/json",
+  "text/html",
+};
+
+static const char *accept_language_common_values[] = {
+  "en-US",
+  "en",
+  "en-US,en;q=0.9"};
+
+static const char *cache_control_common_values[] = {
+  "no-cache",
+  "no-store",
+  "max-age=0",
+  "public. max-age=31536000",
+  "private",
+  "must-revalidate",
+};
+
+static const char *authorization_prefix_values[] = {
+  "Bearer",
+  "Basic",
+};
+
+struct aura_value_tokens {
+    uint32_t token;
+    struct {
+        const uint8_t *str;
+        size_t len;
+    } *value_list;
 };
 
 struct rfc_static_tab_entry {
     struct aura_iovec name;
     struct aura_iovec value;
 };
+
+#define A_STATIC_TABLE_ENTRY(name, value) \
+    {                                     \
+      str_lit(name), str_lit(value)}
 
 static struct rfc_static_tab_entry rfc_static_table[] = {
   {str_lit(""), str_lit("")},
@@ -141,10 +136,6 @@ static struct rfc_static_tab_entry rfc_static_table[] = {
   {str_lit("via"), str_lit("")},
   {str_lit("www-authenticate"), str_lit("")},
 };
-
-#define STATIC_TABLE_ENTRY(name, value, token, index) \
-    {                                                 \
-      str_lit(name), str_lit(value), token, index}
 
 static uint16_t lookup_token(const char *name, size_t len) {
     switch (len) {
@@ -452,7 +443,11 @@ static uint16_t lookup_token(const char *name, size_t len) {
     default:
         return A_TOKEN_NONE;
     }
-    /** @todo: custom headers */
 
     return 0;
 }
+
+struct aura_token {
+    struct aura_interned_str *name;
+    uint32_t flags;
+};

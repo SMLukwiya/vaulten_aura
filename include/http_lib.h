@@ -12,6 +12,16 @@ typedef enum {
     HTTP_HEAD,
 } a_http_method_t;
 
+static const char *a_http_methods_str[] = {
+  "NONE",
+  "GET",
+  "POST",
+  "PUT",
+  "DELETE",
+  "PATCH",
+  "HEAD",
+};
+
 /* Scheme */
 typedef enum {
     SCHEME_NONE,
@@ -19,12 +29,11 @@ typedef enum {
     SCHEME_HTTPS
 } a_http_scheme_t;
 
-/* Transport protocol */
-typedef enum {
-    A_PROTOCOL_NONE,
-    A_PROTOCOL_TCP,
-    A_PROTOCOL_UDP
-} a_transport_protocol;
+static const char *a_http_scheme_str[] = {
+  "NONE",
+  "HTTP",
+  "HTTPS",
+};
 
 /* Response code */
 typedef enum {

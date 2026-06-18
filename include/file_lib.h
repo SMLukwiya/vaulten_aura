@@ -1,14 +1,14 @@
 #ifndef AURA_FILE_H
 #define AURA_FILE_H
 
-#include "types_lib.h"
 #include <stdbool.h>
+#include <stdint.h>
 #include <sys/types.h>
 
 int aura_lock_file(int, int, int, off_t, int, off_t);
 int aura_get_absolute_path(const char *path, char *resolved_path);
 bool aura_open_file(char *filename, int *fd);
-uint8_t *aura_load_file(int fd, u_int64_t *len);
+uint8_t *aura_load_file(int fd, size_t *len);
 
 #define a_read_lock(fd, offset, whence, len) aura_lock_file((fd), F_SETLK, F_RDLCK, (offset), (whence), (len))
 #define a_readw_lock(fd, offset, whence, len) aura_lock_file((fd), F_SETLKW, F_RDLCK, (offset), (whence), (len))

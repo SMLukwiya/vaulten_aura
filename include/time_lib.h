@@ -15,10 +15,10 @@
 #define a_time_us_to_s(us) ((us) * 1e-6)
 
 /* Returns true if time a is after time b */
-#define a_time_after(a, b) ((long)((b) - (a)) < 0)
+#define a_time_after(a, b) ((uint64_t)((b) - (a)) < 0)
 
 /* Returns true if time a is after or equal to time b */
-#define a_time_after_eq(a, b) ((long)((b) - (a)) <= 0)
+#define a_time_after_eq(a, b) ((uint64_t)((b) - (a)) <= 0)
 
 /* Returns true if time a is before time b */
 #define a_time_before(a, b) a_time_after(b, a)

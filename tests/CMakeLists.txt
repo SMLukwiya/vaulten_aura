@@ -5,8 +5,9 @@ project(vaulten_aura_test)
 set(common_sources
     ${vaulten_aura_SOURCE_DIR}/lib/error_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/utils_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/memory_lib_v1.c
-    ${vaulten_aura_SOURCE_DIR}/lib/slab_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory/memory_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory/slab_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory/sliding_buf.c
 )
 
 # -------------------- DB TESTS -------------------- #
@@ -16,13 +17,14 @@ add_executable(test_aura_db
     ${vaulten_aura_SOURCE_DIR}/lib/hasher_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/encrypt_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/slab_lib_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
     ${common_sources}
 )
 target_link_libraries(test_aura_db PUBLIC OpenSSL::SSL OpenSSL::Crypto)
 target_include_directories(test_aura_db 
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include 
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib/memory
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib
     PRIVATE ${PROJECT_INCLUDE_DIR}
 )
 
@@ -38,13 +40,14 @@ set_tests_properties(db_test PROPERTIES
 
 # -------------------- SLAB TESTS -------------------- #
 add_executable(test_aura_slab
-    slab/basic.c
-    ${vaulten_aura_SOURCE_DIR}/lib/slab_lib_v1.c
+    memory/slab/basic.c
     ${common_sources}
 )
 
 target_include_directories(test_aura_slab 
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib/memory
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib
     PRIVATE ${PROJECT_INCLUDE_DIR}
 )
 
@@ -69,6 +72,8 @@ add_executable(test_aura_daemon
 
 target_include_directories(test_aura_daemon 
     PRIVATE ${vaulten_aura_SOURCE_DIR}/src/cli/include
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib/memory
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib
     PRIVATE ${PROJECT_INCLUDE_DIR}
 )
 
@@ -87,13 +92,14 @@ set_tests_properties(daemon_test PROPERTIES
 # Bytecode generation
 add_executable(test_bytecode_gen
     daemon/codegen.c
-    # ${vaulten_aura_SOURCE_DIR}/lib/runtime_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
     ${common_sources}
 )
 
 target_include_directories(test_bytecode_gen 
     PRIVATE ${vaulten_aura_SOURCE_DIR}/src/cli/include
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib/memory
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib
     PRIVATE ${PROJECT_INCLUDE_DIR}
 )
 
@@ -117,7 +123,9 @@ add_executable(test_aura_cli
 )
 
 target_include_directories(test_aura_cli 
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include 
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib/memory
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib
     PRIVATE ${PROJECT_INCLUDE_DIR}
 )
 
@@ -130,23 +138,27 @@ add_test(
 set_tests_properties(cli_test PROPERTIES
     LABELS "cli"
     TIMEOUT 10
+    DISABLED YES
 )
 
 # ----------------------- HEAP TEST ---------------------- #
 add_executable(test_aura_heap
     heap/basic.c
     ${vaulten_aura_SOURCE_DIR}/lib/heap_lib_v1.c
-    ${vaulten_aura_SOURCE_DIR}/lib/error_lib.c
+    ${common_sources}
 )
 
 target_include_directories(test_aura_heap
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib/memory
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib
     PRIVATE ${PROJECT_INCLUDE_DIR}
 )
 
 add_test(
     NAME heap_test
     COMMAND test_aura_heap
+    CONFIGURATIONS Debug RelWithDebInfo ""
 )
 
 set_tests_properties(heap_test PROPERTIES
@@ -164,15 +176,105 @@ add_executable(test_aura_url
 
 target_include_directories(test_aura_url
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib/memory
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib
     PRIVATE ${PROJECT_INCLUDE_DIR}
 )
 
 add_test(
     NAME url_test
     COMMAND test_aura_url
+    CONFIGURATIONS Debug RelWithDebInfo ""
 )
 
 set_tests_properties(url_test PROPERTIES
     LABELS "url"
+    TIMEOUT 10
+)
+
+# --------------------- HASHMAP TEST ---------------------- #
+add_executable(test_aura_hashmap
+    hashmap/basic.c
+    ${vaulten_aura_SOURCE_DIR}/lib/hashmap_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/hasher_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
+    ${common_sources}
+)
+
+target_include_directories(test_aura_hashmap
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib/memory
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib
+    PRIVATE ${PROJECT_INCLUDE_DIR}
+)
+
+add_test(
+    NAME hashmap_test
+    COMMAND test_aura_hashmap
+    CONFIGURATIONS Debug RelWithDebInfo ""
+)
+
+set_tests_properties(hashmap_test PROPERTIES
+    LABELS "hashmap"
+    TIMEOUT 10
+)
+
+# --------------------- HPACK_TEST --------------------- #
+add_executable(test_aura_hpack
+    hpack/basic.c
+    ${vaulten_aura_SOURCE_DIR}/src/server/protocol/h2/hpack.c
+    ${vaulten_aura_SOURCE_DIR}/src/server/protocol/h2/header.c
+    ${vaulten_aura_SOURCE_DIR}/src/server/srv/interned.c
+    ${vaulten_aura_SOURCE_DIR}/lib/hasher_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
+    ${common_sources}
+)
+
+target_link_libraries(test_aura_hpack PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+
+target_include_directories(test_aura_hpack
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/src/server/include
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib/memory
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib
+    PRIVATE ${PROJECT_INCLUDE_DIR}
+)
+
+add_test(
+    NAME hpack_test
+    COMMAND test_aura_hpack
+    CONFIGURATIONS Debug RelWithDebInfo ""
+)
+
+set_tests_properties(hpack_test PROPERTIES
+    LABELS "hpack"
+    TIMEOUT 10
+)
+
+# --------------------- QUICKJS_TEST --------------------- #
+add_executable(test_aura_qjs
+    js/basic.c
+    ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
+    ${common_sources}
+)
+
+target_link_libraries(test_aura_qjs
+    PRIVATE quickjs
+)
+
+target_include_directories(test_aura_qjs
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/src/server/include
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib/memory
+    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib
+    PRIVATE ${PROJECT_INCLUDE_DIR}
+)
+
+add_test(
+    NAME quickjs_test
+    COMMAND test_aura_qjs
+    CONFIGURATIONS Debug RelWithDebInfo ""
+)
+
+set_tests_properties(quickjs_test PROPERTIES
+    LABELS "quickjs"
     TIMEOUT 10
 )

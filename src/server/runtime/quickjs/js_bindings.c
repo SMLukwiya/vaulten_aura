@@ -20,26 +20,7 @@
 #include <time.h>
 #include <unistd.h>
 
-static JSValue a_js_res_set_status(JSContext *ctx, JSValueConst this_val, JSValueConst status);
-
-static inline bool a_get_property(JSContext *ctx, JSValue *value, JSValueConst obj, const char *option) {
-    JSValue val;
-    uint32_t tag;
-
-    val = JS_GetPropertyStr(ctx, obj, option);
-    if (JS_IsException(val))
-        return false;
-
-    if (!JS_IsUndefined(val)) {
-        tag = JS_VALUE_GET_NORM_TAG(val);
-        // perhaps use the tags to handle nested objects
-        /* extract value */
-    }
-    JS_FreeValue(ctx, val);
-    return true;
-}
-
-/* ---- CONSOLE ---- */
+/* ---- CONSOLE LOGGING ---- */
 
 /* console log */
 JSValue aura_js_console_log(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -66,12 +47,10 @@ JSValue aura_js_console_error(JSContext *ctx, JSValueConst this_val, int argc, J
 }
 
 /** */
-void aura_js_console_init(struct aura_qjs_runtime *qrt) {
-    JSContext *ctx;
+void aura_js_console_init(JSRuntime *rt, JSContext *ctx) {
     JSValue global_obj;
     JSValue console;
 
-    ctx = qrt->ctx;
     console = JS_NewObject(ctx);
     global_obj = JS_GetGlobalObject(ctx);
 
@@ -220,12 +199,6 @@ static JSValue a_js_req_url_get(JSContext *ctx, JSValueConst this_val) {
 }
 
 /* res.status */
-static JSValue a_fetch_get_status(JSContext *ctx, JSValueConst this_val) {
-    Response *res;
-
-    return JS_UNDEFINED;
-}
-
 static JSValue a_js_res_set_status(JSContext *ctx, JSValueConst this_val, JSValueConst status) {
     Response *res;
     int _status;
@@ -240,11 +213,31 @@ static JSValue a_js_res_set_status(JSContext *ctx, JSValueConst this_val, JSValu
     return JS_UNDEFINED;
 }
 
+static JSValue a_js_res_get_status(JSContext *ctx, JSValueConst this_val) {
+    Response *res;
+    int _status;
+
+    res = JS_GetOpaque2(ctx, this_val, res_class_id);
+    A_BUG_ON_2(!res, true);
+
+    return JS_NewInt32(ctx, (int32_t)res->status);
+}
+
+static JSValue a_js_res_get_ok(JSContext *ctx, JSValueConst this_val) {
+    Response *res;
+    int _status;
+
+    res = JS_GetOpaque2(ctx, this_val, res_class_id);
+    A_BUG_ON_2(!res, true);
+
+    return JS_NewBool(ctx, res->ok);
+}
+
 static JSValue a_js_res_set_header(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     Response *resp;
     size_t name_len, value_len;
     const char *n, *v;
-    struct aura_rt_header_field *hdr_slot;
+    struct aura_basic_header *hdr_slot;
     struct aura_qjs_rt_thread_state *ts;
 
     if (!argc != 2) {
@@ -267,16 +260,16 @@ static JSValue a_js_res_set_header(JSContext *ctx, JSValueConst this_val, int ar
         return JS_ThrowSyntaxError(ctx, "Header value can not be undefined");
     }
 
-    hdr_slot = aura_rt_res_get_header_slot(ts->mc, resp);
+    hdr_slot = aura_rt_res_get_header_slot(ts->srv_ctx->mc, resp);
     if (!hdr_slot) {
         JS_FreeCString(ctx, n);
         JS_FreeCString(ctx, v);
         return JS_ThrowOutOfMemory(ctx);
     }
 
-    hdr_slot->name.base = aura_strndup(ts->mc, n, name_len);
+    hdr_slot->name.base = aura_strndup(ts->srv_ctx->mc, n, name_len);
     hdr_slot->name.len = name_len;
-    hdr_slot->value.base = aura_strndup(ts->mc, n, name_len);
+    hdr_slot->value.base = aura_strndup(ts->srv_ctx->mc, n, name_len);
     hdr_slot->value.len = value_len;
 
     return JS_UNDEFINED;
@@ -325,7 +318,7 @@ static JSValue a_js_res_json(JSContext *ctx, JSValueConst this_val, int argc, JS
     body = JS_ToCStringLen(ctx, &len, val);
     JS_FreeValue(ctx, val);
 
-    res->body = aura_memcpy(ts->mc, (void *)body, len);
+    res->body = aura_memcpy(ts->srv_ctx->mc, (void *)body, len);
     ;
     res->body_len = len;
 
@@ -353,7 +346,7 @@ JSValue aura_js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
     if (!ts)
         return JS_EXCEPTION;
 
-    req = aura_rt_create_req(ts->mc);
+    req = aura_rt_create_req(ts->srv_ctx->mc);
     if (!req)
         return JS_EXCEPTION;
 
@@ -364,11 +357,9 @@ JSValue aura_js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
             options = argv[0];
             val = JS_GetPropertyStr(ctx, options, "url");
             if (JS_IsException(val)) {
-                JS_FreeValue(ctx, val);
                 return JS_EXCEPTION;
             }
             if (JS_IsUndefined(val)) {
-                JS_FreeValue(ctx, val);
                 return JS_EXCEPTION;
             }
             url = JS_ToCStringLen(ctx, &url_len, val);
@@ -392,13 +383,17 @@ JSValue aura_js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
         if (url_len == 0)
             return JS_EXCEPTION;
 
-        JS_FreeValue(ctx, argv[0]);
         options = argv[1];
     }
 
     /* url missing */
     if (!url)
         return JS_EXCEPTION;
+
+    if (aura_url_parse(ts->srv_ctx->mc, url, url_len, &req->parsed_url) < 0) {
+        JS_FreeCString(ctx, url);
+        return JS_EXCEPTION;
+    }
 
     if (JS_IsNull(options)) {
         _method = HTTP_GET;
@@ -408,7 +403,6 @@ JSValue aura_js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
         val = JS_GetPropertyStr(ctx, options, "method");
         if (JS_IsException(val)) {
             JS_FreeCString(ctx, url);
-            JS_FreeValue(ctx, val);
             return JS_EXCEPTION;
         }
         if (JS_IsUndefined(val)) {
@@ -428,7 +422,6 @@ JSValue aura_js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
         val = JS_GetPropertyStr(ctx, options, "body");
         if (JS_IsException(val)) {
             JS_FreeCString(ctx, url);
-            JS_FreeValue(ctx, val);
             return JS_EXCEPTION;
         }
         if (JS_IsUndefined(val)) {
@@ -463,7 +456,7 @@ JSValue aura_js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
             goto err;
 
         for (int i = 0; i < len; ++i) {
-            struct aura_rt_header_field *hdr_field;
+            struct aura_basic_header *hdr_slot;
             size_t key_len, value_len;
 
             JSAtom atom = props[i].atom;
@@ -492,34 +485,37 @@ JSValue aura_js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
                 goto err;
             }
 
-            hdr_field = aura_rt_req_get_header_slot(ts->mc, req);
-            if (!hdr_field) {
+            hdr_slot = aura_rt_req_get_header_slot(ts->srv_ctx->mc, req);
+            if (!hdr_slot) {
                 JS_FreeCString(ctx, key);
                 JS_FreeCString(ctx, value);
                 goto err;
             }
 
-            memset(hdr_field, 0, sizeof(hdr_field));
-            hdr_field->name.base = aura_strndup(ts->mc, key, key_len);
-            hdr_field->name.len = key_len;
-            hdr_field->value.base = aura_strndup(ts->mc, value, value_len);
-            hdr_field->value.len = value_len;
+            memset(hdr_slot, 0, sizeof(*hdr_slot));
+            hdr_slot->name.base = aura_strndup(ts->srv_ctx->mc, key, key_len);
+            hdr_slot->name.len = key_len;
+            hdr_slot->value.base = aura_strndup(ts->srv_ctx->mc, value, value_len);
+            hdr_slot->value.len = value_len;
             JS_FreeCString(ctx, key);
             JS_FreeCString(ctx, value);
         }
     no_header:
     }
 
-    req->url.base = aura_str_tolowercase(ts->mc, url, url_len);
+    req->url.base = aura_str_tolowercase(ts->srv_ctx->mc, url, url_len);
     req->url.len = url_len;
-    req->body = aura_memcpy(ts->mc, body, body_len);
+    req->body = aura_memcpy(ts->srv_ctx->mc, body, body_len);
     req->body_len = body_len;
 
     fns[0] = JS_DupValue(ctx, resolving_funcs[0]);
     fns[1] = JS_DupValue(ctx, resolving_funcs[1]);
 
-    if (aura_create_js_fetch_request(ctx, req, fns) < 0)
+    if (aura_qjs_create_fetch_request(ts->srv_ctx, ctx, req, fns) < 0) {
+        /* Function released req resources internally */
+        req = NULL;
         goto err;
+    }
 
     promise = JS_NewPromiseCapability(ctx, resolving_funcs);
     return promise;
@@ -546,7 +542,8 @@ const JSCFunctionListEntry aura_js_request_proto_funcs[] = {
 };
 
 const JSCFunctionListEntry aura_js_response_proto_funcs[] = {
-  JS_CGETSET_DEF("status", NULL, a_js_res_set_status),
+  JS_CGETSET_DEF("status", a_js_res_get_status, a_js_res_set_status),
+  JS_CGETSET_DEF("ok", a_js_res_get_ok, NULL),
   JS_CFUNC_DEF("set", 1, a_js_res_set_header),
   JS_CFUNC_DEF("json", 1, a_js_res_json),
 };
@@ -554,13 +551,10 @@ const JSCFunctionListEntry aura_js_response_proto_funcs[] = {
 const uint32_t aura_js_request_proto_funcs_len = ARRAY_SIZE(aura_js_request_proto_funcs);
 const uint32_t aura_js_response_proto_funcs_len = ARRAY_SIZE(aura_js_response_proto_funcs);
 
-int aura_js_fetch_init(struct aura_qjs_runtime *qrt) {
-    JSContext *ctx;
-    JSRuntime *rt;
+/**/
+int aura_js_fetch_init(JSRuntime *rt, JSContext *ctx) {
     JSValue req_proto, res_proto, global;
 
-    ctx = qrt->ctx;
-    rt = qrt->rt;
     /**
      * init request protos, shared by all runtimes
      * quickjs will take handle if the class is
@@ -688,9 +682,3 @@ int init_fn_apis(JSContext *ctx, uint32_t flags, size_t len) {
 
     JS_FreeValue(ctx, global_obj);
 }
-
-// const JSMallocFunctions aura_trace_mf = {
-//   aura_alloc,
-//   aura_free,
-//   aura_realloc,
-// };

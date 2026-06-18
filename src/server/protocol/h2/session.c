@@ -1,646 +1,774 @@
-#include "h2/h2_srv.h"
-
-void aura_enqueue_write(struct aura_h2_ctx *h2_ctx) {
-    app_debug(true, 0, "aura_enqueue_write <<<<");
-    h2_ctx->conn->callbacks.on_write(h2_ctx->conn);
-}
+#include "h2/session.h"
 
 /* update connection window size */
-static inline int a_update_window_size(struct aura_h2_window *w, uint32_t n) {
+static inline int a_update_window_size(int64_t *avail, uint32_t n) {
     int64_t new_sz;
 
-    new_sz = w->available + n;
+    new_sz = *avail + n;
     if (new_sz > INT32_MAX)
-        return A_H2_FLOW_CONTROL_ERROR;
-    w->available = new_sz;
+        return A_H2_FLOW_CONTROL_ERR;
+    *avail = new_sz;
 
-    return 0;
+    return A_H2_ERR_NONE;
 }
 
 /**
  * Update stream window size
  */
 static inline int a_update_stream_peer_window_size(struct aura_h2_stream *stream, uint32_t n) {
-    struct aura_h2_window *w;
+    int64_t *avail;
     int64_t cur_sz, updated_sz;
-    int res;
+    int rv;
 
-    w = &stream->peer_window_size;
-    cur_sz = w->available;
-    res = a_update_window_size(w, n);
-    if (res != 0)
-        return res;
+    avail = (int64_t *)&stream->peer_window_size;
+    cur_sz = *avail;
+    if ((rv = a_update_window_size(avail, n)) != A_H2_ERR_NONE)
+        return rv;
 
-    updated_sz = w->available;
-    if (aura_h2_stream_should_resume_send(cur_sz, updated_sz) && aura_h2_stream_has_pending_data(stream)) {
+    updated_sz = *avail;
+    if (aura_h2_stream_should_resume_send(cur_sz, updated_sz)) {
         aura_h2_stream_resume(stream);
     }
-    return 0;
+
+    return A_H2_ERR_NONE;
 }
 
-/**/
-int aura_h2_conn_enqueue_goaway(struct aura_h2_ctx *h2_ctx, uint32_t last_stream_id,
+int aura_h2_conn_enqueue_wind_update(struct aura_h2_core *h2_c, uint32_t stream_id,
+                                     size_t wind_sz) {
+    size_t wind_flen;
+    uint8_t *out_data;
+    struct aura_h2_sched_iov *s_iov;
+
+    wind_flen = aura_calc_frame_len(A_H2_FRAME_TYPE_WIND_UPDATE, 0, 0);
+
+    out_data = aura_h2_encode_ctrl_frame(
+      &h2_c->scheduler.write_buf,
+      A_H2_FRAME_TYPE_WIND_UPDATE,
+      A_H2_FRAME_FLAG_NONE,
+      0,
+      wind_flen,
+      (uint8_t *)&wind_sz,
+      0);
+    if (!out_data)
+        return A_H2_INTERNAL_ERR;
+
+    s_iov = aura_h2_get_sched_iov(&h2_c->scheduler, A_H2_SCHED_CONTROL);
+    if (!s_iov) {
+        /* @todo: close connection */
+    }
+
+    s_iov->type = A_H2_SCHED_CONTROL;
+    s_iov->buf = &h2_c->scheduler.write_buf;
+    s_iov->data = out_data;
+    s_iov->data_len = wind_flen;
+    s_iov->stream_id = stream_id;
+    s_iov->end_stream = false;
+
+    return A_H2_ERR_NONE;
+}
+
+int aura_h2_conn_enqueue_goaway(struct aura_h2_core *h2_c, uint32_t last_stream_id,
                                 int err_code, const struct aura_iovec *reason) {
-    struct aura_h2_sched_evt *evt;
     struct aura_h2_goaway_payload payload;
+    struct aura_h2_sched_iov *s_iov;
     uint32_t frame_len;
-    uint8_t *output_data;
-    int res;
+    uint8_t *out_data;
+    int rv;
 
-    if (h2_ctx->flags & A_H2_CONN_FLAG_GOAWAY_SENT)
-        return 0;
+    if (h2_c->flags & A_H2_CORE_FLAG_GOAWAY_SENT)
+        return A_H2_ERR_NONE;
 
-    payload.error_code = err_code;
+    payload.error_code = aura_h2_get_frame_error(err_code);
     payload.last_stream_id = last_stream_id;
     payload.debug_data.base = reason->base;
     payload.debug_data.len = reason->len;
 
-    frame_len = a_calculate_frame_len(A_H2_FRAME_TYPE_GOAWAY, 0, reason ? reason->len : 0);
-    output_data = aura_encode_control_frame(
-      h2_ctx->scheduler.write_buf, A_H2_FRAME_TYPE_GOAWAY,
-      0, 0, frame_len, (const uint8_t *)&payload, 0);
-    if (!output_data)
-        return A_H2_INTERNAL_ERROR;
+    s_iov = aura_h2_get_sched_iov(&h2_c->scheduler, A_H2_SCHED_URGENT);
+    if (!s_iov) {
+        /* @todo: close connection */
+    }
 
-    evt = aura_sched_evt_create(h2_ctx->conn->mc, NULL, h2_ctx->scheduler.write_buf, AURA_H2_SCHED_OP_URGENT_WRITE, output_data, frame_len, false);
-    if (!evt)
-        return A_H2_INTERNAL_ERROR;
-    /* enqueue goaway */
-    a_list_add_tail(&h2_ctx->scheduler.queues.urgent.head, &evt->e_list);
+    frame_len = aura_calc_frame_len(A_H2_FRAME_TYPE_GOAWAY, 0, reason ? reason->len : 0);
+    out_data = aura_h2_encode_ctrl_frame(
+      &h2_c->scheduler.write_buf,
+      A_H2_FRAME_TYPE_GOAWAY,
+      A_H2_FRAME_FLAG_NONE,
+      0,
+      frame_len,
+      (const uint8_t *)&payload,
+      0);
+    if (!out_data)
+        return A_H2_INTERNAL_ERR;
 
-    h2_ctx->flags |= A_H2_CONN_FLAG_GOAWAY_SENT;
-    return 0;
+    s_iov->type = A_H2_SCHED_URGENT;
+    s_iov->buf = &h2_c->scheduler.write_buf;
+    s_iov->data = out_data;
+    s_iov->data_len = frame_len;
+    s_iov->stream_id = 0;
+    s_iov->end_stream = false;
+
+    // aura_h2_conn_transition_state(h2_c, A_H2_CONN_STATE_CLOSING);
+    h2_c->flags |= A_H2_CORE_FLAG_GOAWAY_SENT;
+
+    return A_H2_ERR_NONE;
 }
 
-/**
- * Create and enqueue RST frame for given stream
- */
-int aura_h2_send_rst_frame(struct aura_h2_ctx *h2_ctx, uint32_t stream_id, int err_num) {
-    struct aura_h2_sched_evt *rst_evt;
+int aura_h2_conn_enqueue_rst_frame(struct aura_h2_core *h2_c, uint32_t stream_id, int err) {
+    struct aura_h2_sched_iov *s_iov;
     uint32_t frame_len;
-    uint8_t *output_data;
+    uint8_t *out_data;
 
-    /* create out frame and enqueue */
-    frame_len = a_calculate_frame_len(A_H2_FRAME_TYPE_RST_STREAM, 0, 0);
-    output_data = aura_encode_control_frame(
-      h2_ctx->scheduler.write_buf, A_H2_FRAME_TYPE_RST_STREAM, 0,
-      stream_id, frame_len, (uint8_t *)&err_num, sizeof(int));
-    if (!output_data)
+    frame_len = aura_calc_frame_len(A_H2_FRAME_TYPE_RST, 0, 0);
+
+    s_iov = aura_h2_get_sched_iov(&h2_c->scheduler, A_H2_SCHED_URGENT);
+    if (!s_iov) {
+        /* @todo: close connection */
+    }
+
+    out_data = aura_h2_encode_ctrl_frame(
+      &h2_c->scheduler.write_buf,
+      A_H2_FRAME_TYPE_RST,
+      A_H2_FRAME_FLAG_NONE,
+      stream_id,
+      frame_len,
+      (uint8_t *)&err,
+      sizeof(int));
+    if (!out_data)
+        return A_H2_INTERNAL_ERR;
+
+    s_iov->type = A_H2_SCHED_URGENT;
+    s_iov->buf = &h2_c->scheduler.write_buf;
+    s_iov->data = out_data;
+    s_iov->data_len = frame_len;
+    s_iov->stream_id = 0;
+    s_iov->end_stream = false;
+
+    aura_h2_conn_closed_stream_rb_add(h2_c, stream_id, A_H2_STREAM_SHUTDOWN_FLAG_RST_SENT);
+
+    return A_H2_ERR_NONE;
+}
+
+int aura_h2_core_init(struct aura_h2_core *core, struct aura_mem_ctx *mc, bool is_server) {
+    int rv = 0;
+
+    memset(core, 0, sizeof(*core));
+    if (aura_hpack_encoder_init(&core->enc, mc, A_HPACK_INITIAL_SETTINGS_HDR_SZ) < 0) {
         return -1;
+    }
 
-    rst_evt = aura_sched_evt_create(h2_ctx->conn->mc, NULL, h2_ctx->scheduler.write_buf, AURA_H2_SCHED_OP_URGENT_WRITE, output_data, frame_len, false);
-    if (!rst_evt)
+    if (aura_hpacK_decoder_init(&core->dec, mc, A_HPACK_INITIAL_SETTINGS_HDR_SZ) < 0) {
+        aura_hpack_encoder_destroy(&core->enc);
         return -1;
+    }
 
-    a_list_add_tail(&h2_ctx->scheduler.queues.control.head, &rst_evt->e_list);
-    aura_enqueue_write(h2_ctx);
+    aura_fq_init(&core->fq, A_H2_DEFAULT_MAX_CONC_STREAMS);
+    core->peer_window_size = A_H2_INITIAL_WINDOW_SIZE;
+    core->local_window_size = A_H2_INITIAL_WINDOW_SIZE;
+    core->local_goaway_stream_id = A_H2_STREAM_ID_MASK;
+    core->peer_goaway_stream_id = A_H2_STREAM_ID_MASK;
+    core->next_stream_id = is_server ? 2 : 1;
+    core->peer_settings = aura_h2_default_settings;
+    core->local_settings = aura_h2_default_settings;
 
-    return 0;
+    if (aura_rh_map_init(&core->stream_map, mc, aura_h2_default_settings.max_conc_streams, A_RH_KEY_U64, false) < 0) {
+        rv = -1;
+        goto err_hpack;
+    }
+
+    if (aura_h2_sched_init(&core->scheduler, mc) < 0) {
+        rv = -1;
+        goto err_map;
+    }
+
+    core->intern_tab = aura_intern_tab_create(mc, 128);
+    if (!core->intern_tab) {
+        rv = -1;
+        goto err_sched;
+    }
+
+    return rv;
+
+err_sched:
+    aura_h2_sched_destroy(&core->scheduler);
+
+err_map:
+    aura_rh_map_destroy(&core->stream_map);
+
+err_hpack:
+    aura_hpack_encoder_destroy(&core->enc);
+    aura_hpack_decoder_destroy(&core->dec);
+    return rv;
+}
+
+void aura_h2_core_destroy(struct aura_h2_core *h2_c, bool is_server) {
+    struct aura_h2_stream *stream;
+
+    aura_hpack_encoder_destroy(&h2_c->enc);
+    aura_hpack_decoder_destroy(&h2_c->dec);
+    aura_h2_sched_destroy(&h2_c->scheduler);
+    aura_intern_tab_destroy2(h2_c->intern_tab);
+    aura_fq_destroy(&h2_c->fq);
+
+    for (int i = 0; i < h2_c->stream_map.cap; ++i) {
+        stream = h2_c->stream_map.buckets[i].data;
+        if (stream) {
+            aura_h2_stream_destroy(stream, is_server);
+        }
+    }
+
+    aura_rh_map_destroy(&h2_c->stream_map);
 }
 
 /**
- * Allocate slab slot for new connection
+ * Get the staging bit position for new stream
+ * This is guaranteed to succeed because bit
+ * positions = max conc streams, and each stream
+ * only get a single staging slot
  */
-struct aura_h2_ctx *a_conn_alloc(struct aura_memory_ctx *mc) {
-    struct aura_slab_cache *sc;
-    struct aura_h2_ctx *conn;
-
-    sc = aura_slab_cache_find_by_id(mc, A_SLAB_CACHE_ID_CONNECTION);
-    A_BUG_ON_2(!sc, true);
-
-    conn = aura_slab_alloc(sc);
-    return conn;
+static inline uint32_t aura_h2_stream_get_staging_bit_pos(struct aura_h2_fq_staging_dense_pool_idx_man *pool) {
+    return aura_h2_fq_staging_dense_pool_idx_man_lease(pool);
 }
 
-/** */
-struct aura_h2_ctx *aura_h2_ctx_init(struct aura_memory_ctx *mc, bool is_server) {
-    struct aura_h2_ctx *h2_ctx;
-    struct aura_h2_stream *zero_id_stream;
-    struct aura_h2_callbacks callbacks;
+static inline void aura_h2_stream_release_staging_bit_pos(
+  struct aura_h2_fq_staging_dense_pool_idx_man *pool,
+  uint32_t idx) {
+    aura_h2_fq_staging_dense_pool_idx_man_release(pool, idx);
+}
 
-    h2_ctx = a_conn_alloc(mc);
-    if (!h2_ctx)
+/**
+ * Allocate stream description entry for this stream
+ * This is guaranteed to success since it matches
+ * max conc streams
+ */
+static void aura_h2_conn_stream_desc_alloc(struct aura_h2_core *h2_c, uint32_t stream_id) {
+    struct aura_h2_stream_desc *sd;
+
+    uint32_t idx = aura_h2_stream_desc_dense_pool_lease(&h2_c->stream_desc_pool);
+    A_BUG_ON_2(idx == A_DENSE_POOL_INVALID_IDX, true);
+    sd = aura_h2_stream_desc_dense_pool_get_slot(&h2_c->stream_desc_pool, idx);
+
+    sd->desc_flags = 0;
+    sd->h2_c = h2_c;
+    sd->peer_window_sz = h2_c->peer_window_size;
+    sd->stream_id = stream_id;
+}
+
+struct aura_h2_stream_desc *aura_h2_conn_stream_desc_get(struct aura_h2_core *h2_c, uint32_t idx) {
+    return aura_h2_stream_desc_dense_pool_get_slot(&h2_c->stream_desc_pool, idx);
+}
+
+struct aura_h2_stream *aura_h2_conn_stream_open(struct aura_h2_core *h2_c, struct aura_mem_ctx *mc,
+                                                uint32_t stream_id, aura_h2_stream_state_t init_state,
+                                                uint8_t flags, void *user_data, user_data_destructor dtor,
+                                                bool is_server) {
+    // struct aura_slab_cache *sc;
+    struct aura_h2_stream *s;
+    uint32_t bit_pos;
+
+    s = aura_h2_stream_open(
+      h2_c,
+      mc,
+      stream_id,
+      init_state,
+      flags,
+      aura_h2_conn_get_next_global_seq(h2_c),
+      user_data,
+      dtor);
+    if (!s)
         return NULL;
 
-    h2_ctx->is_server = is_server;
-    h2_ctx->flags = A_H2_CONN_FLAG_NONE;
-    h2_ctx->peer_window_size.available = A_H2_INITIAL_WINDOW_SIZE;
-    h2_ctx->local_window_size.available = A_H2_INITIAL_WINDOW_SIZE;
-    memcpy(&h2_ctx->peer_settings, &aura_h2_default_settings, sizeof(struct aura_h2_settings));
-    memcpy(&h2_ctx->local_settings, &aura_h2_default_settings, sizeof(struct aura_h2_settings));
-    h2_ctx->local_goaway_stream_id = A_H2_STREAM_ID_MASK;
-    h2_ctx->peer_goaway_stream_id = A_H2_STREAM_ID_MASK;
-    h2_ctx->peer_unacknowledged_settings_cnt = aura_h2_default_settings.max_conc_streams;
-    h2_ctx->state = A_H2_CONN_STATE_PREFACE;
-    h2_ctx->last_processed_stream_id = 0;
-    h2_ctx->input_hdr_table.max_size = aura_h2_default_settings.hdr_table_size;
-    h2_ctx->output_hdr_table.max_size = aura_h2_default_settings.hdr_table_size;
-    // h2_ctx->max_inbound_reserved_streams = 200;
-    h2_ctx->max_received_stream_id = 0;
-    h2_ctx->max_sent_stream_id = 0;
-    a_list_head_init(&h2_ctx->stream_list);
-    a_list_head_init(&h2_ctx->pending_reqs);
-    h2_ctx->scheduler.write_buf = aura_sliding_buffer_create(mc, 0, false);
-    if (!h2_ctx->scheduler.write_buf) {
-        aura_slab_free(h2_ctx);
+    struct aura_rh_map_key key;
+    aura_rh_map_key_init(&key, (uint64_t)stream_id, sizeof(uint64_t), A_RH_KEY_U64);
+    if (aura_rh_map_put(&h2_c->stream_map, &key, s) < 0) {
+        aura_h2_stream_destroy(s, is_server);
         return NULL;
     }
-    h2_ctx->intern_tab = aura_intern_tab_create(mc, 128); /** @todo: #define this value(128) */
-    if (!h2_ctx->intern_tab) {
-        aura_sliding_buffer_destroy(h2_ctx->scheduler.write_buf);
-        aura_slab_free(h2_ctx);
-        return NULL;
-    }
-    a_list_head_init(&h2_ctx->scheduler.queues.urgent.head);
-    h2_ctx->scheduler.queues.urgent.cnt = 0;
-    a_list_head_init(&h2_ctx->scheduler.queues.control.head);
-    h2_ctx->scheduler.queues.control.cnt = 0;
-    a_list_head_init(&h2_ctx->scheduler.queues.data.head);
-    h2_ctx->scheduler.queues.data.cnt = 0;
-    h2_ctx->scheduler.bytes_sent_this_tick = 0;
-    h2_ctx->scheduler.max_bytes_per_tick = 0;
-    h2_ctx->scheduler.last_tick_time = 0;
+
+    aura_h2_conn_stream_desc_alloc(h2_c, stream_id);
+
+    h2_c->next_stream_id += 2;
+    if (init_state == A_H2_STREAM_STATE_IDLE)
+        h2_c->nr_idle_streams++;
 
     if (is_server) {
-        h2_ctx->headers_to_parse = aura_sliding_buffer_create(mc, 0, false);
-        h2_ctx->next_stream_id = 2;
-        if (!h2_ctx->headers_to_parse) {
-            aura_sliding_buffer_destroy(h2_ctx->scheduler.write_buf);
-            aura_slab_free(h2_ctx);
-            return NULL;
-        }
+        bit_pos = aura_h2_stream_get_staging_bit_pos(&h2_c->staging_bitmap);
+        aura_h2_stream_attach_staging_bit_pos(s, bit_pos);
+        h2_c->max_received_stream_id = stream_id;
+    } else
+        h2_c->max_sent_stream_id = stream_id;
 
-        h2_ctx->callbacks = callbacks;
-    } else {
-        h2_ctx->next_stream_id = 1;
-    }
-
-    return h2_ctx;
+    return s;
 }
 
-struct aura_h2_stream *aura_h2_conn_stream_open(struct aura_h2_ctx *h2_ctx, uint32_t stream_id,
-                                                uint8_t initial_state, uint8_t flags, void *user_data) {
-    struct aura_slab_cache *sc;
-    struct aura_h2_stream *stream;
-
-    app_debug(true, 0, "aura_h2_conn_stream_open <<<");
-    sc = aura_slab_cache_find_by_id(h2_ctx->conn->mc, A_SLAB_CACHE_ID_STREAM);
-    stream = aura_slab_alloc(sc);
-    if (!stream)
-        return NULL;
-
-    if (aura_h2_stream_init(stream, h2_ctx->conn->mc, stream_id, initial_state, flags, user_data) < 0) {
-        aura_h2_stream_destroy(stream);
-        return NULL;
-    }
-
-    stream->h2_ctx = h2_ctx;
-    if (initial_state == A_H2_STREAM_STATE_IDLE)
-        ++h2_ctx->num_of_idle_streams;
-
-    if (h2_ctx->conn->is_server) {
-        h2_ctx->max_received_stream_id = stream_id;
-    } else {
-        h2_ctx->next_stream_id += 2; /* @todo: create a proper function here */
-        h2_ctx->max_sent_stream_id = stream_id;
-    }
-
-    a_list_add_tail(&h2_ctx->stream_list, &stream->s_list);
-    return stream;
-}
-
-void aura_h2_ctx_destroy(struct aura_h2_ctx *h2_ctx) {
-    struct aura_h2_stream *stream;
-
-    if (!h2_ctx)
-        return;
-
-    aura_sliding_buffer_destroy(h2_ctx->scheduler.write_buf);
-    while (!a_list_is_empty(&h2_ctx->stream_list)) {
-        a_list_dequeue(stream, &h2_ctx->stream_list, s_list);
-        /* destroy stream */
-        aura_h2_stream_destroy(stream);
-    }
-
-    aura_hpack_header_tab_dispose(&h2_ctx->input_hdr_table);
-    aura_hpack_header_tab_dispose(&h2_ctx->output_hdr_table);
-
-    aura_intern_tab_destroy(h2_ctx->intern_tab);
-
-    if (h2_ctx->headers_to_parse)
-        aura_sliding_buffer_destroy(h2_ctx->headers_to_parse);
-
-    aura_slab_cache_destroy((void *)h2_ctx);
-}
-
-/**
- * Returns true if the connection can receive a request,
- * otherwise false
- */
-static inline bool can_receive_request(struct aura_h2_ctx *h2_ctx) {
-    /* we are not server, we have a valid next stream id, we have not received goaway and we are not closing connection*/
-}
-
-/**
- * Returns true if given stream can create
- * and send request headers, otherwise false
- */
-static inline bool can_send_request_headers() {}
-
-/**
- * Returns true if given stream can create
- * and send response headers, otherwise false
- */
-static inline int can_send_response_headers() {
-    /* can_send(), proceed */
-    /* if we are not server, protocol error */
-    /* if stream state is opening, then YES */
-    /* if stream state is closing, then CLOSING error */
-    /* else invalid stream state */
-    return 0;
-}
-
-/**
- * Returns true if given stream can send trailer headers,
- * otherwise false
- */
-static inline int can_send_trailer_headers() {
-    /* can_send() */
-    /* if stream state open, YES */
-    /* if stream is closing, stream closing error */
-    /* if this is our server, then YES (find out how this works) */
-    /* invalid stream state */
-}
-
-/**
- * Returns true if given connection can send
- * window updates, otherwise false
- */
-static inline int can_send_window_update() {
-    /* is conn closing, conn closing error */
-    /* if stream id = 0, conn level window update */
-    /* if no stream, stream closed error */
-    /* if stream closing, stream closing error */
-    /* if reserved local, invalid state error */
-    return 0;
-}
-
-int aura_setup_preface_settings(struct aura_h2_ctx *h2_ctx) {
-    app_debug(true, 0, "a_setup_server_preface <<<<");
-    uint32_t frame_len;
-    uint8_t *output_data;
-    struct aura_h2_sched_evt *settings_evt, *window_update_evt;
-    uint32_t initial_window_size;
-    const struct aura_iovec *reason;
-    int error;
-
-    struct aura_h2_settings_payload settings[] = {
-      {.settings_id = A_H2_SETTINGS_MAX_CONCURRENT_STREAMS, .value = aura_h2_default_settings.max_conc_streams},
-    };
-
-    frame_len = a_calculate_frame_len(A_H2_FRAME_TYPE_SETTINGS, ARRAY_SIZE(settings), 0);
-    output_data = aura_encode_control_frame(
-      h2_ctx->scheduler.write_buf, A_H2_FRAME_TYPE_SETTINGS, 0, 0,
-      frame_len, (void *)&settings, ARRAY_SIZE(settings));
-
-    if (!output_data) {
-        error = A_H2_INTERNAL_ERROR;
-        reason = &a_h2_error_reasons[AURA_H2_ERROR_IDX_INTERNAL_ERROR];
-        goto goaway;
-    }
-
-    settings_evt = aura_sched_evt_create(h2_ctx->conn->mc, NULL, h2_ctx->scheduler.write_buf, AURA_H2_SCHED_OP_URGENT_WRITE, output_data, frame_len, false);
-    if (!settings_evt) {
-        error = A_H2_INTERNAL_ERROR;
-        reason = &a_h2_error_reasons[AURA_H2_ERROR_IDX_INTERNAL_ERROR];
-        goto goaway;
-    }
-    a_list_add_tail(&h2_ctx->scheduler.queues.urgent.head, &settings_evt->e_list);
-
-    frame_len = a_calculate_frame_len(A_H2_FRAME_TYPE_WINDOW_UPDATE, 0, 0);
-    initial_window_size = A_H2_INITIAL_WINDOW_SIZE;
-    output_data = aura_encode_control_frame(
-      h2_ctx->scheduler.write_buf, A_H2_FRAME_TYPE_WINDOW_UPDATE, 0, 0,
-      frame_len, (uint8_t *)&initial_window_size, 0);
-
-    if (!output_data) {
-        aura_h2_scheduler_evt_destroy(settings_evt);
-        error = A_H2_INTERNAL_ERROR;
-        reason = &a_h2_error_reasons[AURA_H2_ERROR_IDX_INTERNAL_ERROR];
-        goto goaway;
-    }
-
-    window_update_evt = aura_sched_evt_create(h2_ctx->conn->mc, NULL, h2_ctx->scheduler.write_buf, AURA_H2_SCHED_OP_URGENT_WRITE, output_data, frame_len, false);
-    if (!window_update_evt) {
-        aura_h2_scheduler_evt_destroy(settings_evt);
-        error = A_H2_INTERNAL_ERROR;
-        reason = &a_h2_error_reasons[AURA_H2_ERROR_IDX_INTERNAL_ERROR];
-        goto goaway;
-    }
-    a_list_add_tail(&h2_ctx->scheduler.queues.urgent.head, &window_update_evt->e_list);
-    return A_H2_ERROR_NONE;
-
-goaway:
-    aura_h2_conn_enqueue_goaway(h2_ctx, h2_ctx->last_processed_stream_id, error, reason);
-    return error;
-}
-
-/**
- * Close given stream and schedule RESET frame
- */
-static inline void aura_send_stream_error(struct aura_h2_ctx *h2_ctx, struct aura_h2_stream *stream, int err_num) {
+int aura_h2_conn_send_stream_error(struct aura_h2_core *h2_c, struct aura_h2_stream *stream,
+                                   int err_num, bool is_server) {
     uint8_t *rst_frame;
     uint32_t frame_len;
 
-    // aura_h2_stream_reset(s);
-    if (stream->state == A_H2_STREAM_STATE_CLOSING) {
-        return;
-    }
+    if (stream->state == A_H2_STREAM_STATE_CLOSING)
+        return A_H2_ERR_NONE;
 
-    /*
-        if stream is idle, protocol error
-    */
+    if (aura_h2_conn_enqueue_rst_frame(h2_c, stream->stream_id, err_num) < 0)
+        return A_H2_INTERNAL_ERR;
 
-    if (aura_h2_send_rst_frame(h2_ctx, stream->stream_id, err_num) < 0) {
-        aura_h2_conn_enqueue_goaway(h2_ctx, h2_ctx->last_processed_stream_id, AURA_H2_ERROR_IDX_INTERNAL_ERROR, &a_h2_error_reasons[AURA_H2_ERROR_IDX_INTERNAL_ERROR]);
-        return;
-    }
+    aura_h2_conn_detach_stream(h2_c, stream->stream_id);
+    aura_h2_stream_transition_state(stream, A_H2_STREAM_STATE_CLOSING);
 
-    // update error stats
+    if (is_server) {
+        h2_c->nr_out_streams--;
+        aura_h2_stream_release_staging_bit_pos(&h2_c->staging_bitmap, stream->staging_bit_pos);
+    } else
+        h2_c->nr_in_streams--;
 
-    /* if we are client and the stream is ours, cancel and headers associated with this stream
-    that creates new headers like push and request headers
-*/
-    // aura_enqueue_write(conn);
+    aura_h2_stream_destroy(stream, is_server);
+
+    return A_H2_ERR_NONE;
 }
 
-/**
- * Handle settings frame
- */
-int aura_process_settings(struct aura_h2_ctx *h2_ctx, struct aura_h2_in_frame *in_frame) {
-    app_debug(true, 0, "a_process_settings <<<<");
+int aura_h2_conn_process_settings(struct aura_h2_core *h2_c, struct aura_h2_in_frame *in_frame,
+                                  bool is_server) {
     struct aura_h2_frame *frame;
-    uint32_t prev_window_sz, delta;
-    uint32_t frame_len;
-    uint8_t *output_data;
-    struct aura_h2_out_frame *settings_ack_frame;
-    struct aura_h2_sched_evt *settings_ack_evt;
+    struct aura_h2_sched_iov *s_iov;
     struct aura_h2_stream *stream;
-    int res;
-
-    /* Check if we expect continuation frame */
-    if (h2_ctx->flags & A_H2_CONN_FLAG_EXPECT_CONTINUATION) {
-        return A_H2_PROTOCOL_ERROR;
-    }
+    const struct aura_iovec *reason;
+    uint8_t *out_data;
+    uint32_t prev_window_sz, delta, frame_len;
+    int rv;
 
     frame = &in_frame->frame;
     if (frame->stream_id != 0) {
-        aura_h2_conn_enqueue_goaway(h2_ctx, h2_ctx->last_processed_stream_id, A_H2_PROTOCOL_ERROR, &a_h2_error_reasons[A_H2_ERROR_IDX_INVALID_ARG]);
-        return A_H2_PROTOCOL_ERROR;
+        rv = A_H2_PROTOCOL_ERR;
+        reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG];
+        goto goaway;
     }
 
-    if (aura_h2_frame_is_acknowledgement(frame->flags)) {
-        if (frame->len != 0) {
-            aura_h2_conn_enqueue_goaway(h2_ctx, h2_ctx->last_processed_stream_id, A_H2_FRAME_SIZE_ERROR, &a_h2_error_reasons[A_H2_ERROR_IDX_INVALID_ARG]);
-            return A_H2_FRAME_SIZE_ERROR;
-        }
+    if (aura_h2_frame_is_ack(frame->flags) && frame->len != 0) {
+        rv = A_H2_FRAME_SIZE_ERR;
+        reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG];
+        goto goaway;
     } else {
         /* Store prev window size before updating it */
-        prev_window_sz = h2_ctx->peer_settings.initial_window_size;
-        res = aura_h2_parse_frame_payload(in_frame);
-        if (res != A_H2_ERROR_NONE) {
-            aura_h2_conn_enqueue_goaway(h2_ctx, h2_ctx->last_processed_stream_id, res, &a_h2_error_reasons[A_H2_ERROR_IDX_INVALID_ARG]);
-            return res;
+        prev_window_sz = h2_c->peer_settings.initial_window_size;
+        // in_frame->settings_payload = h2_c->peer_settings;
+        rv = aura_h2_parse_frame_payload(in_frame);
+        if (rv != A_H2_ERR_NONE) {
+            reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG];
+            goto goaway;
         }
+
+        /* Copy over parsed settings */
+        memcpy(&h2_c->peer_settings, &in_frame->settings_payload, sizeof(h2_c->peer_settings));
+        /* Update encoder table if neccesary */
+        aura_hpack_enc_update_tab_settings_sz(&h2_c->enc, h2_c->peer_settings.hdr_table_size);
 
         /* schedule ack */
-        frame_len = a_calculate_frame_len(A_H2_FRAME_TYPE_SETTINGS, 0, 0);
-        output_data = aura_encode_control_frame(
-          h2_ctx->scheduler.write_buf,
+        frame_len = aura_calc_frame_len(A_H2_FRAME_TYPE_SETTINGS, 0, 0);
+
+        out_data = aura_h2_encode_ctrl_frame(
+          &h2_c->scheduler.write_buf,
           A_H2_FRAME_TYPE_SETTINGS,
-          A_H2_FRAME_FLAG_ACK, 0,
-          frame_len, NULL, 0);
-        if (!output_data) {
-            aura_h2_conn_enqueue_goaway(h2_ctx, h2_ctx->last_processed_stream_id, A_H2_INTERNAL_ERROR, &a_h2_error_reasons[AURA_H2_ERROR_IDX_INTERNAL_ERROR]);
-            return A_H2_INTERNAL_ERROR;
+          A_H2_FRAME_FLAG_ACK,
+          0,
+          frame_len,
+          NULL, 0);
+        if (!out_data) {
+            rv = A_H2_INTERNAL_ERR;
+            reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INTERNAL_ERROR];
+            goto goaway;
         }
 
-        settings_ack_evt = aura_sched_evt_create(h2_ctx->conn->mc, NULL, h2_ctx->scheduler.write_buf, AURA_H2_SCHED_OP_URGENT_WRITE, output_data, frame_len, false);
-        if (!settings_ack_evt) {
-            aura_h2_conn_enqueue_goaway(h2_ctx, h2_ctx->last_processed_stream_id, A_H2_INTERNAL_ERROR, &a_h2_error_reasons[AURA_H2_ERROR_IDX_INTERNAL_ERROR]);
-            return A_H2_INTERNAL_ERROR;
+        s_iov = aura_h2_get_sched_iov(&h2_c->scheduler, A_H2_SCHED_CONTROL);
+        if (!s_iov) {
+            /* @todo: close connection */
         }
 
-        a_list_add_tail(&h2_ctx->scheduler.queues.urgent.head, &settings_ack_evt->e_list);
+        s_iov->type = A_H2_SCHED_CONTROL;
+        s_iov->buf = &h2_c->scheduler.write_buf;
+        s_iov->data = out_data;
+        s_iov->data_len = frame_len;
+        s_iov->stream_id = frame->stream_id;
+        s_iov->end_stream = false;
 
         /* Check prev window against updated window */
-        if (prev_window_sz != h2_ctx->peer_settings.initial_window_size) {
-            delta = h2_ctx->peer_settings.initial_window_size - prev_window_sz;
-            a_list_for_each(stream, &h2_ctx->stream_list, s_list) {
-                res = a_update_stream_peer_window_size(stream, delta);
-                if (res != 0) {
-                    /* schedule stream reset FLOW CONTROL ERROR for all violators */
-                    aura_send_stream_error(h2_ctx, stream, res);
+        if (prev_window_sz != h2_c->peer_settings.initial_window_size) {
+            delta = h2_c->peer_settings.initial_window_size - prev_window_sz;
+            for (int i = 0; i < h2_c->stream_map.cap; ++i) {
+                stream = h2_c->stream_map.buckets[i].data;
+                if (stream) {
+                    rv = a_update_stream_peer_window_size(stream, delta);
+                    if (rv != 0) {
+                        /* schedule stream reset FLOW CONTROL ERROR for all violators */
+                        aura_h2_conn_send_stream_error(h2_c, stream, rv, is_server);
+                    }
                 }
             }
         }
     }
 
-    return A_H2_ERROR_NONE;
+    return A_H2_ERR_NONE;
+
+goaway:
+    aura_h2_conn_enqueue_goaway(
+      h2_c,
+      h2_c->local_goaway_stream_id,
+      rv,
+      reason);
+    return rv;
 }
 
 /**
  *
  */
-int aura_process_priority(struct aura_h2_ctx *h2_ctx, struct aura_h2_in_frame *frame) {
-    /**/
-    /* Check if we expect continuation frame */
-    if (h2_ctx->flags & A_H2_CONN_FLAG_EXPECT_CONTINUATION) {
-        return A_H2_PROTOCOL_ERROR;
-    }
-
-    return A_H2_ERROR_NONE;
+int aura_process_priority(struct aura_h2_core *h2_c, struct aura_h2_in_frame *in_frame) {
+    return A_H2_ERR_NONE;
 }
 
-/**
- *
- */
-int aura_process_ping(struct aura_h2_ctx *h2_ctx, struct aura_h2_in_frame *in_frame) {
-    struct aura_h2_ping_payload payload;
+int aura_h2_conn_process_ping(struct aura_h2_core *h2_c, struct aura_h2_in_frame *in_frame) {
     struct aura_h2_frame *frame;
+    struct aura_h2_ping_payload payload;
+    const struct aura_iovec *reason;
+    struct aura_h2_sched_iov *s_iov;
+    uint8_t *out_data;
     uint32_t frame_len;
-    struct aura_h2_sched_evt *ping_evt;
-    uint8_t *output_data;
-    int res;
-
-    /* Check if we expect continuation frame */
-    if (h2_ctx->flags & A_H2_CONN_FLAG_EXPECT_CONTINUATION) {
-        return A_H2_PROTOCOL_ERROR;
-    }
+    int rv;
 
     frame = &in_frame->frame;
-    res = aura_h2_parse_frame_payload(in_frame);
-    if (res != A_H2_ERROR_NONE) {
-        aura_h2_conn_enqueue_goaway(h2_ctx, h2_ctx->last_processed_stream_id, res, &a_h2_error_reasons[A_H2_ERROR_IDX_INVALID_ARG]);
-        return res;
+    rv = aura_h2_parse_frame_payload(in_frame);
+    if (rv != A_H2_ERR_NONE) {
+        reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG];
+        goto goaway;
     }
 
-    if (!aura_h2_frame_is_acknowledgement(frame->flags)) {
-        output_data = aura_encode_control_frame(
-          h2_ctx->scheduler.write_buf, A_H2_FRAME_TYPE_PING,
-          0, 0, frame_len, payload.data, 64);
-        a_list_add_tail(&h2_ctx->scheduler.queues.urgent.head, &ping_evt->e_list);
-        aura_enqueue_write(h2_ctx);
+    if (!aura_h2_frame_is_ack(frame->flags)) {
+        out_data = aura_h2_encode_ctrl_frame(
+          &h2_c->scheduler.write_buf,
+          A_H2_FRAME_TYPE_PING,
+          0, 0,
+          frame_len,
+          payload.data,
+          64);
+
+        if (!out_data) {
+            rv = A_H2_INTERNAL_ERR;
+            reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INTERNAL_ERROR];
+            goto goaway;
+        }
+
+        s_iov = aura_h2_get_sched_iov(&h2_c->scheduler, A_H2_SCHED_URGENT);
+        if (!s_iov) {
+            /* @todo: close connection */
+        }
+
+        s_iov->type = A_H2_SCHED_URGENT;
+        s_iov->buf = &h2_c->scheduler.write_buf;
+        s_iov->data = out_data;
+        s_iov->data_len = frame_len;
+        s_iov->stream_id = frame->stream_id;
+        s_iov->end_stream = false;
     }
 
-    return res;
+    return rv;
+
+goaway:
+    aura_h2_conn_enqueue_goaway(
+      h2_c,
+      h2_c->peer_goaway_stream_id,
+      rv,
+      reason);
+
+    return rv;
 }
 
 /**
  *
  */
-int aura_process_goaway(struct aura_h2_ctx *h2_ctx, struct aura_h2_in_frame *in_frame) {
-    app_debug(true, 0, ">>>>>>>>>> PROCESSING GO AWAY");
+int aura_h2_conn_process_goaway(struct aura_h2_core *h2_c, struct aura_h2_in_frame *in_frame,
+                                bool is_server) {
     struct aura_h2_goaway_payload payload;
     struct aura_h2_frame *frame;
-    int res;
-
-    /* Check if we expect continuation frame */
-    if (h2_ctx->flags & A_H2_CONN_FLAG_EXPECT_CONTINUATION) {
-        return A_H2_PROTOCOL_ERROR;
-    }
+    struct aura_h2_stream *stream;
+    int rv;
 
     frame = &in_frame->frame;
-    res = aura_h2_parse_frame_payload(in_frame);
-    if (res != A_H2_ERROR_NONE)
-        return res;
+    rv = aura_h2_parse_frame_payload(in_frame);
+    if (rv != A_H2_ERR_NONE)
+        return rv;
 
-    aura_h2_conn_enqueue_goaway(h2_ctx, h2_ctx->last_processed_stream_id, payload.error_code, &payload.debug_data);
-    return res;
+    payload = in_frame->goaway_payload;
+    /**
+     * check if peer sent their own local last stream id OR
+     * if peer increased last stream id
+     */
+    if ((payload.last_stream_id > 0 &&
+         !aura_h2_conn_stream_is_local(payload.last_stream_id, is_server)) ||
+        payload.last_stream_id > h2_c->peer_goaway_stream_id) {
+        /* Hard close connection*/
+
+        return A_H2_PROTOCOL_ERR;
+    }
+
+    h2_c->flags |= (A_H2_CORE_FLAG_GOAWAY_RECD | A_H2_CORE_FLAG_CLOSING);
+    h2_c->peer_goaway_stream_id = payload.last_stream_id;
+
+    // aura_h2_conn_transition_state(h2_c, A_H2_CONN_STATE_CLOSING);
+
+    /* collect streams to terminate and call terminate on them */
+    if (aura_rh_map_is_empty(&h2_c->stream_map)) {
+        // aura_conn_transition_state(h2_c->conn, A_CONN_STATE_CLOSING);
+        return rv;
+    }
+
+    void *data;
+    if (payload.error_code == 0x0) {
+        /* Fail streams with stream id above peer max processed stream */
+        if (!aura_rh_map_is_empty(&h2_c->stream_map)) {
+            for (int i = 0; i < h2_c->stream_map.cap; ++i) {
+                stream = (struct aura_h2_stream *)(h2_c->stream_map.buckets[i].data);
+                if (stream && stream->stream_id > payload.last_stream_id) {
+                    aura_rh_map_del(&h2_c->stream_map, &h2_c->stream_map.buckets[i].key, NULL);
+                    aura_h2_stream_destroy(stream, is_server);
+                }
+            }
+        }
+    } else {
+        /* Fail all streams */
+        if (!aura_rh_map_is_empty(&h2_c->stream_map)) {
+            for (int i = 0; i < h2_c->stream_map.cap; ++i) {
+                aura_rh_map_del(&h2_c->stream_map, &h2_c->stream_map.buckets[i].key, &data);
+                stream = (struct aura_h2_stream *)data;
+                if (stream)
+                    aura_h2_stream_destroy(stream, is_server);
+            }
+        }
+    }
+
+    return rv;
 }
 
 /**
  *
  */
-int aura_process_rst_stream(struct aura_h2_ctx *h2_ctx, struct aura_h2_in_frame *in_frame) {
-    struct aura_h2_rst_stream_payload payload;
+int aura_h2_conn_process_rst_stream(struct aura_h2_core *h2_c, struct aura_h2_in_frame *in_frame,
+                                    bool is_server) {
     struct aura_h2_stream *stream;
     struct aura_h2_frame *frame;
-    int res;
-
-    /* Check if we expect continuation frame */
-    if (h2_ctx->flags & A_H2_CONN_FLAG_EXPECT_CONTINUATION) {
-        return A_H2_PROTOCOL_ERROR;
-    }
+    int rv;
 
     frame = &in_frame->frame;
-    res = aura_h2_parse_frame_payload(in_frame);
-    if (res != A_H2_ERROR_NONE) {
-        aura_h2_conn_enqueue_goaway(h2_ctx, h2_ctx->last_processed_stream_id, res, &a_h2_error_reasons[A_H2_ERROR_IDX_INVALID_ARG]);
-        return res;
+    rv = aura_h2_parse_frame_payload(in_frame);
+    if (rv != A_H2_ERR_NONE) {
+        aura_h2_conn_enqueue_goaway(
+          h2_c,
+          h2_c->local_goaway_stream_id,
+          rv,
+          &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG]);
+        return rv;
     }
 
-    if (aura_h2_stream_is_idle(h2_ctx, frame->stream_id)) {
-        aura_h2_conn_enqueue_goaway(h2_ctx, h2_ctx->last_processed_stream_id, A_H2_PROTOCOL_ERROR, &a_h2_error_reasons[A_H2_ERROR_IDX_INVALID_ARG]);
-        return res;
+    if (aura_h2_conn_stream_state_violation(h2_c, frame->stream_id, is_server)) {
+        aura_h2_conn_enqueue_goaway(
+          h2_c,
+          h2_c->local_goaway_stream_id,
+          A_H2_PROTOCOL_ERR,
+          &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG]);
+        return rv;
     }
 
-    stream = aura_h2_conn_find_stream(h2_ctx, frame->stream_id);
-    if (stream == NULL)
-        return A_H2_ERROR_NONE;
+    stream = aura_h2_conn_find_stream(h2_c, frame->stream_id);
+    if (!stream)
+        return A_H2_ERR_NONE;
 
-    // update stats
-    aura_h2_stream_destroy(stream);
+    aura_h2_stream_destroy(stream, is_server);
+    h2_c->nr_closed_streams++;
 
-    // check for dos attempts and insult client accordingly
-
-    return A_H2_ERROR_NONE;
+    return A_H2_ERR_NONE;
 }
 
 /**
  *
  */
-int aura_process_window_update(struct aura_h2_ctx *h2_ctx, struct aura_h2_in_frame *in_frame) {
+int aura_h2_conn_process_wind_update(struct aura_h2_core *h2_c, struct aura_h2_in_frame *in_frame,
+                                     bool is_server) {
     struct aura_h2_window_update_payload payload;
     struct aura_h2_stream *stream;
     struct aura_h2_frame *frame;
-    int res;
-    bool error_is_stream_level;
-
-    /* Check if we expect continuation frame */
-    if (h2_ctx->flags & A_H2_CONN_FLAG_EXPECT_CONTINUATION) {
-        return A_H2_PROTOCOL_ERROR;
-    }
+    int rv;
+    bool is_stream_level;
+    const struct aura_iovec *reason;
 
     frame = &in_frame->frame;
-    error_is_stream_level = frame->stream_id != 0;
-    res = aura_h2_parse_frame_payload(in_frame);
-    if (res != A_H2_ERROR_NONE) {
-        if (error_is_stream_level) {
-            stream = aura_h2_conn_find_stream(h2_ctx, frame->stream_id);
-            if (stream != NULL) {
-                // @todo: frame reset by peer, perform appropriate actions
-                // close stream related things (see aura_h2_stream_reset in stream.c)
+    is_stream_level = frame->stream_id != 0;
+    rv = aura_h2_parse_frame_payload(in_frame);
+
+    if (rv == A_H2_FRAME_SIZE_ERR) {
+        reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG];
+        goto goaway;
+    }
+
+    if (rv == A_H2_PROTOCOL_ERR) {
+        if (is_stream_level) {
+            stream = aura_h2_conn_find_stream(h2_c, frame->stream_id);
+            if (!stream) {
+                /* Look in map */
+                /* Penalize if rst was received */
+
+                return A_H2_ERR_NONE;
             }
-            aura_send_stream_error(h2_ctx, stream, res);
-            return 0;
-        } else {
-            aura_h2_conn_enqueue_goaway(h2_ctx, h2_ctx->last_processed_stream_id, res, &a_h2_error_reasons[A_H2_ERROR_IDX_INVALID_ARG]);
-            return res;
+
+            aura_h2_conn_send_stream_error(h2_c, stream, rv, is_server);
+            /* Do not end processing on stream error */
+            return A_H2_ERR_NONE;
         }
+
+        /* Connection level error */
+        reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG];
+        goto goaway;
     }
 
-    if (frame->stream_id == 0) {
-        res = a_update_window_size(&h2_ctx->peer_window_size, payload.increment);
-        if (res != 0)
-            return res;
-        goto out;
-    }
-
-    if (!aura_h2_stream_is_idle(h2_ctx, frame->stream_id)) {
-        stream = aura_h2_conn_find_stream(h2_ctx, frame->stream_id);
-        if (stream != NULL) {
-            res = a_update_stream_peer_window_size(stream, payload.increment);
-            if (res != 0) {
-                aura_send_stream_error(h2_ctx, stream, res);
-            }
+    /* connection level update */
+    if (!is_stream_level) {
+        rv = a_update_window_size((int64_t *)&h2_c->peer_window_size, payload.increment);
+        if (rv != A_H2_ERR_NONE) {
+            reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG];
+            goto goaway;
         }
-        goto out;
+        return A_H2_ERR_NONE;
     }
 
-    // @todo: report invalid
-    // A_H2_PROTOCOL_ERROR
-out:
-    return 0;
+    if (!aura_h2_conn_stream_state_violation(h2_c, frame->stream_id, is_server)) {
+        stream = aura_h2_conn_find_stream(h2_c, frame->stream_id);
+        if (!stream) {
+            /* Look at hash */
+            /* Penalize if breaking rules */
+
+            return A_H2_ERR_NONE;
+        }
+
+        rv = A_H2_PROTOCOL_ERR;
+        goto goaway;
+    }
+    /* update stream window */
+    rv = a_update_stream_peer_window_size(stream, payload.increment);
+    if (rv != 0) {
+        aura_h2_conn_send_stream_error(h2_c, stream, rv, is_server);
+    }
+    return A_H2_ERR_NONE;
+
+goaway:
+    aura_h2_conn_enqueue_goaway(
+      h2_c,
+      h2_c->local_goaway_stream_id,
+      rv,
+      reason);
+    return rv;
 }
 
-int aura_process_continuation(struct aura_h2_ctx *h2_ctx, struct aura_h2_in_frame *in_frame) {
+int aura_h2_conn_process_cont(struct aura_h2_core *h2_c, struct aura_h2_in_frame *in_frame,
+                              bool is_server) {
     struct aura_h2_stream *stream;
     size_t avail_read;
     uint8_t *read_ptr;
-    int ret;
+    const struct aura_iovec *reason;
+    int rv;
 
-    stream = aura_h2_conn_find_stream(h2_ctx, in_frame->frame.stream_id);
-    if (!stream || !(stream->flags & A_H2_STREAM_FLAG_CONTINUATION)) {
-        return A_H2_PROTOCOL_ERROR;
+    rv = A_H2_ERR_NONE;
+    /* Check if we expect continuation frame */
+    if ((h2_c->flags & A_H2_CORE_FLAG_CONT) == 0) {
+        rv = A_H2_PROTOCOL_ERR;
+        reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG];
+        goto goaway;
     }
 
-    avail_read = aura_sliding_buffer_available_read(h2_ctx->headers_to_parse);
+    stream = aura_h2_conn_find_stream(h2_c, in_frame->frame.stream_id);
+    if (!stream || !(stream->flags & A_H2_STREAM_FLAG_CONT)) {
+        rv = A_H2_PROTOCOL_ERR;
+        reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG];
+        goto goaway;
+    }
+
+    stream->received_headers += in_frame->cont_payload.len;
     if (avail_read + in_frame->frame.len > A_MAX_REQ_LEN) {
-        if (aura_h2_send_rst_frame(h2_ctx, stream->stream_id, A_H2_REFUSED_STREAM_ERROR) < 0)
-            aura_h2_conn_enqueue_goaway(h2_ctx, h2_ctx->last_processed_stream_id, A_H2_INTERNAL_ERROR, &a_h2_error_reasons[AURA_H2_ERROR_IDX_INTERNAL_ERROR]);
+        aura_h2_conn_send_stream_error(h2_c, stream, A_H2_REFUSED_STREAM_ERR, is_server);
+        return A_H2_ERR_NONE;
     }
 
-    if (aura_sliding_buffer_append(h2_ctx->headers_to_parse, in_frame->frame.payload, in_frame->frame.len) < 0)
-        aura_h2_conn_enqueue_goaway(h2_ctx, h2_ctx->last_processed_stream_id, A_H2_INTERNAL_ERROR, &a_h2_error_reasons[AURA_H2_ERROR_IDX_INTERNAL_ERROR]);
+    // if (aura_sliding_buf_append(h2_conn->headers_to_parse, in_frame->frame.payload, in_frame->frame.len) < 0) {
+    //     rv = A_H2_INTERNAL_ERR;
+    //     reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INTERNAL_ERROR];
+    //     goto goaway;
+    // }
 
     if (in_frame->frame.flags & A_H2_FRAME_FLAG_END_HEADERS) {
-        h2_ctx->flags &= ~A_H2_CONN_FLAG_EXPECT_CONTINUATION;
-        read_ptr = aura_sliding_buffer_read_pointer(h2_ctx->headers_to_parse);
-        avail_read = aura_sliding_buffer_available_read(h2_ctx->headers_to_parse);
-        ret = h2_ctx->callbacks.header_callback(h2_ctx, stream, read_ptr, avail_read);
-        aura_sliding_buffer_destroy(h2_ctx->headers_to_parse);
+        stream->flags &= ~A_H2_STREAM_FLAG_CONT;
+        stream->flags |= A_H2_STREAM_FLAG_HDRS_RECD;
     }
 
-    return ret;
+    return rv;
+
+goaway:
+    aura_h2_conn_enqueue_goaway(
+      h2_c,
+      h2_c->local_goaway_stream_id,
+      rv,
+      reason);
+    return rv;
+}
+
+int aura_h2_conn_after_frame_sent(struct aura_h2_core *h2_c, uint32_t stream_id,
+                                  int type, size_t nbytes, bool end_stream) {
+    struct aura_rh_map_key key;
+    struct aura_h2_stream *stream;
+    bool stream_closed;
+
+    if (type == A_H2_SCHED_DATA) {
+        aura_rh_map_key_init(&key, stream_id, sizeof(uint32_t), A_RH_KEY_U64);
+        stream = aura_rh_map_get(&h2_c->stream_map, &key);
+
+        aura_h2_conn_consume_window(h2_c, nbytes);
+        aura_h2_stream_consume_window(stream, nbytes);
+
+        if (end_stream) {
+            stream_closed = stream->state == A_H2_STREAM_STATE_HALF_CLOSED_REMOTE;
+
+            if (stream_closed) {
+                aura_rh_map_key_init(&key, (uint64_t)stream->stream_id, sizeof(uint64_t), A_RH_KEY_U64);
+                aura_rh_map_del(&h2_c->stream_map, &key, NULL);
+                aura_h2_stream_destroy(stream, true);
+            }
+        }
+        return 0;
+    }
+
+    if (type == A_H2_SCHED_HDR) {
+        if (end_stream) {
+            aura_rh_map_key_init(&key, stream_id, sizeof(uint32_t), A_RH_KEY_U64);
+            stream = aura_rh_map_get(&h2_c->stream_map, &key);
+
+            stream_closed = stream->state == A_H2_STREAM_STATE_HALF_CLOSED_REMOTE;
+
+            if (stream_closed) {
+                // aura_rh_map_key_init(&key, (uint64_t)stream->stream_id, sizeof(uint64_t), A_RH_KEY_U64);
+                aura_rh_map_del(&h2_c->stream_map, &key, NULL);
+                aura_h2_stream_destroy(stream, true);
+            }
+        }
+        return 0;
+    }
+
+    return 0;
+}
+
+static void inline a_h2_stream_remove_from_heap(struct aura_h2_sched2 *sched, struct aura_h2_stream *s) {
+    A_BUG_ON_2(s->queued == false, true);
+
+    aura_heap_del(&sched->queues.stream_heap[s->prio.urgency], &s->hp_ent);
+}
+
+/* ============================================ */
+static int a_h2_conn_update_stream_priority(struct aura_h2_core *h2_c,
+                                            struct aura_h2_stream *stream,
+                                            struct aura_pri_ext *prio) {
+    if (stream->prio.incremental == prio->incremental &&
+        stream->prio.urgency == prio->urgency)
+        return 0;
 }

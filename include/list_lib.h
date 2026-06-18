@@ -5,17 +5,18 @@
 #include <stddef.h>
 #include <stdio.h>
 
-#define a_container_of(ptr, type, member) ({          \
+#define aura_container_of(ptr, type, member) ({       \
     const typeof(((type *)0)->member) *_mptr = (ptr); \
     (type *)((char *)_mptr - offsetof(type, member)); \
 })
 
 /* List link structure */
 struct aura_list_head {
-    struct aura_list_head *next, *prev;
+    struct aura_list_head *next;
+    struct aura_list_head *prev;
 };
 
-static inline void a_list_head_init(struct aura_list_head *list) {
+static inline void aura_list_head_init(struct aura_list_head *list) {
     list->next = list;
     list->prev = list;
 }
@@ -31,34 +32,34 @@ static inline void a_list_add(struct aura_list_head *head, struct aura_list_head
     _a_list_add(head, head->next, _new);
 }
 
-static inline void a_list_add_tail(struct aura_list_head *head, struct aura_list_head *_new) {
+static inline void aura_list_add_tail(struct aura_list_head *head, struct aura_list_head *_new) {
     _a_list_add(head->prev, head, _new);
 }
 
-static inline void a_list_delete(struct aura_list_head *entry) {
+static inline void aura_list_delete(struct aura_list_head *entry) {
     entry->next->prev = entry->prev;
     entry->prev->next = entry->next;
-    a_list_head_init(entry);
+    aura_list_head_init(entry);
 }
 
-static inline void a_list_replace(struct aura_list_head *new_, struct aura_list_head *old) {
+static inline void aura_list_replace(struct aura_list_head *new_, struct aura_list_head *old) {
     new_->next = old->next;
     new_->prev = old->prev;
     new_->next->prev = new_;
     new_->prev->next = new_;
 }
 
-static inline void a_list_move(struct aura_list_head *head, struct aura_list_head *entry) {
-    a_list_delete(entry);
+static inline void aura_list_move(struct aura_list_head *head, struct aura_list_head *entry) {
+    aura_list_delete(entry);
     a_list_add(head, entry);
 }
 
-static inline void a_list_move_tail(struct aura_list_head *head, struct aura_list_head *entry) {
-    a_list_delete(entry);
-    a_list_add_tail(head, entry);
+static inline void aura_list_move_tail(struct aura_list_head *head, struct aura_list_head *entry) {
+    aura_list_delete(entry);
+    aura_list_add_tail(head, entry);
 }
 
-static inline void a_list_move_bulk_tail(struct aura_list_head *head, struct aura_list_head *first, struct aura_list_head *last) {
+static inline void aura_list_move_bulk_tail(struct aura_list_head *head, struct aura_list_head *first, struct aura_list_head *last) {
     /* detach first and last */
     first->prev->next = last->next;
     last->next->prev = first->prev;
@@ -69,22 +70,23 @@ static inline void a_list_move_bulk_tail(struct aura_list_head *head, struct aur
     head->prev = last;
 }
 
-static inline bool a_list_is_empty(struct aura_list_head *head) {
+static inline bool aura_list_is_empty(struct aura_list_head *head) {
     return head->next == head;
 }
 
-static inline bool a_entry_is_last(struct aura_list_head *head, struct aura_list_head *entry) {
+static inline bool aura_entry_is_last(struct aura_list_head *head, struct aura_list_head *entry) {
     return entry->next == head;
 }
 
 /* Test if list has a single entry */
 static inline bool aura_list_is_singular(struct aura_list_head *head) {
-    return !a_list_is_empty(head) && (head->next == head->prev);
+    return !aura_list_is_empty(head) && (head->next == head->prev);
 }
 
-#define a_list_entry(ptr, type, member) a_container_of(ptr, type, member)
+#define a_list_entry(ptr, type, member) aura_container_of(ptr, type, member)
 
 #define a_list_first_entry(head, type, member) a_list_entry((head)->next, type, member)
+#define a_list_last_entry(head, type, member) a_list_entry((head)->prev, type, member)
 
 #define a_list_next_entry(cursor, type, member) a_list_entry(cursor->member.next, type, member)
 
@@ -96,7 +98,11 @@ static inline bool aura_list_is_singular(struct aura_list_head *head) {
  * It doesn't distort the pointers while deleting
  */
 #define a_list_for_each_safe_to_delete(cursor, pos, head, member) \
-    for (cursor = a_list_first_entry(head, typeof(*cursor), member), pos = a_list_next_entry(cursor, typeof(*cursor), member); &cursor->member != (head); cursor = pos)
+    for (                                                         \
+      cursor = a_list_first_entry(head, typeof(*cursor), member), \
+     pos = a_list_next_entry(cursor, typeof(*cursor), member);    \
+      &cursor->member != (head);                                  \
+      cursor = pos)
 
 #define a_list_dequeue(cursor, head, member)                        \
     {                                                               \
@@ -104,7 +110,7 @@ static inline bool aura_list_is_singular(struct aura_list_head *head) {
         if (&cursor->member == head)                                \
             cursor = NULL;                                          \
         else                                                        \
-            a_list_delete(&cursor->member);                         \
+            aura_list_delete(&cursor->member);                      \
     }
 
 #endif

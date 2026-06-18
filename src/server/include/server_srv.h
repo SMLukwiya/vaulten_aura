@@ -3,152 +3,75 @@
 
 #include "../infra/metrics/metrics_srv.h"
 #include "../infra/timer/timer_srv.h"
+#include "connection.h"
 #include "db/db.h"
-#include "defaults_srv.h"
-#include "h2/hpack_srv.h"
+#include "dense_pool/dense_pool_dynamic_lib.h"
+#include "h2/hpack.h"
+#include "hashmap_lib.h"
+#include "host.h"
 #include "interned.h"
 #include "list_lib.h"
 #include "memory_lib.h"
-#include "optimization_srv.h"
-#include "picotls.h"
-#include "picotls/certificate_compression.h"
-#include "picotls/openssl.h"
-#include "picotls/pembase64.h"
+#include "optimizer.h"
+#include "pending_req.h"
 #include "radix_lib.h"
-#include "route_srv.h"
+#include "runtime/completions.h"
 #include "socket_srv.h"
+#include "tls_srv.h"
 #include "types_lib.h"
 #include "utils_lib.h"
-
-#include <netdb.h>
-#include <netinet/in.h>
-#include <stdint.h>
-#include <sys/epoll.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <sys/uio.h>
-#include <sys/un.h>
-#include <time.h>
-#include <unistd.h>
 
 /* for general null terminated string */
 
 #define AURA_QLEN 4096
-#define A_MAX_FDS 65536
+#define A_MAX_FDS 65536 /** @todo: get from system */
 
-#define A_H2_APLN_PROTOCOLS \
-    {a_str_lit_static("h2")}, {a_str_lit_static("h2-14")}, {a_str_lit_static("h2-16")}, { NULL }
-
-/* OCSP updater structure */
-struct aura_ocsp_updater {
-    int timer_fd;
-    time_t interval;
-    uint32_t max_failures;
-};
-
-/* OCSP info structure */
-struct aura_tls_ocsp_info {
-    char *ocsp_url;
-    time_t last_update;
-    time_t next_update;
-    uint8_t *ocsp_response;
-    size_t ocsp_response_len;
-};
-
-/* Security policy structure */
-struct aura_srv_sec_policy {
-    void *waf_config; /* web application firewall */
-    void *ratelimiter_config;
-    void *ip_acl;       /* ACLs */
-    uint32_t policy_id; /* unique ID for logging */
-};
-
-/* A single identity structure */
-struct aura_srv_tls_iden {
-    const char *tag;
-    struct {
-        char *cert_file;
-        void *mmapped_data; /* mem mapped for zero copy */
-        size_t size;
-    } cert;
-
-    struct {
-        char *key_file;
-        void *mmapped_data;
-        size_t size;
-        uint8_t type;
-    } key;
-
-    struct {
-        char *cert_chain_file;
-        void *mmapped_data;
-        size_t size;
-    } cert_chain;
-
-    struct {
-        struct {
-            ptls_context_t *ctx;
-            ptls_context_t *client_ctx;
-            const ptls_openssl_signature_scheme_t *sig_schemes;
-        } ptls;
-        X509_STORE *store;
-    } contexts;
-
-    struct {
-        struct aura_tls_ocsp_info ocsp_stapling;
-        struct aura_ocsp_updater ocsp_updater;
-    } ocsp;
-
-    struct {
-        ptls_emit_compressed_certificate_t *emit_ptls;
-    } compressed_cert;
-};
-
-/* Server host config structure */
-struct aura_srv_host_conf {
-    struct aura_iovec hostname;
-    uint32_t def_tls_off; /* default tls identity offset */
-    uint32_t *other_tls_off;
-    uint32_t other_tls_cnt;
-    struct aura_router router;
-    struct aura_iovec *h2_origin_frame;
-    struct aura_srv_sec_policy *def_security_policy; /* default security policy */
-};
+#define A_CONN_TAB_INVALID_IDX UINT32_MAX
+#define A_CONN_TAB_DEFAULT_SZ 512
 
 /* Server queues structure */
 struct aura_srv_req_queue {
-    struct aura_list_head active; /* Hold read ready */
-    struct aura_list_head reap;   /* Hold destruction ready */
+    struct aura_list_head handshake; /* Hold handhake connections */
+    struct aura_list_head active;    /* Hold read ready */
+    struct aura_list_head reap;      /* Hold destruction ready */
 };
 
 /**
  * Listener config strucure: holds configs shared
  * by all listeners
  */
-struct aura_srv_listener_conf {
-    struct {
-        struct aura_srv_listener *entries;
-        size_t cnt;
-        size_t cap;
-    } listeners_pool;
-    struct {
-        struct aura_srv_tls_iden *entries;
-        size_t cnt;
-        size_t cap;
-    } tls_pool;
+struct aura_srv_listeners_conf {
+    struct aura_srv_listener_pool listeners_pool;
+    struct aura_srv_tls_iden_pool tls_pool;
     ptls_t *ptls;
     struct aura_srv_host_conf *fb_host_conf; /* fallback host, if SNI lookup fails */
     aura_rax_tree_t *sni;                    /* radix tree */
-    uint32_t flag;                           /* config flags, only http2 enabled now */
-    void *bpf_program;
+};
+
+/* connection pool structure */
+struct aura_srv_conn_pool {
+    struct aura_rh_map pool;
+    pthread_mutex_t mutex;
+};
+
+/**
+ * Connection table entry
+ * Used to coordinate connection
+ * async tasks
+ */
+struct aura_conn_tab_ent {
+    struct aura_conn *conn;
+    uint32_t generation;
 };
 
 /* Server general context structure */
 struct aura_srv_ctx {
-    struct aura_srv_global_conf *glob_conf;
+    struct aura_srv_global_ctx *glob_conf;
+    struct aura_srv_conn_pool conn_pool;
+    struct aura_dyn_dense_pool *conn_tab;
     struct aura_evt_loop *evt_loop;
-    struct aura_srv_listener_conf *listener_conf;
-    struct aura_memory_ctx *mc;
+    struct aura_mem_ctx *mc;
+    struct aura_ipc_peer *dmn_peer; /* Daemon peer connection */
     struct {
         size_t idle_timeouts; /* number of http idle timeouts */
         size_t read_closed;   /* premature close on read */
@@ -157,53 +80,46 @@ struct aura_srv_ctx {
         size_t read_cnt;
         size_t write_cnt;
         size_t timeout_cnt;
-        size_t aura_server_errors[10]; /** @todo: define AURA_SERVER_ERRORS */
+        // size_t aura_server_errors[10]; /** @todo: define AURA_SERVER_ERRORS */
     } h2;
 
-    struct aura_srv_req_queue queues;          /* Queues according to stage (handshake...etc) */
-    struct aura_completion_queue completions;  /* List of completions queued by runtime engines */
-    struct aura_intern_tab *static_intern_tab; /* Intern table for hpack static strings */
-    struct aura_hpack_static_table static_tab; /* Hpack static table with interned strings */
+    struct aura_req_coordinator req_coord; /* Pending request coordinator */
 
-    bool internal;     /* Internal request from daemon */
+    struct aura_srv_req_queue queues;         /* Queues according to stage (handshake...etc) */
+    struct aura_completion_queue completions; /* List of completions queued by runtime engines */
+
     uint64_t inflight; /* requests inflight */
-    struct aura_srv_metrics_bucket metrics;
     struct aura_timer_wheel timer_wheel;
     struct aura_srv_optimizer optimizer;
     uint64_t next_task_id;
+    bool shutdown_requested; /* if shutdown has been requested */
 };
 
 /**
  * Global aura server configuration structure
  */
-struct aura_srv_global_conf {
+struct aura_srv_global_ctx {
     struct aura_iovec server_name; /* Server name */
     struct aura_srv_ctx *srv_ctx;
-    size_t max_req_size;     /* max size of accepted request, e.g, POST */
-    time_t boot_time;        /* server boot time */
-    bool shutdown_requested; /* if shutdown has been requested */
-    struct aura_conn *conn_map[A_MAX_FDS];
-    struct {
-        struct aura_srv_host_conf *hosts;
-        size_t cnt;
-        size_t cap;
-    } host_pool;
-
-    struct {
-        uint32_t soft_limit;
-        uint32_t hard_limit;
-    } conn;
-
-    struct aura_memory_ctx mem_ctx;
+    struct aura_srv_listeners_conf listeners;
+    struct aura_srv_host_pool host_pool;
+    struct aura_mem_ctx mem_ctx;
     struct aura_iovec user;
+    time_t boot_time; /* server boot time */
 };
 
-static inline struct aura_srv_listener *aura_check_if_listener(struct aura_srv_listener_conf *lc, int fd) {
-    for (int i = 0; i < lc->listeners_pool.cnt; ++i) {
-        if (lc->listeners_pool.entries[i].fd == fd)
-            return &lc->listeners_pool.entries[i];
-    }
-    return NULL;
+/**
+ * Mark server has internal request
+ */
+static inline void aura_set_internal_request_active(struct aura_srv_ctx *ctx) {
+    ctx->dmn_peer->active = true;
+}
+
+/**
+ * Mark server internal request inactive
+ */
+static inline void aura_set_internal_request_inactive(struct aura_srv_ctx *ctx) {
+    ctx->dmn_peer->active = false;
 }
 
 #endif

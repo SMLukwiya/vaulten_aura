@@ -4,7 +4,7 @@
 #include "slab_lib.h"
 #include "string_lib.h"
 
-static struct aura_interned_str_arena *a_interned_str_arena_create(struct aura_memory_ctx *mc) {
+static struct aura_interned_str_arena *a_interned_str_arena_create(struct aura_mem_ctx *mc) {
     struct aura_interned_str_arena *arena;
 
     arena = aura_alloc(mc, sizeof(*arena));
@@ -28,11 +28,11 @@ static void a_interned_str_arena_destroy(struct aura_interned_str_arena *arena) 
 
     if (arena->data)
         aura_free(arena->data);
+    aura_free(arena);
 }
 
-struct aura_intern_tab *aura_intern_tab_create(struct aura_memory_ctx *mc, size_t size) {
+struct aura_intern_tab *aura_intern_tab_create(struct aura_mem_ctx *mc, size_t size) {
     struct aura_intern_tab *tab;
-    app_debug(true, 0, "aura_intern_tab_create: size: %lu", size);
 
     if (size == 0)
         return NULL;
@@ -59,6 +59,27 @@ struct aura_intern_tab *aura_intern_tab_create(struct aura_memory_ctx *mc, size_
     return tab;
 }
 
+int aura_intern_tab_create2(struct aura_intern_tab *tab, struct aura_mem_ctx *mc, size_t size) {
+
+    if (size == 0)
+        return -1;
+
+    tab->entries = aura_alloc(mc, sizeof(struct aura_interned_str) * size);
+    if (!tab->entries)
+        return -1;
+
+    memset(tab->entries, 0, sizeof(struct aura_interned_str) * size);
+    tab->arena = a_interned_str_arena_create(mc);
+    if (!tab->arena) {
+        aura_free(tab->entries);
+        return -1;
+    }
+    tab->mc = mc;
+    tab->cap = size;
+    tab->cnt = 0;
+    return 0;
+}
+
 void aura_intern_tab_destroy(struct aura_intern_tab *tab) {
     if (!tab)
         return;
@@ -75,6 +96,20 @@ void aura_intern_tab_destroy(struct aura_intern_tab *tab) {
     aura_free(tab);
 }
 
+void aura_intern_tab_destroy2(struct aura_intern_tab *tab) {
+    if (!tab)
+        return;
+
+    if (tab->arena) {
+        do {
+            a_interned_str_arena_destroy(tab->arena);
+        } while ((tab->arena = tab->arena->next));
+    }
+
+    if (tab->entries)
+        aura_free(tab->entries);
+}
+
 static inline uint32_t a_interned_str_hash(char *str) {
     uint32_t hash, hval;
 
@@ -86,6 +121,9 @@ static inline uint32_t a_interned_str_hash(char *str) {
 struct aura_interned_str *aura_interned_str_find(struct aura_intern_tab *tab, char *str, size_t len) {
     uint32_t hash, idx, stored_idx;
     struct aura_interned_str *i_str;
+
+    if (len == 0)
+        return NULL;
 
     hash = a_interned_str_hash(str);
     idx = aura_intern_tab_get_idx(hash, tab->cap);
@@ -139,7 +177,7 @@ redo:
     return NULL;
 }
 
-static const char *a_interned_str_insert_into_arena(struct aura_memory_ctx *mc, struct aura_interned_str_arena *arena, char *str, size_t len) {
+static const char *a_interned_str_insert_into_arena(struct aura_mem_ctx *mc, struct aura_interned_str_arena *arena, char *str, size_t len) {
     struct aura_interned_str_arena *curr_arena, *next_arena;
     char *s;
     /**

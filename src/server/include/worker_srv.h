@@ -1,5 +1,5 @@
-#ifndef AURA__SRV_WORKER_H
-#define AURA__SRV_WORKER_H
+#ifndef AURA_SRV_WORKER_H
+#define AURA_SRV_WORKER_H
 
 #include "function_lib.h"
 #include "list_lib.h"
@@ -11,11 +11,22 @@
 
 #define A_WQ_INITIALIZED 0xc5c5c5c5
 
+struct aura_wq_thread_info {
+    pthread_t thread_id; /* Thread Id */
+    uint32_t thread_num; /* Application thread number */
+};
+
+struct aura_wq_thread_vec {
+    struct aura_wq_thread_info *thread_info;
+    size_t cnt;
+    size_t cap;
+};
+
 /* aura work queue structure */
 struct aura_work_queue {
     struct aura_srv_ctx *srv_ctx;
     uint32_t magic;
-    pthread_mutex_t mutex; /* sync queue access */
+    pthread_mutex_t mutex;
     pthread_attr_t th_attr;
     pthread_cond_t cond_var;
     struct aura_runtime rt;
@@ -41,5 +52,9 @@ int aura_work_queue_destroy(struct aura_work_queue *wq);
  * Add a task to the work queue
  */
 int aura_work_queue_add(struct aura_work_queue *wq, struct aura_fn *fn, struct aura_task *task);
+
+/**/
+int aura_work_queue_thread_vec_add(struct aura_wq_thread_vec *vec, struct aura_mem_ctx *mc,
+                                   pthread_t thread_id);
 
 #endif
