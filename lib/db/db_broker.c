@@ -1,5 +1,5 @@
-#include "db/db_broker.h"
-#include "db/db.h"
+#include "db_broker.h"
+#include "db.h"
 #include "unix_socket_lib.h"
 
 static struct aura_db_broker_request *a_db_broker_construct_request(struct aura_mem_ctx *mc, uint16_t ns,
