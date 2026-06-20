@@ -2,7 +2,7 @@
 #include "error_lib.h"
 #include "function_lib.h"
 #include "radix_lib.h"
-#include "unix_socket_lib.h"
+#include "unix/sock.h"
 #include "utils_lib.h"
 #include "yaml_lib.h"
 
@@ -776,7 +776,7 @@ void a_fn_free_user_data_ctx(struct aura_yml_fn_data_ctx *usr_data) {
 /**
  *
  */
-void aura_dmn_function_config_validate(int conf_fd, int cli_fd) {
+void aura_dmn_fn_conf_validate(int conf_fd, int cli_fd) {
     struct aura_yml_fn_data_ctx usr_data;
     struct aura_yml_err_ctx *parser_err;
     bool fail_fast = true, extract = false;

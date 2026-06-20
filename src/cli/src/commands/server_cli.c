@@ -3,7 +3,7 @@
 #include "error_lib.h"
 #include "file_lib.h"
 #include "flag_cli.h"
-#include "unix_socket_lib.h"
+#include "unix/sock.h"
 #include "utils_lib.h"
 
 extern struct aura_cli_cmd server_start_cli;

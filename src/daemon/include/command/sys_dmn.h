@@ -3,6 +3,6 @@
 
 #include "aura_dmn.h"
 
-void aura_dmn_system_stop(int cli_fd, struct aura_daemon_glob_conf *glob_conf);
+void aura_dmn_system_stop(int cli_fd, void *arg);
 
 #endif

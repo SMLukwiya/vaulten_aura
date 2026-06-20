@@ -66,7 +66,7 @@ set_tests_properties(slab_test PROPERTIES
 add_executable(test_aura_daemon
     daemon/basic.c
     ${vaulten_aura_SOURCE_DIR}/src/cli/src/commands/system_cli.c
-    ${vaulten_aura_SOURCE_DIR}/lib/unix_socket_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/unix/sock.c
     ${common_sources}
 )
 

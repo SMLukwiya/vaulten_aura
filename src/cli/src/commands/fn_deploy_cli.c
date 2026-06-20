@@ -6,7 +6,7 @@
 #include "flag_cli.h"
 #include "function_lib.h"
 #include "log_cli.h"
-#include "unix_socket_lib.h"
+#include "unix/sock.h"
 #include "utils_lib.h"
 
 #include <dirent.h>
@@ -55,7 +55,7 @@ int aura_cli_run_fn_deploy(void *opts_ptr, void *glob_opts) {
     struct aura_iovec data;
     int sock_fd, file_fd, dir_fd, res;
 
-    aura_try_connect_or_error(&sock_fd);
+    sock_fd = aura_try_connect_or_error();
     if (sock_fd == -1)
         app_exit(false, 0, "Failed to connect to daemon, use 'aura system start' to start aura daemon");
 

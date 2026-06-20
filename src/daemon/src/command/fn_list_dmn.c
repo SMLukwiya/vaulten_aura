@@ -1,8 +1,11 @@
+#include "aura_dmn.h"
 #include "command/function_dmn.h"
 #include "function_lib.h"
-#include "unix_socket_lib.h"
+#include "unix/sock.h"
 
-void aura_dmn_function_list(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
+void aura_dmn_fn_list(struct iovec *key, int cli_fd, void *arg) {
+    struct aura_dmn_glob_conf *gc = arg;
+    AURA_DBHANDLE db = gc->db_handle;
     struct aura_functions *fns;
     struct aura_fn_list fn_list, *fn_list_ptr;
     struct aura_fn_evt evt, *evt_ptr;

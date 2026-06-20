@@ -4,9 +4,9 @@ message(STATUS "Building server")
 list(APPEND CMAKE_MESSAGE_INDENT " ")
 
 set(lib_sources
-    ${vaulten_aura_SOURCE_DIR}/lib/unix_socket_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/unix/sock.c
     ${vaulten_aura_SOURCE_DIR}/lib/error_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/privilege_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/user/user.c
     ${vaulten_aura_SOURCE_DIR}/lib/utils_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/blobber_v1_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/radix_v1_lib.c

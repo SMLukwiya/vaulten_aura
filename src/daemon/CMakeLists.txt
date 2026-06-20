@@ -5,7 +5,7 @@ list(APPEND CMAKE_MESSAGE_INDENT " ")
 
 # Daemon library sources
 set(lib_sources
-    ${vaulten_aura_SOURCE_DIR}/lib/unix_socket_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/unix/sock.c
     ${vaulten_aura_SOURCE_DIR}/lib/daemon_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/error_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c

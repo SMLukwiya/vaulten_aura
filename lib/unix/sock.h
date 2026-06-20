@@ -1,5 +1,5 @@
-#ifndef AURA_UNIX_SOCKET_H
-#define AURA_UNIX_SOCKET_H
+#ifndef AURA_UNIX_SOCK_H
+#define AURA_UNIX_SOCK_H
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -22,15 +22,21 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-#define UNIX_SOCK_ERR_NAMETOOLONG -1
-#define UNIX_SOCK_ERR_CREATE -2
+#define A_UNIX_SOCK_NAMETOOLONG_ERR -1
+#define A_UNIX_SOCK_CREATE_ERR -2
 
-#define AURA_SOCKET "/tmp/aurad.sock"
+#ifdef AURA_DEV_BUILD
+#define A_UNIX_SOCK_FILE "/tmp/aurad.sock"
+#else
+#define A_UNIX_SOCK_FILE "/run/aurad.sock"
+#endif
+
 #define AURA_PID "/tmp/aurad.pid"
-#define AURA_SOCKET_CLI "/tmp/aura"
-#define CLI_FILE_PERM S_IRWXU /* user rwx */
 
-#define INVALID_UNIX_SOCKET -1
+#define A_UNIX_SOCK_CLI_FILE "/tmp/aura"
+#define A_UNIX_SOCK_CLI_FILE_PERM S_IRWXU /* user rwx */
+
+#define A_UNIX_SOCK_INVALID -1
 
 #if defined(SCM_CREDS) /* BSD */
 #define sock_cred cmsgcred
@@ -77,22 +83,27 @@ typedef enum {
 /* Message header structure */
 struct aura_msg_hdr {
     uint32_t len;
+    uint32_t version;
     aura_msg_t type;
     aura_cmd_t cmd_type;
-    char version[6];
 };
 
 /* custom defined credentials because C is being shady with that 'struct ucred'!! */
-struct aura_socket_cred {
-    pid_t pid;
-    uid_t uid;
-    gid_t gid;
-};
+// struct A_UNIX_SOCK_FILE_cred {
+//     pid_t pid;
+//     uid_t uid;
+//     gid_t gid;
+// };
 
 /* Request message structure */
 struct aura_msg {
     struct aura_msg_hdr hdr;
-    struct aura_socket_cred cred;
+    struct {
+        pid_t pid;
+        uid_t uid;
+        gid_t gid;
+    } cred;
+    // struct A_UNIX_SOCK_FILE_cred cred;
     int fd;
     struct iovec data;
 };
@@ -101,29 +112,34 @@ struct aura_msg {
     hdr.len = len_;                                 \
     hdr.type = type_;                               \
     hdr.cmd_type = cmd_type_;                       \
-    strcpy(hdr.version, "1.0.0");
+    hdr.version = 0x010000 /* 1.0.0 */
 
 #define control_len(x) CMSG_LEN(sizeof(x))
 #define control_space(x) CMSG_SPACE(sizeof(x))
 
 /* Unix socket structure */
-struct aura_unix_socket {
-    int sock_fd;
+struct aura_unix_sock {
+    int fd;
     int domain;
     struct sockaddr_un addr;
     socklen_t sock_len;
     int flags;
 };
 
-int aura_unix_server_listen(struct aura_unix_socket *st, const char *name);
+int aura_unix_server_listen(struct aura_unix_sock *st, const char *name);
 int aura_unix_server_accept(int fd, uid_t *uid_p);
-int aura_unix_cli_connect(struct aura_unix_socket *cli, const char *serv_name, const char *cli_name, int cli_perm);
+int aura_unix_cli_connect(struct aura_unix_sock *cli, const char *serv_name, const char *cli_name, int cli_perm);
 void aura_unix_sock_close(int fd);
 int aura_msg_send(int sock_fd, struct aura_msg_hdr *aura_hdr, void *data, size_t data_len, int fd);
 int aura_msg_recv(int sock_fd, struct aura_msg *aura_msg);
 int aura_resp_send(int sock_fd, void *data, size_t len);
 int aura_recv_resp(struct aura_iovec *data_out, int sock_fd, struct aura_mem_ctx *mc);
 void aura_msg_dump(struct aura_msg *msg, bool daemon);
-void aura_try_connect_or_error(int *fd);
+
+/**
+ * Connect to the IPC unix socket
+ * Returns the fd for unix socket
+ */
+int aura_try_connect_or_error(void);
 
 #endif

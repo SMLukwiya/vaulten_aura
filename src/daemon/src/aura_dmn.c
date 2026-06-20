@@ -5,16 +5,25 @@
 #include "command/function_dmn.h"
 #include "command/server_dmn.h"
 #include "command/sys_dmn.h"
-#include "daemon_lib.h"
 #include "db_broker.h"
 #include "ipc_lib.h"
-#include "unix_socket_lib.h"
+#include "unix/sock.h"
 #include "utils_lib.h"
 
+#include <limits.h>
 #include <signal.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 
-struct aura_daemon_glob_conf glob_conf;
+static long A_MAX_FILE = 256;
+
+#ifdef AURA_DEV_BUILD
+const char *passphrase = "dev_default_password";
+#else
+/* read passphrase */
+#endif
+
+typedef int (*dmn_cb)(void *);
 
 /**
  * Handle requests from server and cli
@@ -34,7 +43,7 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
     case A_MSG_CMD_EXECUTE:
         switch (msg->hdr.cmd_type) {
         case A_CMD_SYSTEM_STOP:
-            aura_dmn_system_stop(cli_fd, &glob_conf);
+            aura_dmn_system_stop(cli_fd, arg);
             return 0;
 
         case A_CMD_SERVER_VALIDATE_CONF:
@@ -42,47 +51,47 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
             return 0;
 
         case A_CMD_SERVER_START:
-            aura_dmn_start_server(msg, cli_fd, (struct srv_start_arg *)arg);
+            aura_dmn_server_start(msg, cli_fd, arg);
             return 0;
 
         case A_CMD_SERVER_STOP:
-            aura_dmn_server_stop(msg, &glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd, cli_fd, glob_conf.server_pid);
+            aura_dmn_server_stop(msg, cli_fd, arg);
             return 0;
 
         case A_CMD_SERVER_STATUS:
-            aura_dmn_server_status(glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd, cli_fd);
+            aura_dmn_server_status(cli_fd, arg);
             return 0;
 
         case A_CMD_FN_VALIDATE_CONF:
-            aura_dmn_function_config_validate(msg->fd, cli_fd);
+            aura_dmn_fn_conf_validate(msg->fd, cli_fd);
             return 0;
 
         case A_CMD_FN_DEPLOY:
-            aura_dmn_function_deploy(msg->fd, glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd, cli_fd);
+            aura_dmn_fn_deploy(msg->fd, cli_fd, arg);
             return 0;
 
         case A_CMD_FN_DELETE:
-            aura_dmn_function_delete(glob_conf.db_handle, &msg->data, cli_fd);
+            aura_dmn_fn_del(&msg->data, cli_fd, arg);
             return 0;
 
         case A_CMD_FN_STATUS:
-            aura_dmn_function_status(glob_conf.db_handle, &glob_conf.mc, &msg->data, cli_fd);
+            aura_dmn_fn_status(&msg->data, cli_fd, arg);
             return 0;
 
         case A_CMD_FN_START:
-            aura_dmn_function_start(glob_conf.db_handle, &glob_conf.mc, &msg->data, cli_fd);
+            aura_dmn_fn_start(&msg->data, cli_fd, arg);
             return 0;
 
         case A_CMD_FN_STOP:
-            aura_dmn_function_stop(glob_conf.db_handle, &glob_conf.mc, &msg->data, cli_fd);
+            aura_dmn_fn_stop(&msg->data, cli_fd, arg);
             return 0;
 
         case A_CMD_FN_LIST:
-            aura_dmn_function_list(glob_conf.db_handle, &msg->data, cli_fd);
+            aura_dmn_fn_list(&msg->data, cli_fd, arg);
             return 0;
 
         case A_CMD_DB_FETCH_REQUEST:
-            aura_dmn_fetch_request(glob_conf.db_handle, &msg->data, cli_fd);
+            aura_dmn_fetch_request(&msg->data, cli_fd, ((struct aura_dmn_glob_conf *)arg)->db_handle);
             return 0;
 
         case A_CMD_DB_INSERT_REQUEST:
@@ -104,29 +113,17 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
  * Clean up server connection
  */
 static void a_sig_ch_handler(int signo) {
-    if (waitpid(glob_conf.server_pid, NULL, 0) != glob_conf.server_pid) {
-        sys_debug(true, errno, "a_sig_ch_handler: waitpid error: %d", glob_conf.server_pid);
-    }
-    glob_conf.server_pid = 0;
-    if (glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd == -1)
-        return;
-    close(glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd);
-    glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd = -1;
+    // if (waitpid(glob_conf.server_pid, NULL, 0) != glob_conf.server_pid) {
+    //     sys_debug(true, errno, "a_sig_ch_handler: waitpid error: %d", glob_conf.server_pid);
+    // }
+    // glob_conf.server_pid = 0;
+    // if (glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd == -1)
+    //     return;
+    // close(glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd);
+    // glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd = -1;
 }
 
-/**
- * callback called assuming server shall
- * start successfully, it registers the
- * created socket pair for polling
- */
-static inline void a_setup_sockfd(int fd, pid_t srv_pid) {
-    glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd = fd;
-    glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].events = POLLIN;
-    glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].revents = 0;
-    glob_conf.server_pid = srv_pid;
-}
-
-static void a_setup_database(struct aura_daemon_glob_conf *glob_conf) {
+static void a_setup_database(struct aura_dmn_glob_conf *glob_conf) {
     int res;
 
     res = aura_setup_database_file_path(&glob_conf->aura_app_path, &glob_conf->aura_db_path);
@@ -148,61 +145,50 @@ static void a_setup_database(struct aura_daemon_glob_conf *glob_conf) {
 }
 
 int aura_daemon() {
-    struct aura_unix_socket d_sock;
+    struct aura_dmn_glob_conf glob_conf;
+    struct aura_unix_sock d_sock;
     struct sockaddr_un d_addr;
     uid_t uid, aura_cli_pid;
-    int res, i;
-    int cli_fd, lock_file_fd, num_fd;
-    size_t n_read;
+    int rv, cli_fd;
+    // int cli_fd, lock_file_fd, num_fd;
+    size_t n_read, num_fd;
     time_t t;
     struct msghdr msg;
     struct cmsghdr cmsg;
     struct iovec iov[1];
     struct aura_msg aura_msg;
-    struct srv_start_arg srv_arg = {
-      .cb = a_setup_sockfd,
-    };
+    struct rlimit rlimit;
+
+    // if (getrlimit(RLIMIT_NOFILE, &rlimit) < 0)
+    //     sys_exit(true, errno, "main: get resource limit err");
+
+    // if (rlimit.rlim_max != RLIM_INFINITY)
+    //     A_MAX_FILE = rlimit.rlim_max;
 
     memset(&glob_conf, 0, sizeof(glob_conf));
-    lock_file_fd = open(AURA_PID, O_RDWR | O_CREAT, LOCKMODE);
-    if (lock_file_fd < 0)
-        sys_exit(false, errno, "aura_daemon: lock_file error");
-
-    if (aura_dmn_running(lock_file_fd))
-        sys_exit(false, 0, "aura_daemon: aura_dmn_running error");
+    glob_conf.poll_fds = alloca(sizeof(struct pollfd) * A_MAX_FILE);
+    if (!glob_conf.poll_fds)
+        sys_exit(false, 0, "Daemon config error");
 
     app_debug(false, 0, "Daemon tests"); /* probably after setting socket */
 
     /**
      * Set up named socket
      */
-    res = aura_unix_server_listen(&d_sock, AURA_SOCKET);
-    if (res < 0)
-        sys_exit(false, 0, "aura_daemon: aura_unix_server_listen error");
+    if (aura_unix_server_listen(&d_sock, A_UNIX_SOCK_FILE) < 0)
+        sys_exit(false, errno, "aura_daemon: aura_unix_server_listen error: %s", A_UNIX_SOCK_FILE);
 
-    for (i = 0; i < MAX_CONN; ++i) {
+    for (int i = 0; i < A_MAX_FILE; ++i) {
         glob_conf.poll_fds[i].fd = -1;
         glob_conf.poll_fds[i].events = POLLIN;
         glob_conf.poll_fds[i].revents = 0;
     }
 
-    glob_conf.poll_fds[0].fd = d_sock.sock_fd;
-
-    int keep_fd[] = {
-      d_sock.sock_fd,
-      lock_file_fd,
-    };
-    /* starting number of fds to watch */
-    num_fd = ARRAY_SIZE(keep_fd);
+    /* Add unix IPC socket to poll */
+    glob_conf.poll_fds[A_SOCK_FILE_FD_IDX].fd = d_sock.fd;
+    num_fd = 1;
 
     aura_install_signal_handler(SIGCHLD, a_sig_ch_handler);
-
-    /* aura_daemonize */
-    aura_daemonize("aurad", keep_fd, ARRAY_SIZE(keep_fd));
-
-    res = aura_dmn_set_pid_lock(lock_file_fd);
-    if (res < 0)
-        sys_exit(true, errno, "aura_daemon: aura_dmn_set_pid_lock error");
 
     /* set up memory context */
     aura_mem_ctx_init(&glob_conf.mc);
@@ -210,18 +196,19 @@ int aura_daemon() {
         sys_exit(true, errno, "aura_daemon: aura_create_dynamic_slab_alloc_caches error:");
 
     /* check app paths */
-    res = aura_setup_app_paths(&glob_conf.aura_app_path);
-    if (res == -1)
+    if (aura_setup_app_paths(&glob_conf.aura_app_path) < 0)
         sys_exit(true, errno, "aura_daemon: a_setup_app_paths error:");
     /* Setup database */
     a_setup_database(&glob_conf);
 
     for (;;) {
-        if (poll(glob_conf.poll_fds, num_fd, -1) < 0 && errno != EINTR)
-            sys_exit(true, errno, "aura_daemon: poll error:");
+        if (poll(glob_conf.poll_fds, num_fd, -1) < 0 && errno != EINTR) {
+            sys_debug(true, errno, "aura_daemon: poll error:");
+            break;
+        }
 
         if (glob_conf.poll_fds[0].revents & POLLIN) {
-            cli_fd = aura_unix_server_accept(d_sock.sock_fd, &uid);
+            cli_fd = aura_unix_server_accept(d_sock.fd, &uid);
             if (cli_fd < 0)
                 sys_exit(true, errno, "aura_daemon: aura_unix_server_accept error:");
 
@@ -231,25 +218,20 @@ int aura_daemon() {
             num_fd++;
         }
 
-        for (i = 1; i < num_fd; ++i) {
+        for (int i = 1; i < num_fd; ++i) {
             if (glob_conf.poll_fds[i].revents & POLLIN) {
-                switch (i) {
-                case A_SOCKET_PAIR_FD_INDEX:
-                // fallthrough
-                default:
-                    res = aura_msg_recv(glob_conf.poll_fds[i].fd, &aura_msg);
-                    if (res > 0) {
-                        if (i == A_SOCKET_PAIR_FD_INDEX) {
-                            /* aura_server request */
-                            a_handle_client_request(&aura_msg, glob_conf.poll_fds[i].fd, NULL);
-                        } else {
-                            /* aura_cli request */
-                            a_handle_client_request(&aura_msg, glob_conf.poll_fds[i].fd, (void *)&srv_arg);
-                            break;
-                        }
-                    } else
-                        goto err_out;
+                rv = aura_msg_recv(glob_conf.poll_fds[i].fd, &aura_msg);
+                if (rv <= 0)
+                    goto err_out;
+
+                if (i == A_SOCK_PAIR_FD_IDX) {
+                    /* server request */
+                    a_handle_client_request(&aura_msg, glob_conf.poll_fds[i].fd, NULL);
+                } else {
+                    /* cli request */
+                    a_handle_client_request(&aura_msg, glob_conf.poll_fds[i].fd, (void *)&glob_conf);
                 }
+
             } else if (glob_conf.poll_fds[i].revents & (POLLHUP | POLLERR | POLLNVAL | POLLOUT)) {
             err_out:
                 close(glob_conf.poll_fds[i].fd);
@@ -258,6 +240,5 @@ int aura_daemon() {
         }
     }
 
-    unlink(AURA_PID);
-    sys_exit(true, errno, "aura_daemon: Exiting daemon"); // @todo Do clean up
+    sys_exit(true, errno, "aura_daemon: Exiting daemon");
 }

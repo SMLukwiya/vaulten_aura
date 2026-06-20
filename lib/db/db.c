@@ -2148,7 +2148,7 @@ static void *a_db_writer_routine(void *arg) {
 
             if (req->completion) {
                 if (req->completion->on_complete) {
-                    req->completion->on_complete(req->completion, rv);
+                    req->completion->on_complete(req->completion, rv, (AURA_DBHANDLE)db);
                 }
             }
         }

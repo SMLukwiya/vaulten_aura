@@ -16,6 +16,10 @@ if (OPENSSL_VERSION VERSION_LESS "3.0.0")
     )
 endif()
 
+if (APP_DEV_BUILD)
+    message(INFO, "  DEV BUILD")
+endif()
+
 # test
 enable_testing()
 
@@ -31,6 +35,9 @@ add_compile_definitions(AURA_APP_NAME="vaulten_aura")
 add_compile_definitions(AURA_DB_FILE="aura.db")
 add_compile_definitions(AURA_DB_WAL_FILE="aura_db.wal")
 add_compile_definitions(AURA_DB_COMPACT_FILE="aura_compact.db")
+if (APP_DEV_BUILD)
+    add_compile_definitions(AURA_DEV_BUILD="ON")
+endif()
 
 add_subdirectory(tests)
 add_subdirectory(src/cli)

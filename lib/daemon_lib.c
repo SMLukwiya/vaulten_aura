@@ -1,7 +1,7 @@
 #include "daemon_lib.h"
 #include "error_lib.h"
 #include "file_lib.h"
-#include "unix_socket_lib.h"
+#include "unix/sock.h"
 #include <signal.h>
 #include <stdlib.h>
 #include <sys/resource.h>

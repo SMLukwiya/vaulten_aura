@@ -22,7 +22,7 @@ static inline struct name_version a_extract_fn_name_version(const char *str) {
     return nv;
 }
 
-int aura_dmn_fetch_request(AURA_DBHANDLE db, struct iovec *data, int cli_fd) {
+int aura_dmn_fetch_request(struct iovec *data, int cli_fd, AURA_DBHANDLE db) {
     struct aura_db_broker_request *request;
     struct aura_msg_hdr msg_hdr;
     size_t len;

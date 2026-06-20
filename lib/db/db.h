@@ -107,7 +107,7 @@ struct aura_db_completion {
     int status;
     bool proceed;
     void *user_data; /* opaque user data */
-    void (*on_complete)(struct aura_db_completion *, ssize_t db_res);
+    void (*on_complete)(struct aura_db_completion *, ssize_t db_res, AURA_DBHANDLE db);
 };
 
 /* DB write request structure */

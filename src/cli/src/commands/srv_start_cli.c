@@ -3,7 +3,7 @@
 #include "error_lib.h"
 #include "file_lib.h"
 #include "flag_cli.h"
-#include "unix_socket_lib.h"
+#include "unix/sock.h"
 #include "utils_lib.h"
 
 /* server cli options */
@@ -53,7 +53,7 @@ int aura_cli_run_server_start(void *opts_ptr, void *glob_opt) {
     struct aura_iovec data;
     struct svr_start_opts *opts;
 
-    aura_try_connect_or_error(&sock_fd);
+    sock_fd = aura_try_connect_or_error();
     if (sock_fd == -1)
         app_exit(false, 0, "Failed to connect to daemon, use 'aura system start' to start aura daemon");
 

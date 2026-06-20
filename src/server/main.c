@@ -36,13 +36,13 @@
 #include "picotls/minicrypto.h"
 #include "picotls/openssl.h"
 #include "picotls/pembase64.h"
-#include "privilege_lib.h"
 #include "server_srv.h"
 #include "slab_lib.h"
 #include "socket_srv.h"
 #include "string_lib.h"
 #include "types_lib.h"
-#include "unix_socket_lib.h"
+#include "unix/sock.h"
+#include "user/user.h"
 
 #define A_MAX_PRELOAD_FN_CNT 5
 
@@ -1472,7 +1472,6 @@ static void a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd)
     free(fns_copy.funcs);
 
     /* Clean up heap */
-    // aura_heap_destroy(hp, a_load_fn_destructor);
     aura_heap_destroy(hp);
 }
 
@@ -1620,6 +1619,30 @@ int a_run_loop(struct aura_srv_ctx *srv_ctx) {
  * substituted when config is parsed
  */
 static inline int a_glob_conf_init(struct aura_srv_global_ctx *gc) {
+    struct aura_user_rec user;
+
+    if (aura_usr_get_rec(&user) < 0)
+        return -1;
+
+#ifdef AURA_DEV_BUILD
+    /**
+     * Switch to nobody if running as root
+     * in dev, in prod, we should already
+     * use the default set user
+     */
+    if (user.user_id == 0) {
+        struct aura_user_rec nobody;
+        if (aura_usr_get_rec_by_name(&nobody, "nobody") < 0)
+            return -1;
+
+        if (aura_usr_drop_priv(nobody.user_id, nobody.group_id) < 0)
+            return -1;
+
+        gc->user.base = aura_strndup(&gc->mem_ctx, "nobody", sizeof("nobody") - 1);
+        gc->user.len = sizeof("nobody") - 1;
+    }
+#endif
+
     memset(gc, 0, sizeof(*gc));
     aura_mem_ctx_init(&gc->mem_ctx);
 
@@ -1637,22 +1660,6 @@ static inline int a_glob_conf_init(struct aura_srv_global_ctx *gc) {
         return -1;
 
     aura_host_pool_init(&gc->host_pool);
-
-    gc->user.base = "nobody";
-    gc->user.len = sizeof("nobody") - 1;
-    if (gc->user.base != NULL) {
-        int err;
-        err = aura_drop_privileges(gc->user.base);
-        if (err == 1) {
-            app_exit(true, errno, "a_setup_configs: aura_drop_privileges error");
-        } else if (err == 2) {
-            app_exit(true, 0, "Refusing to run as root, failed to drop to 'nobody', set user in the server config");
-        }
-        gc->user.len = strlen(gc->user.base);
-    } else {
-        if (getuid() == 0)
-            app_exit(true, 0, "Refusing to run as root, failed to drop to 'nobody', set user in the server config");
-    }
 
     return 0;
 }

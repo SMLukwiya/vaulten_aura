@@ -11,21 +11,18 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#define LOCKFILE "/tmp/aurad.pid"
-#define LOCKMODE (S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
-
-#define MAX_CONN 100
-#define A_SOCKET_PAIR_FD_INDEX 1
+#define A_SOCK_FILE_FD_IDX 0
+#define A_SOCK_PAIR_FD_IDX 1
 
 /* Daemon Global Config structure */
-struct aura_daemon_glob_conf {
+struct aura_dmn_glob_conf {
     struct aura_iovec aura_app_path;
     struct aura_iovec aura_db_path;
     AURA_DBHANDLE db_handle;
     struct aura_mem_ctx mc;
     int server_pid;
-    struct pollfd poll_fds[MAX_CONN];
     uint64_t boot_time;
+    struct pollfd *poll_fds;
 };
 
 int aura_daemon(void);

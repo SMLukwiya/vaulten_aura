@@ -3,9 +3,9 @@
 
 #include "db/db.h"
 #include "db/db_broker.h"
-#include "unix_socket_lib.h"
+#include "unix/sock.h"
 
 /** Service db requests from server client */
-int aura_dmn_fetch_request(AURA_DBHANDLE db, struct iovec *, int);
+int aura_dmn_fetch_request(struct iovec *, int, AURA_DBHANDLE db);
 
 #endif

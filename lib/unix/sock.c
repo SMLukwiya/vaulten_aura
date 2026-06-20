@@ -1,4 +1,4 @@
-#include "unix_socket_lib.h"
+#include "sock.h"
 #include "error_lib.h"
 #include "string_lib.h"
 
@@ -260,15 +260,15 @@ static inline unsigned int a_unix_sock_addr_init(struct sockaddr_un *addr, const
     return offsetof(struct sockaddr_un, sun_path) + strlen(addr->sun_path);
 }
 
-static inline void a_unix_sock_init(struct aura_unix_socket *st, const char *name, size_t len) {
+static inline void a_unix_sock_init(struct aura_unix_sock *st, const char *name, size_t len) {
     st->domain = AF_UNIX;
     st->flags = 0;
-    st->sock_fd = INVALID_UNIX_SOCKET;
+    st->fd = A_UNIX_SOCK_INVALID;
     st->sock_len = a_unix_sock_addr_init(&st->addr, name, len);
 }
 
 /**/
-int aura_unix_server_listen(struct aura_unix_socket *st, const char *name) {
+int aura_unix_server_listen(struct aura_unix_sock *st, const char *name) {
     errno = 0;
     int res;
     size_t name_len = strlen(name);
@@ -278,20 +278,20 @@ int aura_unix_server_listen(struct aura_unix_socket *st, const char *name) {
         return -1;
     }
 
-    memset(st, 0, sizeof(struct aura_unix_socket));
+    memset(st, 0, sizeof(struct aura_unix_sock));
     a_unix_sock_init(st, name, name_len);
 
-    st->sock_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (st->sock_fd < 0)
+    st->fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (st->fd < 0)
         return -1;
 
     unlink(name); /* delete if file exists */
 
-    res = bind(st->sock_fd, (struct sockaddr *)&st->addr, st->sock_len);
+    res = bind(st->fd, (struct sockaddr *)&st->addr, st->sock_len);
     if (res < 0)
         goto err_out;
 
-    res = listen(st->sock_fd, 10);
+    res = listen(st->fd, 10);
     if (res < 0)
         goto err_out;
 
@@ -299,48 +299,46 @@ int aura_unix_server_listen(struct aura_unix_socket *st, const char *name) {
 
 err_out:
     res = errno;
-    close(st->sock_fd);
+    close(st->fd);
     errno = res;
     return -1;
 }
 
 /**/
-int aura_unix_cli_connect(struct aura_unix_socket *cli, const char *serv_name, const char *cli_name, int cli_perm) {
-    errno = 0;
-    int res, len;
-    bool unlink_file;
+int aura_unix_cli_connect(struct aura_unix_sock *cli, const char *serv_name,
+                          const char *cli_name, int cli_perm) {
     struct sockaddr_un server_addr;
+    bool unlink_file;
+    uint32_t len;
 
-    unlink_file = false;
     if (strlen(serv_name) >= sizeof(server_addr.sun_path)) {
-        errno = ENAMETOOLONG;
-        return UNIX_SOCK_ERR_NAMETOOLONG;
+        app_debug(false, 0, "aura_unix_cli_connect: ERR NAME TOO LONG");
+        return -1;
     }
 
-    memset(cli, 0, sizeof(struct aura_unix_socket));
+    memset(cli, 0, sizeof(struct aura_unix_sock));
     a_unix_sock_init(cli, cli_name, strlen(cli_name));
 
-    cli->sock_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (cli->sock_fd < 0)
-        return UNIX_SOCK_ERR_CREATE;
+    unlink_file = false;
+    cli->fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (cli->fd < 0) {
+        sys_debug(false, 0, "aura_unix_cli_connect: error");
+        return -1;
+    }
 
     unlink(cli->addr.sun_path);
 
-    res = bind(cli->sock_fd, (struct sockaddr_in *)&cli->addr, cli->sock_len);
-    if (res < 0) {
+    if (bind(cli->fd, (struct sockaddr_in *)&cli->addr, cli->sock_len) < 0)
         goto err_out;
-    }
 
-    res = chmod(cli->addr.sun_path, cli_perm);
-    if (res < 0) {
+    if (chmod(cli->addr.sun_path, cli_perm) < 0) {
         unlink_file = true;
         goto err_out;
     }
 
     len = a_unix_sock_addr_init(&server_addr, serv_name, strlen(serv_name));
 
-    res = connect(cli->sock_fd, (struct sockaddr *)&server_addr, len);
-    if (res < 0) {
+    if (connect(cli->fd, (struct sockaddr *)&server_addr, len) < 0) {
         if (errno == ENOENT) {
             goto err_out;
         }
@@ -351,11 +349,9 @@ int aura_unix_cli_connect(struct aura_unix_socket *cli, const char *serv_name, c
     return 0;
 
 err_out:
-    res = errno;
     if (unlink_file)
         unlink(cli->addr.sun_path);
-    close(cli->sock_fd);
-    errno = res;
+    close(cli->fd);
     return -1;
 }
 
@@ -363,7 +359,7 @@ err_out:
  * @todo: not used
  */
 void aura_unix_sock_close(int fd) {
-    if (fd != INVALID_UNIX_SOCKET)
+    if (fd != A_UNIX_SOCK_INVALID)
         close(fd);
 }
 
@@ -414,16 +410,13 @@ err_out:
 /**
  * Tries to connect to daemon or errors
  */
-void aura_try_connect_or_error(int *fd) {
-    struct aura_unix_socket cli_socket;
-    int res;
+int aura_try_connect_or_error(void) {
+    struct aura_unix_sock cli_sock;
 
-    res = aura_unix_cli_connect(&cli_socket, AURA_SOCKET, AURA_SOCKET_CLI, CLI_FILE_PERM);
-    if (res < 0) {
-        *fd = -1;
-        return;
-    }
-    *fd = cli_socket.sock_fd;
+    if (aura_unix_cli_connect(&cli_sock, A_UNIX_SOCK_FILE, A_UNIX_SOCK_CLI_FILE, A_UNIX_SOCK_CLI_FILE_PERM) < 0)
+        return -1;
+
+    return cli_sock.fd;
 }
 
 void aura_msghdr_dump(struct msghdr *msg, bool daemon) {
@@ -473,7 +466,7 @@ void aura_msg_dump(struct aura_msg *msg, bool daemon) {
     app_debug(daemon, 0, "       header length: %d", msg->hdr.len);
     app_debug(daemon, 0, "       message type: %d", msg->hdr.type);
     app_debug(daemon, 0, "       cmd type: %d", msg->hdr.cmd_type);
-    app_debug(daemon, 0, "       message version: %s", msg->hdr.version);
+    app_debug(daemon, 0, "       message version: 0x%x", msg->hdr.version);
     app_debug(daemon, 0, "   message credentials:");
     app_debug(daemon, 0, "       uid: %d", msg->cred.uid);
     app_debug(daemon, 0, "       gid: %d", msg->cred.gid);

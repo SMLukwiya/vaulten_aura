@@ -4,7 +4,7 @@
 #include "file_lib.h"
 #include "picotls.h"
 #include "picotls/openssl.h"
-#include "unix_socket_lib.h"
+#include "unix/sock.h"
 #include "utils_lib.h"
 #include "yaml_lib.h"
 
@@ -330,6 +330,11 @@ void a_yml_validate_listeners(struct aura_yml_conf_parser *p, yaml_event_t *evt,
         res = aura_scan_str(yn->str_val, "%" SCNu32, &port);
         if (res != 1 || port > UINT16_MAX)
             YAML_ADD_ERROR(p, evt, "Invalid %s, Expected a valid port number", yn->full_path);
+
+#ifdef AURA_DEV_BUILD
+        if (port < 1024)
+            YAML_ADD_ERROR(p, evt, "Invalid %s, Ports below 1024 are disallowed in Dev environment", yn->full_path);
+#endif
 
         if (a_listener_append(&usr_data->listeners, yn->idx, A_FIELD_PORT, (void *)&port) < 0)
             YAML_ADD_ERROR(p, evt, "Internal validation error: %s", yn->full_path);

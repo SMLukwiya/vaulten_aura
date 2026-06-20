@@ -1,11 +1,14 @@
+#include "aura_dmn.h"
 #include "command/function_dmn.h"
 #include "function_lib.h"
-#include "unix_socket_lib.h"
+#include "unix/sock.h"
 
 const char fn_status_active[] = "\x1B[1;32mFunction active\x1B[0m";
 const char fn_status_inactive[] = "\x1B[1;32mFunction Inactive\x1B[0m";
 
-void aura_dmn_function_status(AURA_DBHANDLE db, struct aura_mem_ctx *mc, struct iovec *key, int cli_fd) {
+void aura_dmn_fn_status(struct iovec *key, int cli_fd, void *arg) {
+    struct aura_dmn_glob_conf *gc = arg;
+    AURA_DBHANDLE db = gc->db_handle;
     struct aura_fn_state *fn_state;
     struct aura_fn_petite *fn_petite;
     struct aura_fn_evt evt;
@@ -14,7 +17,7 @@ void aura_dmn_function_status(AURA_DBHANDLE db, struct aura_mem_ctx *mc, struct 
     const char *fn_name;
     uint32_t fn_version;
     char buf[2000];
-    int res, error;
+    int error, rv;
 
     fn_name = key->iov_base;
     fn_version = UINT32_MAX;
@@ -24,7 +27,7 @@ void aura_dmn_function_status(AURA_DBHANDLE db, struct aura_mem_ctx *mc, struct 
         *sep = '\0';
     }
 
-    fn_petite = aura_fn_petite_fetch(db, mc, fn_name, fn_version, &error);
+    fn_petite = aura_fn_petite_fetch(db, &gc->mc, fn_name, fn_version, &error);
     if (!fn_petite) {
         evt.state = A_FN_OP_STATE_FAILED;
         evt.msg_len = 0;
@@ -45,8 +48,8 @@ void aura_dmn_function_status(AURA_DBHANDLE db, struct aura_mem_ctx *mc, struct 
     snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_STATE);
     state_key.base = buf;
     state_key.len = strlen(buf);
-    res = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_STATE_V1, &state_key, &rec);
-    if (res < 0 || res == A_DB_REC_NOT_FOUND) {
+    rv = aura_db_record_fetch(db, A_DB_NS_FN, A_DB_SCHEMA_FN_STATE_V1, &state_key, &rec);
+    if (rv < 0 || rv == A_DB_REC_NOT_FOUND) {
         /* @todo: differentiate errors */
         evt.error_code = A_FN_ERROR_NOT_EXIST;
         evt.state = A_FN_OP_STATE_FAILED;
@@ -72,7 +75,7 @@ out:
     close(cli_fd);
 }
 
-void aura_fn_start_cb(struct aura_db_completion *comp, ssize_t result) {
+void aura_fn_start_cb(struct aura_db_completion *comp, ssize_t result, AURA_DBHANDLE db_h) {
     struct aura_fn_evt evt;
 
     if (result < 0) {
@@ -88,7 +91,9 @@ void aura_fn_start_cb(struct aura_db_completion *comp, ssize_t result) {
     comp->proceed = true;
 }
 
-void aura_dmn_function_start(AURA_DBHANDLE db, struct aura_mem_ctx *mc, struct iovec *fn, int cli_fd) {
+void aura_dmn_fn_start(struct iovec *fn, int cli_fd, void *arg) {
+    struct aura_dmn_glob_conf *gc = arg;
+    AURA_DBHANDLE db = gc->db_handle;
     struct aura_fn_state *fn_state;
     struct aura_fn_petite *fn_petite;
     struct aura_fn_evt evt;
@@ -111,7 +116,7 @@ void aura_dmn_function_start(AURA_DBHANDLE db, struct aura_mem_ctx *mc, struct i
         *sep = '\0';
     }
 
-    fn_petite = aura_fn_petite_fetch(db, mc, fn_name, fn_version, &error);
+    fn_petite = aura_fn_petite_fetch(db, &gc->mc, fn_name, fn_version, &error);
     if (!fn_petite) {
         evt.state = A_FN_OP_STATE_FAILED;
         evt.msg_len = 0;
@@ -134,11 +139,11 @@ void aura_dmn_function_start(AURA_DBHANDLE db, struct aura_mem_ctx *mc, struct i
     memset(buf, 0, sizeof(buf));
     snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_STATE);
 
-    state_key = aura_iovec_init(mc, strlen(buf), NULL);
+    state_key = aura_iovec_init(&gc->mc, strlen(buf), NULL);
     if (!state_key)
         goto out;
 
-    state_data = aura_iovec_init(mc, sizeof(*fn_state), NULL);
+    state_data = aura_iovec_init(&gc->mc, sizeof(*fn_state), NULL);
     if (!state_data) {
         aura_iovec_destroy(state_key);
         goto out;
@@ -148,7 +153,17 @@ void aura_dmn_function_start(AURA_DBHANDLE db, struct aura_mem_ctx *mc, struct i
     fn_state = (struct aura_fn_state *)state_data->base;
     fn_state->is_active = true;
 
-    res = aura_db_record_insert(db, A_DB_NS_FN, A_DB_SCHEMA_FN_STATE_V1, 0, 0, A_DB_OP_INSERT, state_key, state_data, A_DB_EXEC_ASYNC, &comp);
+    res = aura_db_record_insert(
+      db,
+      A_DB_NS_FN,
+      A_DB_SCHEMA_FN_STATE_V1,
+      0,
+      0,
+      A_DB_OP_INSERT,
+      state_key,
+      state_data,
+      A_DB_EXEC_ASYNC,
+      &comp);
     if (res != 0) {
         aura_iovec_destroy(state_key);
         aura_iovec_destroy(state_data);
@@ -170,7 +185,9 @@ out:
     close(cli_fd);
 }
 
-void aura_dmn_function_stop(AURA_DBHANDLE db, struct aura_mem_ctx *mc, struct iovec *fn, int cli_fd) {
+void aura_dmn_fn_stop(struct iovec *fn, int cli_fd, void *arg) {
+    struct aura_dmn_glob_conf *gc = arg;
+    AURA_DBHANDLE db = gc->db_handle;
     struct aura_fn_state *fn_state;
     struct aura_fn_petite *fn_petite;
     struct aura_fn_evt evt;
@@ -192,7 +209,7 @@ void aura_dmn_function_stop(AURA_DBHANDLE db, struct aura_mem_ctx *mc, struct io
         *sep = '\0';
     }
 
-    fn_petite = aura_fn_petite_fetch(db, mc, fn_name, fn_version, &error);
+    fn_petite = aura_fn_petite_fetch(db, &gc->mc, fn_name, fn_version, &error);
     if (!fn_petite) {
         evt.state = A_FN_OP_STATE_FAILED;
         evt.msg_len = 0;
@@ -215,11 +232,11 @@ void aura_dmn_function_stop(AURA_DBHANDLE db, struct aura_mem_ctx *mc, struct io
     memset(buf, 0, sizeof(buf));
     snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_KEY_PREFIX_FUNC, fn_name, fn_version, A_DB_SCHEMA_SUFFIX_STATE);
 
-    state_key = aura_iovec_init(mc, strlen(buf), NULL);
+    state_key = aura_iovec_init(&gc->mc, strlen(buf), NULL);
     if (!state_key)
         goto out;
 
-    state_data = aura_iovec_init(mc, sizeof(*fn_state), NULL);
+    state_data = aura_iovec_init(&gc->mc, sizeof(*fn_state), NULL);
     if (!state_data) {
         aura_iovec_destroy(state_key);
         goto out;

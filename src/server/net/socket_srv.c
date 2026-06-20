@@ -19,7 +19,7 @@ int aura_sock_init(struct aura_srv_sock *sock, int fd, struct sockaddr *addr,
     aura_set_fd_flag(sock->sock_fd, O_NONBLOCK | SOCK_NONBLOCK);
     res = a_set_no_tcp_delay_opt(fd);
     if (res != 0) {
-        sys_debug(true, errno, "a_socket_accept: aura_socket_create fd=%d:", fd);
+        sys_debug(true, errno, "a_socket_accept: A_UNIX_SOCK_FILE_create fd=%d:", fd);
         return -1;
     }
 
@@ -30,7 +30,7 @@ int aura_sock_init(struct aura_srv_sock *sock, int fd, struct sockaddr *addr,
  * Accept connection on socket descriptor @fd,
  * using these flags
  */
-int aura_socket_accept(struct aura_srv_sock *sock, int sock_fd, bool is_tls, int flags) {
+int A_UNIX_SOCK_FILE_accept(struct aura_srv_sock *sock, int sock_fd, bool is_tls, int flags) {
     struct sockaddr_in cli_addr;
     socklen_t cli_len = sizeof(cli_addr);
     int cli_fd;

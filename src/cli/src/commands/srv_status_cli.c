@@ -1,14 +1,14 @@
 #include "cmdline_cli.h"
 #include "command_cli.h"
 #include "error_lib.h"
-#include "unix_socket_lib.h"
+#include "unix/sock.h"
 
 int aura_cli_run_server_status(void *opts_ptr, void *glob_opt) {
     int sock_fd, res;
     struct aura_msg_hdr hdr;
     struct aura_iovec data;
 
-    aura_try_connect_or_error(&sock_fd);
+    sock_fd = aura_try_connect_or_error();
     if (sock_fd == -1)
         app_exit(false, 0, "Failed to connect to daemon, use 'aura system start' to start aura daemon");
 

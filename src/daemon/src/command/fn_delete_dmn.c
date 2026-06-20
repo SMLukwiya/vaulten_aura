@@ -2,16 +2,13 @@
 #include "db/db.h"
 #include "function_lib.h"
 #include "types_lib.h"
-#include "unix_socket_lib.h"
+#include "unix/sock.h"
 
 #include <unistd.h>
 
 const char fn_deleted_msg[] = "\x1B[1;32mFunction successfully deleted\x1B[0m";
 
-/** @todo: is it better to pass conf via parameters instead? */
-extern struct aura_daemon_glob_conf glob_conf;
-
-void aura_fn_delete_cb(struct aura_db_completion *comp, ssize_t result) {
+void aura_fn_delete_cb(struct aura_db_completion *comp, ssize_t result, AURA_DBHANDLE db_h) {
     struct aura_fn_evt evt;
     struct aura_fn_cb_data *user_data;
     int res;
@@ -22,7 +19,7 @@ void aura_fn_delete_cb(struct aura_db_completion *comp, ssize_t result) {
         evt.msg_len = 0;
         evt.msg[0] = '\0';
 
-        aura_db_job_update(glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
+        aura_db_job_update(db_h, user_data->job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
         aura_resp_send(comp->client_fd, &evt, sizeof(evt));
         comp->status = result;
         comp->proceed = true;
@@ -50,43 +47,43 @@ void aura_fn_delete_cb(struct aura_db_completion *comp, ssize_t result) {
         break;
 
     case A_FN_OP_STATE_META:
-        res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DELETE,
+        res = aura_db_job_step_insert(db_h, user_data->job_id, A_FN_DELETE,
                                       A_FN_OP_STATE_META, &target, A_DB_EXEC_ASYNC, NULL);
         comp->state == A_FN_OP_STATE_CONFIG;
         break;
 
     case A_FN_OP_STATE_CONFIG:
-        res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DELETE,
+        res = aura_db_job_step_insert(db_h, user_data->job_id, A_FN_DELETE,
                                       A_FN_OP_STATE_CONFIG, &target, A_DB_EXEC_ASYNC, NULL);
         comp->state == A_FN_OP_STATE_CODE;
         break;
 
     case A_FN_OP_STATE_CODE:
-        res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DELETE,
+        res = aura_db_job_step_insert(db_h, user_data->job_id, A_FN_DELETE,
                                       A_FN_OP_STATE_CODE, &target, A_DB_EXEC_ASYNC, NULL);
         comp->state = A_FN_OP_STATE_STAT;
         break;
 
     case A_FN_OP_STATE_STAT:
-        res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DELETE,
+        res = aura_db_job_step_insert(db_h, user_data->job_id, A_FN_DELETE,
                                       A_FN_OP_STATE_STAT, &target, A_DB_EXEC_ASYNC, NULL);
         comp->state == A_FN_OP_STATE_FN_STATE;
         break;
 
     case A_FN_OP_STATE_FN_STATE:
-        res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DELETE,
+        res = aura_db_job_step_insert(db_h, user_data->job_id, A_FN_DELETE,
                                       A_FN_OP_STATE_FN_STATE, &target, A_DB_EXEC_ASYNC, NULL);
         comp->state == A_FN_OP_STATE_FN_LIST_UPDATE;
         break;
 
     case A_FN_OP_STATE_FN_LIST_UPDATE:
-        res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DELETE,
+        res = aura_db_job_step_insert(db_h, user_data->job_id, A_FN_DELETE,
                                       A_FN_OP_STATE_FN_LIST_UPDATE, &target, A_DB_EXEC_ASYNC, NULL);
         comp->state == A_FN_OP_STATE_DONE;
         break;
 
     case A_FN_OP_STATE_DONE:
-        res = aura_db_job_step_insert(glob_conf.db_handle, user_data->job_id, A_FN_DELETE,
+        res = aura_db_job_step_insert(db_h, user_data->job_id, A_FN_DELETE,
                                       A_FN_OP_STATE_DONE, &target, A_DB_EXEC_ASYNC, NULL);
 
         break;
@@ -100,7 +97,7 @@ void aura_fn_delete_cb(struct aura_db_completion *comp, ssize_t result) {
         evt.error_code = A_FN_ERROR_GENERIC;
         evt.msg_len = 0;
 
-        aura_db_job_update(glob_conf.db_handle, user_data->job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
+        aura_db_job_update(db_h, user_data->job_id, A_DB_JOB_FAILED, evt.error_code, 0, A_DB_EXEC_ASYNC, NULL);
         aura_resp_send(comp->client_fd, (void *)&evt, sizeof(evt));
         comp->status = res;
         comp->proceed = true;
@@ -111,7 +108,9 @@ void aura_fn_delete_cb(struct aura_db_completion *comp, ssize_t result) {
     comp->proceed = true;
 }
 
-void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
+void aura_dmn_fn_del(struct iovec *key, int cli_fd, void *arg) {
+    struct aura_dmn_glob_conf *gc = arg;
+    AURA_DBHANDLE db = gc->db_handle;
     char *data, *fn_name;
     uint32_t fn_version;
     struct aura_iovec db_key, db_data;
@@ -159,7 +158,7 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
             *sep = '\0';
         }
 
-        fn_petite = aura_fn_petite_fetch(db, &glob_conf.mc, fn_name, fn_version, &error);
+        fn_petite = aura_fn_petite_fetch(db, &gc->mc, fn_name, fn_version, &error);
         if (!fn_petite) {
             evt.state = A_FN_OP_STATE_FAILED;
             evt.msg_len = 0;
@@ -193,7 +192,7 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
         meta_key.len = strlen(buf);
 
         comp.proceed = false;
-        res = aura_db_record_delete(glob_conf.db_handle, A_DB_NS_FN, A_DB_SCHEMA_FN_META_V1, job_id, &meta_key, A_DB_EXEC_ASYNC, &comp);
+        res = aura_db_record_delete(db, A_DB_NS_FN, A_DB_SCHEMA_FN_META_V1, job_id, &meta_key, A_DB_EXEC_ASYNC, &comp);
         if (res != 0) {
             goto out;
         }
@@ -214,7 +213,7 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
         config_key.len = strlen(buf);
 
         comp.proceed = false;
-        res = aura_db_record_delete(glob_conf.db_handle, A_DB_NS_FN, A_DB_SCHEMA_FN_CONFIG_V1, job_id, &config_key, A_DB_EXEC_ASYNC, &comp);
+        res = aura_db_record_delete(db, A_DB_NS_FN, A_DB_SCHEMA_FN_CONFIG_V1, job_id, &config_key, A_DB_EXEC_ASYNC, &comp);
         if (res != 0) {
             goto out;
         }
@@ -235,7 +234,7 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
         code_key.len = strlen(buf);
 
         comp.proceed = false;
-        res = aura_db_record_delete(glob_conf.db_handle, A_DB_NS_FN, A_DB_SCHEMA_FN_CODE_V1, job_id, &code_key, A_DB_EXEC_ASYNC, &comp);
+        res = aura_db_record_delete(db, A_DB_NS_FN, A_DB_SCHEMA_FN_CODE_V1, job_id, &code_key, A_DB_EXEC_ASYNC, &comp);
         if (res != 0) {
             goto out;
         }
@@ -256,7 +255,7 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
         stat_key.len = strlen(buf);
 
         comp.proceed = false;
-        res = aura_db_record_delete(glob_conf.db_handle, A_DB_NS_FN, A_DB_SCHEMA_FN_STAT_DELTA, job_id, &stat_key, A_DB_EXEC_ASYNC, &comp);
+        res = aura_db_record_delete(db, A_DB_NS_FN, A_DB_SCHEMA_FN_STAT_DELTA, job_id, &stat_key, A_DB_EXEC_ASYNC, &comp);
         if (res != 0) {
             goto out;
         }
@@ -277,7 +276,7 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
         state_key.len = strlen(buf);
 
         comp.proceed = false;
-        res = aura_db_record_delete(glob_conf.db_handle, A_DB_NS_FN, A_DB_SCHEMA_FN_STATE_V1, job_id, &state_key, A_DB_EXEC_ASYNC, &comp);
+        res = aura_db_record_delete(db, A_DB_NS_FN, A_DB_SCHEMA_FN_STATE_V1, job_id, &state_key, A_DB_EXEC_ASYNC, &comp);
         if (res != 0) {
             goto out;
         }
@@ -290,7 +289,7 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
 
     case A_FN_OP_STATE_FN_LIST_UPDATE:
         comp.proceed = false;
-        res = aura_fn_list_delete(glob_conf.db_handle, &glob_conf.mc, job_id, fn_name, fn_version, &comp);
+        res = aura_fn_list_delete(db, &gc->mc, job_id, fn_name, fn_version, &comp);
         if (res != 0) {
             evt.error_code = A_FN_ERROR_GENERIC;
             evt.state = A_FN_OP_STATE_FAILED;
@@ -323,7 +322,7 @@ void aura_dmn_function_delete(AURA_DBHANDLE db, struct iovec *key, int cli_fd) {
 
         res = aura_resp_send(cli_fd, &evt, sizeof(evt));
         if (res < 0) {
-            sys_debug(true, errno, "aura_dmn_function_delete: aura_resp_send error:");
+            sys_debug(true, errno, "aura_dmn_fn_del: aura_resp_send error:");
         }
 
     default:

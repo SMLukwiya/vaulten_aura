@@ -3,7 +3,7 @@
 #include "error_lib.h"
 #include "file_lib.h"
 #include "flag_cli.h"
-#include "unix_socket_lib.h"
+#include "unix/sock.h"
 #include "utils_lib.h"
 
 /* validate cli options */
@@ -37,9 +37,8 @@ int aura_cli_run_fn_validate_config_cli(void *opts_ptr, void *glob_opts) {
     struct aura_msg_hdr hdr;
     struct aura_msg response;
     struct aura_iovec data;
-    // char *data;
 
-    aura_try_connect_or_error(&sock_fd);
+    sock_fd = aura_try_connect_or_error();
     if (sock_fd == -1)
         app_exit(false, 0, "Failed to connect to daemon, use 'aura system start' to start aura daemon");
 
