@@ -23,6 +23,7 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/memory/memory_lib_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/memory/slab_lib_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/user/user.c
 )
 
 add_executable(aura_daemon

@@ -4,7 +4,9 @@
 #include "db/db.h"
 #include "error_lib.h"
 #include "memory_lib.h"
+#include "time_lib.h"
 #include "types_lib.h"
+#include "user/user.h"
 
 #include <fcntl.h>
 #include <poll.h>
@@ -20,9 +22,10 @@ struct aura_dmn_glob_conf {
     struct aura_iovec aura_db_path;
     AURA_DBHANDLE db_handle;
     struct aura_mem_ctx mc;
-    int server_pid;
-    uint64_t boot_time;
+    struct timespec boot_time;
     struct pollfd *poll_fds;
+    int server_pid;
+    struct aura_user_rec user;
 };
 
 int aura_daemon(void);

@@ -57,9 +57,9 @@ struct aura_cli_flag *system_start_flags[] = {
 #endif
 
 /* Start aura system up */
-int aura_cli_start_system(void *opts_ptr, void *glob_opts) {
+int aura_cli_system_start(void *opts_ptr, void *glob_opts) {
     pid_t pid;
-    int fds[2];
+    int fds[2], sock_fd;
     struct aura_cli_sys_start_opts *opts = (struct aura_cli_sys_start_opts *)opts_ptr;
 
     // if (socketpair(AF_UNIX, SOCK_DGRAM, 0, fds) < 0) {
@@ -67,19 +67,25 @@ int aura_cli_start_system(void *opts_ptr, void *glob_opts) {
     //     return -1;
     // }
 
+    sock_fd = aura_try_connect_or_error();
+    if (sock_fd != -1) {
+        app_info(false, 0, system_up);
+        return 0;
+    }
+
     pid = fork();
     if (pid < 0) {
-        sys_info(false, errno, "aura_cli_start_system: fork error:");
+        sys_info(false, errno, "aura_cli_system_start: fork error:");
         return -1;
     }
 
     if (pid == 0) {
         execlp("aura_daemon", "aura_daemon", (char *)0);
-        sys_exit(false, errno, "execlp error starting server");
+        sys_debug(false, errno, "execlp error starting server");
     } else {
         app_info(false, 0, "System started!");
-        return 0;
     }
+    return 0;
 }
 
 /* aura system start cmd */
@@ -102,7 +108,7 @@ struct aura_cli_cmd system_start = {
   .is_experimental = false,
   .options = NULL,
   .options_size = ARRAY_SIZE(system_start_flags),
-  .handler = aura_cli_start_system,
+  .handler = aura_cli_system_start,
   .opt_allocator = a_system_start_option_allocator,
   .opt_destructor = a_system_start_option_destructor,
 };
@@ -110,41 +116,21 @@ struct aura_cli_cmd system_start = {
 /* Stop aura system */
 int aura_cli_system_stop(void *opts_ptr, void *glob_opts) {
     struct aura_msg_hdr hdr;
-    FILE *pid_file;
-    char buf[64];
-    pid_t pid;
     int res, sock_fd;
     struct aura_iovec data;
 
     sock_fd = aura_try_connect_or_error();
-    if (sock_fd == -1)
-        app_exit(false, 0, "Failed to connect to daemon, use 'aura system start' to start aura daemon");
-
-    pid_file = fopen(AURA_PID, "r");
-    if (!pid_file) {
-        fprintf(stderr, "failed to open pid file: %s\n", strerror(errno));
-        return 1;
-    }
-
-    fread(buf, sizeof(buf), 1, pid_file);
-    if (ferror(pid_file)) {
-        fprintf(stderr, "could not read pid file: %s\n", strerror(errno));
-        return 1;
-    }
-
-    errno = 0;
-    pid = strtol(buf, NULL, 10);
-
-    if (errno != 0) {
-        fprintf(stderr, "invalid pid: %s\n", strerror(errno));
-        return 1;
+    if (sock_fd == -1) {
+        app_info(false, 0, system_down);
+        app_info(false, 0, "Failed to connect to daemon, use 'aura system start' to start aura daemon");
+        return -1;
     }
 
     a_init_msg_hdr(hdr, 0, A_MSG_CMD_EXECUTE, A_CMD_SYSTEM_STOP);
 
     if (aura_msg_send(sock_fd, &hdr, NULL, 0, -1) < 0) {
         sys_debug(false, errno, "system stop, failed");
-        return 1;
+        return -1;
     }
 
     while (true) {
@@ -152,10 +138,9 @@ int aura_cli_system_stop(void *opts_ptr, void *glob_opts) {
         if (res < 0 || data.base == NULL)
             break;
     }
+    app_info(false, errno, "system_stopped");
 
-    printf("PID: %lu\n", (long unsigned)pid);
-    res = unlink(AURA_PID);
-    return kill(pid, SIGTERM);
+    return 0;
 }
 
 struct aura_cli_cmd system_stop = {

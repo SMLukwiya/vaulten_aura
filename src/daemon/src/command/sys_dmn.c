@@ -24,4 +24,5 @@ void aura_dmn_system_stop(int cli_fd, void *arg) {
     rv = aura_resp_send(cli_fd, NULL, 0);
 
     close(cli_fd);
+    kill(getpid(), SIGTERM);
 }

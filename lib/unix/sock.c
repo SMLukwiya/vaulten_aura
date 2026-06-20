@@ -18,15 +18,13 @@ static inline void a_credentials_add(struct cmsghdr *cmsg) {
     cmsg->cmsg_type = SCM_CRED_TYPE;
     cred = (struct sock_cred *)CMSG_DATA(cmsg);
 #if defined(SCM_CREDENTIALS)
-    /* initilize for linux */
+    /* initialize for linux */
     cred->uid = getuid();
     cred->gid = getgid();
     cred->pid = getpid();
 #endif
 }
 
-/** send */
-/** @todo: it could be better to initialize the header here when sending */
 int aura_msg_send(int sock_fd, struct aura_msg_hdr *aura_hdr, void *data, size_t data_len, int fd) {
     struct msghdr msg;
     struct cmsghdr *cmsg_ptr;
@@ -363,7 +361,7 @@ void aura_unix_sock_close(int fd) {
         close(fd);
 }
 
-int aura_unix_server_accept(int fd, uid_t *uid_ptr) {
+int aura_unix_server_accept(int fd) {
     errno = 0;
     struct sockaddr_un cli_addr;
     struct stat statbuf;
@@ -394,9 +392,6 @@ int aura_unix_server_accept(int fd, uid_t *uid_ptr) {
     if ((statbuf.st_mode & (S_IRWXG | S_IRWXO)) || (statbuf.st_mode & S_IRWXU) != S_IRWXU) {
         goto err_out;
     }
-
-    if (uid_ptr)
-        *uid_ptr = getuid();
 
     return cli_fd;
 

@@ -28,7 +28,7 @@ add_executable(aura
     src/commands/srv_start_cli.c
     src/commands/srv_stop_cli.c
     src/commands/srv_status_cli.c
-    src/commands/system_cli.c
+    src/commands/sys_cli.c
     src/commands/server_cli.c
     src/commands/root_cli.c
     src/flag_cli.c

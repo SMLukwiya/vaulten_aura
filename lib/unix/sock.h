@@ -47,7 +47,7 @@
 #define CREDOPT SO_PASSCRED
 #endif
 
-#ifdef linux
+#ifdef __linux
 #define peer_uid(x) ((x)->uid)
 #define peer_gid(x) ((x)->gid)
 #else
@@ -88,13 +88,6 @@ struct aura_msg_hdr {
     aura_cmd_t cmd_type;
 };
 
-/* custom defined credentials because C is being shady with that 'struct ucred'!! */
-// struct A_UNIX_SOCK_FILE_cred {
-//     pid_t pid;
-//     uid_t uid;
-//     gid_t gid;
-// };
-
 /* Request message structure */
 struct aura_msg {
     struct aura_msg_hdr hdr;
@@ -103,7 +96,6 @@ struct aura_msg {
         uid_t uid;
         gid_t gid;
     } cred;
-    // struct A_UNIX_SOCK_FILE_cred cred;
     int fd;
     struct iovec data;
 };
@@ -126,8 +118,12 @@ struct aura_unix_sock {
     int flags;
 };
 
+/* Server listen */
 int aura_unix_server_listen(struct aura_unix_sock *st, const char *name);
-int aura_unix_server_accept(int fd, uid_t *uid_p);
+
+/* Server accept conn */
+int aura_unix_server_accept(int fd);
+
 int aura_unix_cli_connect(struct aura_unix_sock *cli, const char *serv_name, const char *cli_name, int cli_perm);
 void aura_unix_sock_close(int fd);
 int aura_msg_send(int sock_fd, struct aura_msg_hdr *aura_hdr, void *data, size_t data_len, int fd);

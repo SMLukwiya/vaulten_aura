@@ -17,6 +17,8 @@
 
 static long A_MAX_FILE = 256;
 
+const char cli_auth_error[] = "\x1B[1;32mClient Not Authenticated\x1B[0m";
+
 #ifdef AURA_DEV_BUILD
 const char *passphrase = "dev_default_password";
 #else
@@ -123,12 +125,14 @@ static void a_sig_ch_handler(int signo) {
     // glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd = -1;
 }
 
-static void a_setup_database(struct aura_dmn_glob_conf *glob_conf) {
+static int a_setup_database(struct aura_dmn_glob_conf *glob_conf) {
     int res;
 
     res = aura_setup_database_file_path(&glob_conf->aura_app_path, &glob_conf->aura_db_path);
-    if (res == -1)
-        sys_exit(true, errno, "a_setup_database: aura_setup_database_file_path error");
+    if (res == -1) {
+        sys_debug(true, errno, "a_setup_database: aura_setup_database_file_path error");
+        return -1;
+    }
 
     glob_conf->db_handle = aura_db_open(
       &glob_conf->mc,
@@ -136,26 +140,34 @@ static void a_setup_database(struct aura_dmn_glob_conf *glob_conf) {
       glob_conf->aura_db_path.base,
       O_RDWR | O_CREAT | O_EXCL | O_TRUNC,
       A_DB_FILE_MODE);
-    if (!glob_conf->db_handle)
-        sys_exit(true, errno, "a_setup_database: aura_db_open error");
+    if (!glob_conf->db_handle) {
+        sys_debug(true, errno, "a_setup_database: aura_db_open error");
+        return -1;
+    }
 
     res = aura_db_start_bg_tasks(glob_conf->db_handle);
-    if (res != 0)
-        sys_exit(true, errno, "a_setup_database: aura_db_start_bg_tasks");
+    if (res != 0) {
+        sys_debug(true, errno, "a_setup_database: aura_db_start_bg_tasks");
+        return -1;
+    }
+
+    return 0;
+}
+
+static bool a_authenticate_cli(struct aura_dmn_glob_conf *gc, int cli_fd, struct aura_msg *msg) {
+    if (gc->user.user_id != msg->cred.uid) {
+        aura_resp_send(cli_fd, (void *)cli_auth_error, sizeof(cli_auth_error) - 1);
+        close(cli_fd);
+        return false;
+    }
+    return true;
 }
 
 int aura_daemon() {
     struct aura_dmn_glob_conf glob_conf;
     struct aura_unix_sock d_sock;
-    struct sockaddr_un d_addr;
-    uid_t uid, aura_cli_pid;
     int rv, cli_fd;
-    // int cli_fd, lock_file_fd, num_fd;
     size_t n_read, num_fd;
-    time_t t;
-    struct msghdr msg;
-    struct cmsghdr cmsg;
-    struct iovec iov[1];
     struct aura_msg aura_msg;
     struct rlimit rlimit;
 
@@ -166,15 +178,17 @@ int aura_daemon() {
     //     A_MAX_FILE = rlimit.rlim_max;
 
     memset(&glob_conf, 0, sizeof(glob_conf));
+    if (aura_now_ts(&glob_conf.boot_time, CLOCK_MONOTONIC) < 0)
+        sys_exit(true, 0, "Daemon config error:");
+
+    if (aura_usr_get_rec(&glob_conf.user) < 0)
+        sys_exit(true, 0, "Daemon config error:");
+
     glob_conf.poll_fds = alloca(sizeof(struct pollfd) * A_MAX_FILE);
     if (!glob_conf.poll_fds)
         sys_exit(false, 0, "Daemon config error");
 
-    app_debug(false, 0, "Daemon tests"); /* probably after setting socket */
-
-    /**
-     * Set up named socket
-     */
+    /* Set up unix socket */
     if (aura_unix_server_listen(&d_sock, A_UNIX_SOCK_FILE) < 0)
         sys_exit(false, errno, "aura_daemon: aura_unix_server_listen error: %s", A_UNIX_SOCK_FILE);
 
@@ -198,8 +212,10 @@ int aura_daemon() {
     /* check app paths */
     if (aura_setup_app_paths(&glob_conf.aura_app_path) < 0)
         sys_exit(true, errno, "aura_daemon: a_setup_app_paths error:");
+
     /* Setup database */
-    a_setup_database(&glob_conf);
+    if (a_setup_database(&glob_conf) < 0)
+        sys_exit(true, 0, "DB error");
 
     for (;;) {
         if (poll(glob_conf.poll_fds, num_fd, -1) < 0 && errno != EINTR) {
@@ -208,9 +224,11 @@ int aura_daemon() {
         }
 
         if (glob_conf.poll_fds[0].revents & POLLIN) {
-            cli_fd = aura_unix_server_accept(d_sock.fd, &uid);
-            if (cli_fd < 0)
-                sys_exit(true, errno, "aura_daemon: aura_unix_server_accept error:");
+            cli_fd = aura_unix_server_accept(d_sock.fd);
+            if (cli_fd < 0) {
+                sys_debug(true, errno, "aura_daemon: aura_unix_server_accept error:");
+                break;
+            }
 
             glob_conf.poll_fds[num_fd].fd = cli_fd;
             glob_conf.poll_fds[num_fd].events = POLLIN;
@@ -229,6 +247,8 @@ int aura_daemon() {
                     a_handle_client_request(&aura_msg, glob_conf.poll_fds[i].fd, NULL);
                 } else {
                     /* cli request */
+                    if (a_authenticate_cli(&glob_conf, glob_conf.poll_fds[i].fd, &aura_msg) == false)
+                        continue;
                     a_handle_client_request(&aura_msg, glob_conf.poll_fds[i].fd, (void *)&glob_conf);
                 }
 
@@ -240,5 +260,5 @@ int aura_daemon() {
         }
     }
 
-    sys_exit(true, errno, "aura_daemon: Exiting daemon");
+    exit(1);
 }
