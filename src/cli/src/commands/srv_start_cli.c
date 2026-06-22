@@ -3,6 +3,7 @@
 #include "error_lib.h"
 #include "file_lib.h"
 #include "flag_cli.h"
+#include "ipc/ipc.h"
 #include "unix/sock.h"
 #include "utils_lib.h"
 
@@ -48,38 +49,50 @@ struct aura_cli_flag *svr_start_flags[] = {
 
 int aura_cli_run_server_start(void *opts_ptr, void *glob_opt) {
     char resolved_svr_conf_file_path[1024];
-    int sock_fd, file_fd, res;
+    int sock_fd, file_fd;
     struct aura_msg_hdr hdr;
     struct aura_iovec data;
     struct svr_start_opts *opts;
+    char sock_file[A_MAX_SOCK_FILE_LEN];
+    bool dev_mode = false;
 
-    sock_fd = aura_try_connect_or_error();
-    if (sock_fd == -1)
-        app_exit(false, 0, "Failed to connect to daemon, use 'aura system start' to start aura daemon");
+#ifdef AURA_DEV_BUILD
+    dev_mode = true;
+#endif
+
+    aura_ipc_get_unix_sock_path(dev_mode, sock_file, sizeof(sock_file));
+    sock_fd = aura_try_connect_or_error(sock_file);
+    if (sock_fd == -1) {
+        app_info(false, 0, system_down);
+        app_info(false, 0, system_start);
+        return -1;
+    }
 
     opts = (struct svr_start_opts *)opts_ptr;
-    res = aura_get_absolute_path(opts->server_config_path, resolved_svr_conf_file_path);
-    if (res != 0)
-        sys_exit(false, errno, "Failed to resolve file path: %s", opts->server_config_path);
+    if (aura_get_absolute_path(opts->server_config_path, resolved_svr_conf_file_path) != 0) {
+        sys_info(false, errno, "%s %s", file_error, opts->server_config_path);
+        return -1;
+    }
 
-    if (access(resolved_svr_conf_file_path, R_OK) < 0)
-        sys_exit(false, errno, "Failed to get read access file: %s", resolved_svr_conf_file_path);
+    // if (access(resolved_svr_conf_file_path, R_OK) < 0)
+    //     sys_exit(false, errno, "Failed to get read access file: %s", resolved_svr_conf_file_path);
 
     file_fd = open(resolved_svr_conf_file_path, O_RDONLY);
-    if (file_fd < 0)
-        sys_exit(false, errno, "Failed to open file: %s", resolved_svr_conf_file_path);
+    if (file_fd < 0) {
+        sys_info(false, errno, "%s %s", file_error, resolved_svr_conf_file_path);
+        return -1;
+    }
 
     a_init_msg_hdr(hdr, 0, A_MSG_CMD_EXECUTE, A_CMD_SERVER_START);
     if (aura_msg_send(sock_fd, &hdr, NULL, 0, file_fd) != 0) {
-        close(sock_fd);
-        sys_exit(false, errno, "Failed to send aura server start cli cmd");
+        sys_info(false, errno, cmd_send_failed);
+        return -1;
     }
     close(file_fd);
 
-    res = aura_recv_resp(&data, sock_fd, NULL);
-    if (res < 0) {
+    if (aura_recv_resp(&data, sock_fd, NULL) < 0) {
         close(sock_fd);
-        return res;
+        return -1;
     }
 
     if (data.base != NULL)

@@ -3,23 +3,41 @@
     "configurePresets": [
         {
             "name": "dev",
-            "displayName": "dev-config",
+            "displayName": "Dev config",
             "description": "dev configure using 'Unix Makefiles' generator",
             "generator": "Unix Makefiles",
-            "binaryDir": "build/${presetName}",
+            "binaryDir": "${sourceDir}/build/${presetName}",
             "cacheVariables": {
                 "CMAKE_POLICY_DEFAULT_CMP0091": "NEW",
                 "CMAKE_BUILD_TYPE": "Debug",
                 "CMAKE_RUNTIME_OUTPUT_DIRECTORY": "${sourceDir}/build/${presetName}/bin",
-                "APP_DEV_BUILD": "ON"
+                "APP_DEV_BUILD": "ON",
+                "BUILD_TESTS": true
+            }
+        },
+        {
+            "name": "build",
+            "displayName": "Release config",
+            "generator": "Unix Makefiles",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_POLICY_DEFAULT_CMP0091": "NEW",
+                "CMAKE_BUILD_TYPE":"Release",
+                "BUILD_TESTS": false
             }
         }
     ],
     "buildPresets": [
         {
             "name": "dev",
+            "displayName": "Dev build",
             "configurePreset": "dev",
-            "jobs": 8
+            "jobs": 4
+        },
+        {
+            "name": "release",
+            "displayName": "Release build",
+            "configurePreset": "build"
         }
     ]
 }

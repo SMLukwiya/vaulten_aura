@@ -2,6 +2,7 @@
 #include "error_lib.h"
 #include "file_lib.h"
 #include "flag_cli.h"
+#include "ipc/ipc.h"
 #include "unix/sock.h"
 #include "utils_lib.h"
 
@@ -11,44 +12,41 @@
 #include <stdlib.h>
 #include <sys/types.h>
 
-char system_up[] = "\x1B[1;32mSystem up\x1B[0m";
-char system_down[] = "\x1B[1;31mSystem down\x1B[0m";
+// struct aura_cli_sys_start_opts {
+//     char *system_config_path;
+// };
 
-struct aura_cli_sys_start_opts {
-    char *system_config_path;
-};
+// static void *a_system_start_option_allocator(void) {
+//     return malloc(sizeof(struct aura_cli_sys_start_opts));
+// }
 
-static void *a_system_start_option_allocator(void) {
-    return malloc(sizeof(struct aura_cli_sys_start_opts));
-}
+// static void a_system_start_option_destructor(void *opts_ptr) {
+//     struct aura_cli_sys_start_opts *opts = (struct aura_cli_sys_start_opts *)opts_ptr;
+//     if (!opts_ptr)
+//         return;
 
-static void a_system_start_option_destructor(void *opts_ptr) {
-    struct aura_cli_sys_start_opts *opts = (struct aura_cli_sys_start_opts *)opts_ptr;
-    if (!opts_ptr)
-        return;
+//     if (opts->system_config_path)
+//         free(opts->system_config_path);
 
-    if (opts->system_config_path)
-        free(opts->system_config_path);
+//     free(opts);
+// }
 
-    free(opts);
-}
+// struct aura_cli_flag path_flag = {
+//   .name = "path",
+//   .short_name = 'p',
+//   .default_value = NULL,
+//   .is_hidden = false,
+//   .deprecated = NULL,
+//   .is_required = true,
+//   .is_set = false,
+//   .type = A_CLI_FLAG_STRING,
+//   .offset_in_option = OPT_OFFSET(struct aura_cli_sys_start_opts, system_config_path),
+//   .description = "Path flag description",
+// };
 
-struct aura_cli_flag path_flag = {
-  .name = "path",
-  .short_name = 'p',
-  .default_value = NULL,
-  .is_hidden = false,
-  .deprecated = NULL,
-  .is_required = true,
-  .is_set = false,
-  .type = A_CLI_FLAG_STRING,
-  .offset_in_option = OPT_OFFSET(struct aura_cli_sys_start_opts, system_config_path),
-  .description = "Path flag description",
-};
-
-struct aura_cli_flag *system_start_flags[] = {
-  &path_flag,
-};
+// struct aura_cli_flag *system_start_flags[] = {
+//   &path_flag,
+// };
 
 #ifdef AURA_DEV_BUILD
 /**/
@@ -57,17 +55,29 @@ struct aura_cli_flag *system_start_flags[] = {
 #endif
 
 /* Start aura system up */
+#ifdef AURA_DEV_BUILD
+#else
 int aura_cli_system_start(void *opts_ptr, void *glob_opts) {
-    pid_t pid;
-    int fds[2], sock_fd;
+    return 0;
+}
+
+int aura_cli_system_stop(void *opts_ptr, void *glob_opts) {
+    return 0;
+}
+
+int aura_cli_system_status(void *opts, void *glob_opts) {
+    return 0;
+}
+#endif
+
+int aura_cli_system_start(void *opts_ptr, void *glob_opts) {
     struct aura_cli_sys_start_opts *opts = (struct aura_cli_sys_start_opts *)opts_ptr;
+    pid_t pid;
+    int sock_fd;
+    char sock_file[A_MAX_SOCK_FILE_LEN];
 
-    // if (socketpair(AF_UNIX, SOCK_DGRAM, 0, fds) < 0) {
-    //     sys_info(false, errno, "System startup failed: socket error:");
-    //     return -1;
-    // }
-
-    sock_fd = aura_try_connect_or_error();
+    aura_ipc_get_unix_sock_path(true, sock_file, sizeof(sock_file));
+    sock_fd = aura_try_connect_or_error(sock_file);
     if (sock_fd != -1) {
         app_info(false, 0, system_up);
         return 0;
@@ -89,14 +99,16 @@ int aura_cli_system_start(void *opts_ptr, void *glob_opts) {
 }
 
 /* aura system start cmd */
-struct aura_cli_cmd system_start = {
+struct aura_cli_cmd system_start_cmd = {
   .version = "to be filled later",
   .name = "start",
   .description = "start description",
   .usage = "start (describe usage)",
   .deprecated = NULL,
-  .flags = system_start_flags,
-  .flag_cnt = ARRAY_SIZE(system_start_flags),
+  //   .flags = system_start_flags,
+  //   .flag_cnt = ARRAY_SIZE(system_start_flags),
+  .flags = NULL,
+  .flag_cnt = 0,
   .args = NULL,
   .args_cnt = 0,
   .sub_cmds = NULL,
@@ -107,43 +119,47 @@ struct aura_cli_cmd system_start = {
   .is_hidden = false,
   .is_experimental = false,
   .options = NULL,
-  .options_size = ARRAY_SIZE(system_start_flags),
+  //   .options_size = ARRAY_SIZE(system_start_flags),
+  .options_size = 0,
   .handler = aura_cli_system_start,
-  .opt_allocator = a_system_start_option_allocator,
-  .opt_destructor = a_system_start_option_destructor,
+  //   .opt_allocator = a_system_start_option_allocator,
+  //   .opt_destructor = a_system_start_option_destructor,
 };
 
 /* Stop aura system */
 int aura_cli_system_stop(void *opts_ptr, void *glob_opts) {
     struct aura_msg_hdr hdr;
-    int res, sock_fd;
+    int rv, sock_fd;
     struct aura_iovec data;
+    char sock_file[A_MAX_SOCK_FILE_LEN];
 
-    sock_fd = aura_try_connect_or_error();
+    aura_ipc_get_unix_sock_path(true, sock_file, sizeof(sock_file));
+    sock_fd = aura_try_connect_or_error(sock_file);
     if (sock_fd == -1) {
         app_info(false, 0, system_down);
-        app_info(false, 0, "Failed to connect to daemon, use 'aura system start' to start aura daemon");
+        app_info(false, 0, system_start);
         return -1;
     }
 
     a_init_msg_hdr(hdr, 0, A_MSG_CMD_EXECUTE, A_CMD_SYSTEM_STOP);
 
-    if (aura_msg_send(sock_fd, &hdr, NULL, 0, -1) < 0) {
-        sys_debug(false, errno, "system stop, failed");
+    if (aura_msg_send(sock_fd, &hdr, NULL, 0, -1) != 0) {
+        sys_info(false, errno, cmd_send_failed);
         return -1;
     }
 
     while (true) {
-        res = aura_recv_resp(&data, sock_fd, NULL);
-        if (res < 0 || data.base == NULL)
+        rv = aura_recv_resp(&data, sock_fd, NULL);
+        if (rv < 0 || data.base == NULL)
             break;
     }
+
     app_info(false, errno, "system_stopped");
 
     return 0;
 }
 
-struct aura_cli_cmd system_stop = {
+struct aura_cli_cmd system_stop_cmd = {
   .version = "to be filled later",
   .name = "stop",
   .description = "stop description",
@@ -170,14 +186,19 @@ int aura_cli_system_status(void *opts, void *glob_opts) {
     int sock_fd;
     struct aura_msg_hdr hdr;
     struct aura_msg msg;
+    char sock_file[A_MAX_SOCK_FILE_LEN];
 
-    sock_fd = aura_try_connect_or_error();
-    if (sock_fd == -1)
-        app_exit(false, 0, "Failed to connect to daemon, use 'aura system start' to start aura daemon");
+    aura_ipc_get_unix_sock_path(true, sock_file, sizeof(sock_file));
+    sock_fd = aura_try_connect_or_error(sock_file);
+    if (sock_fd == -1) {
+        app_info(false, 0, system_down);
+        app_info(false, 0, system_start);
+        return -1;
+    }
 
     a_init_msg_hdr(hdr, 0, A_MSG_PING, 0);
-    if (aura_msg_send(sock_fd, &hdr, NULL, 0, -1) < 0) {
-        app_debug(false, errno, "aura_cli_system_status: aura_msg_send error:");
+    if (aura_msg_send(sock_fd, &hdr, NULL, 0, -1) != 0) {
+        sys_info(false, errno, cmd_send_failed);
         return -1;
     }
 
@@ -197,7 +218,7 @@ static void a_system_status_help() {
     printf("Server status help\n");
 }
 
-struct aura_cli_cmd system_status = {
+struct aura_cli_cmd system_status_cmd = {
   .version = "to be filled later",
   .name = "status",
   .description = "status description",
@@ -219,9 +240,9 @@ struct aura_cli_cmd system_status = {
 };
 
 struct aura_cli_cmd *system_subs[] = {
-  &system_start,
-  &system_stop,
-  &system_status,
+  &system_start_cmd,
+  &system_stop_cmd,
+  &system_status_cmd,
 };
 
 static int a_run_system_base_handle() {

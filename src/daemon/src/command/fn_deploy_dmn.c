@@ -4,7 +4,6 @@
 #include "db/db.h"
 #include "file_lib.h"
 #include "function_lib.h"
-#include "ipc_lib.h"
 #include "quickjs.h"
 #include "unix/sock.h"
 #include "utils_lib.h"

@@ -21,24 +21,24 @@ struct aura_cli_cmd {
     char *usage;                      /* CLI command usage description */
     char *deprecated;                 /* CLI command deprecated text */
     struct aura_cli_flag **flags;     /* CLI command flags array */
-    int flag_cnt;                     /* CLI commmand flags count */
-    char **args;                      /* CLI command arguments provided by user */
-    uint32_t args_cnt;                /* CLI command arguments count */
-    int matched;                      /* Number of cli Arguments matched */
     struct aura_cli_cmd **sub_cmds;   /* Sub commands array for the CLI command */
-    int sub_cmd_cnt;                  /* Number of sub commands for the CLI command */
     struct aura_cli_cmd *parent;      /* Parent for this CLI command */
-    uint32_t min_args;                /* Minimum number of flags accepted */
-    uint32_t max_args;                /* Maximum number of flags accepted */
-    bool is_top_level;                /* Is the CLI command a top level command when parsing */
-    bool is_hidden;                   /* CLI command hidden, probably for internal or ...! */
-    bool is_experimental;             /* CLI command is experimental */
-    void *options;                    /* CLI command options for the different flag values */
-    size_t options_size;              /* CLI command option size */
+    char **args;                      /* CLI command arguments provided by user */
     aura_cli_cmd_handler handler;     /* Function called to execute the logic for this command */
     option_allocator opt_allocator;   /* Memory allocator function for the command's option */
     option_destructor opt_destructor; /* Memory deallocator function for the command's option */
     show_command_help opt_help;       /* Function called when command is specified with h/help flag */
+    uint8_t flag_cnt;                 /* CLI commmand flags count */
+    uint8_t args_cnt;                 /* CLI command arguments count */
+    uint8_t matched;                  /* Number of cli Arguments matched */
+    uint8_t sub_cmd_cnt;              /* Number of sub commands for the CLI command */
+    uint8_t min_args;                 /* Minimum number of flags accepted */
+    uint8_t max_args;                 /* Maximum number of flags accepted */
+    uint8_t options_size;             /* CLI command option size */
+    bool is_top_level;                /* Is the CLI command a top level command when parsing */
+    bool is_hidden;                   /* CLI command hidden, probably for internal or ...! */
+    bool is_experimental;             /* CLI command is experimental */
+    void *options;                    /* CLI command options for the different flag values */
     /** @todo: add grouping */
 };
 

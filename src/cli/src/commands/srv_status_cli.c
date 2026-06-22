@@ -1,27 +1,37 @@
 #include "cmdline_cli.h"
 #include "command_cli.h"
 #include "error_lib.h"
+#include "ipc/ipc.h"
 #include "unix/sock.h"
 
 int aura_cli_run_server_status(void *opts_ptr, void *glob_opt) {
-    int sock_fd, res;
     struct aura_msg_hdr hdr;
     struct aura_iovec data;
+    char sock_file[A_MAX_SOCK_FILE_LEN];
+    int sock_fd;
+    bool dev_mode = false;
 
-    sock_fd = aura_try_connect_or_error();
-    if (sock_fd == -1)
-        app_exit(false, 0, "Failed to connect to daemon, use 'aura system start' to start aura daemon");
+#ifdef AURA_DEV_BUILD
+    dev_mode = true;
+#endif
+
+    aura_ipc_get_unix_sock_path(dev_mode, sock_file, sizeof(sock_file));
+    sock_fd = aura_try_connect_or_error(sock_file);
+    if (sock_fd == -1) {
+        app_info(false, 0, system_down);
+        app_info(false, 0, system_start);
+        return -1;
+    }
 
     a_init_msg_hdr(hdr, 0, A_MSG_CMD_EXECUTE, A_CMD_SERVER_STATUS);
     if (aura_msg_send(sock_fd, &hdr, NULL, 0, -1) != 0) {
-        close(sock_fd);
-        sys_exit(false, errno, "Failed to send aura server status cli cmd");
+        sys_info(false, errno, cmd_send_failed);
+        return -1;
     }
 
-    res = aura_recv_resp(&data, sock_fd, NULL);
-    if (res < 0) {
+    if (aura_recv_resp(&data, sock_fd, NULL) < 0) {
         close(sock_fd);
-        return res;
+        return -1;
     }
 
     if (data.base != NULL)

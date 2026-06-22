@@ -1,5 +1,5 @@
-#ifndef A_UNIX_SOCK_FILE_H
-#define A_UNIX_SOCK_FILE_H
+#ifndef AURA_SRV_SOCK_H
+#define AURA_SRV_SOCK_H
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -80,7 +80,7 @@ ssize_t aura_write(int fd, void *buf, size_t len);
 int aura_sock_init(struct aura_srv_sock *sock, int fd, struct sockaddr *addr,
                    socklen_t addr_len, int flags);
 
-int A_UNIX_SOCK_FILE_accept(struct aura_srv_sock *sock, int sock_fd, bool is_tls, int flags);
+int aura_sock_accept(struct aura_srv_sock *sock, int sock_fd, bool is_tls, int flags);
 
 void aura_listener_pool_init(struct aura_srv_listener_pool *pool);
 

@@ -14,3 +14,4 @@ Makefile.dep
 .idea/*
 compile_commands.json
 tests/Testing
+Testing

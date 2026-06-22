@@ -18,7 +18,6 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/db/db_broker.c
     ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/encrypt_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/ipc_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/function_v1_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/heap_lib_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c

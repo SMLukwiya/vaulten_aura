@@ -25,11 +25,13 @@
 #define A_UNIX_SOCK_NAMETOOLONG_ERR -1
 #define A_UNIX_SOCK_CREATE_ERR -2
 
-#ifdef AURA_DEV_BUILD
-#define A_UNIX_SOCK_FILE "/tmp/aurad.sock"
-#else
-#define A_UNIX_SOCK_FILE "/run/aurad.sock"
-#endif
+#define A_MAX_SOCK_FILE_LEN 256
+
+// #ifdef AURA_DEV_BUILD
+// #define A_UNIX_SOCK_FILE "/tmp/aurad.sock"
+// #else
+// #define A_UNIX_SOCK_FILE "/run/aurad.sock"
+// #endif
 
 #define AURA_PID "/tmp/aurad.pid"
 
@@ -136,6 +138,6 @@ void aura_msg_dump(struct aura_msg *msg, bool daemon);
  * Connect to the IPC unix socket
  * Returns the fd for unix socket
  */
-int aura_try_connect_or_error(void);
+int aura_try_connect_or_error(char *sock_file);
 
 #endif

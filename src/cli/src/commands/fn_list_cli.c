@@ -4,6 +4,7 @@
 #include "file_lib.h"
 #include "flag_cli.h"
 #include "function_lib.h"
+#include "ipc/ipc.h"
 #include "log_cli.h"
 #include "unix/sock.h"
 #include "utils_lib.h"
@@ -69,10 +70,20 @@ int aura_cli_fn_list(void *opts_ptr, void *glob_opts) {
     struct aura_iovec data;
     char *state;
     struct aura_fn_evt *evt;
+    char sock_file[A_MAX_SOCK_FILE_LEN];
+    bool dev_mode = false;
 
-    sock_fd = aura_try_connect_or_error();
-    if (sock_fd == -1)
-        app_exit(false, 0, "Failed to connect to daemon, use 'aura system start' to start aura daemon");
+#ifdef AURA_DEV_BUILD
+    dev_mode = true;
+#endif
+
+    aura_ipc_get_unix_sock_path(dev_mode, sock_file, sizeof(sock_file));
+    sock_fd = aura_try_connect_or_error(sock_file);
+    if (sock_fd == -1) {
+        app_info(false, 0, system_down);
+        app_info(false, 0, system_start);
+        return -1;
+    }
 
     opts = (struct fn_list_config *)opts_ptr;
     if (opts->running)
@@ -85,16 +96,15 @@ int aura_cli_fn_list(void *opts_ptr, void *glob_opts) {
     a_init_msg_hdr(hdr, strlen(state), A_MSG_CMD_EXECUTE, A_CMD_FN_LIST);
 
     if (aura_msg_send(sock_fd, &hdr, state, sizeof(state), -1) != 0) {
-        sys_debug(false, errno, "aura_cli_fn_list: aura_msg_send error:");
-        app_exit(false, 0, "Cmd Failed");
+        sys_info(false, errno, cmd_send_failed);
+        return -1;
     }
 
     bool should_terminate;
 
     while (true) {
         should_terminate = false;
-        res = aura_recv_resp(&data, sock_fd, NULL);
-        if (res < 0) {
+        if (aura_recv_resp(&data, sock_fd, NULL) < 0) {
             close(sock_fd);
             return res;
         }

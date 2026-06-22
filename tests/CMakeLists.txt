@@ -67,6 +67,7 @@ add_executable(test_aura_daemon
     daemon/basic.c
     ${vaulten_aura_SOURCE_DIR}/src/cli/src/commands/sys_cli.c
     ${vaulten_aura_SOURCE_DIR}/lib/unix/sock.c
+    ${vaulten_aura_SOURCE_DIR}/lib/ipc/ipc.c
     ${common_sources}
 )
 

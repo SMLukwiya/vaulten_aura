@@ -4,6 +4,7 @@
 #include "file_lib.h"
 #include "flag_cli.h"
 #include "function_lib.h"
+#include "ipc/ipc.h"
 #include "log_cli.h"
 #include "unix/sock.h"
 #include "utils_lib.h"
@@ -45,15 +46,25 @@ struct aura_cli_flag fn_status_flag = {
 int aura_cli_fn_status(void *opts_ptr, void *glob_opts) {
     struct aura_msg_hdr hdr;
     struct fn_status_config *opts;
-    int sock_fd, res;
+    int sock_fd, rv;
     char *fn_name, *sep;
     uint32_t fn_verion;
     struct aura_iovec data;
     struct aura_fn_evt *evt;
+    char sock_file[A_MAX_SOCK_FILE_LEN];
+    bool dev_mode = false;
 
-    sock_fd = aura_try_connect_or_error();
-    if (sock_fd == -1)
-        app_exit(false, 0, "Failed to connect to daemon, use 'aura system start' to start aura daemon");
+#ifdef AURA_DEV_BUILD
+    dev_mode = true;
+#endif
+
+    aura_ipc_get_unix_sock_path(dev_mode, sock_file, sizeof(sock_file));
+    sock_fd = aura_try_connect_or_error(sock_file);
+    if (sock_fd == -1) {
+        app_info(false, 0, system_down);
+        app_info(false, 0, system_start);
+        return -1;
+    }
 
     opts = (struct fn_status_config *)opts_ptr;
     fn_name = opts->fn_name;
@@ -61,28 +72,31 @@ int aura_cli_fn_status(void *opts_ptr, void *glob_opts) {
     if (sep) {
         /* Try and parse fn version */
         if (*(sep + 1) == '\0') {
-            app_exit(false, 0, "Missing function version, Expected a valid integer");
+            app_info(false, 0, "Missing function version, Expected a valid integer");
+            return -1;
         }
-        res = aura_scan_str(sep + 1, "%d" SCNu32, &fn_verion);
-        if (res == 0) {
-            app_exit(false, 0, "Invalid function version: %s, Expected a valid integer", sep + 1);
+
+        if (aura_scan_str(sep + 1, "%d" SCNu32, &fn_verion) == 0) {
+            app_info(false, 0, "Invalid function version: %s, Expected a valid integer", sep + 1);
+            return -1;
         }
     }
 
     a_init_msg_hdr(hdr, strlen(fn_name), A_MSG_CMD_EXECUTE, A_CMD_FN_STATUS);
 
     /* send over the directory file descriptor */
-    if (aura_msg_send(sock_fd, &hdr, opts->fn_name, strlen(opts->fn_name), -1) != 0)
-        sys_exit(false, errno, "aura_cli_fn_status: aura_msg_send error:");
+    if (aura_msg_send(sock_fd, &hdr, opts->fn_name, strlen(opts->fn_name), -1) != 0) {
+        sys_info(false, errno, cmd_send_failed);
+        return -1;
+    }
 
     bool should_terminate;
 
     while (true) {
         should_terminate = false;
-        res = aura_recv_resp(&data, sock_fd, NULL);
-        if (res < 0) {
+        if (aura_recv_resp(&data, sock_fd, NULL) < 0) {
             close(sock_fd);
-            return res;
+            return -1;
         }
 
         evt = (struct aura_fn_evt *)data.base;

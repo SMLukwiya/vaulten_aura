@@ -320,7 +320,7 @@ int aura_unix_cli_connect(struct aura_unix_sock *cli, const char *serv_name,
     unlink_file = false;
     cli->fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (cli->fd < 0) {
-        sys_debug(false, 0, "aura_unix_cli_connect: error");
+        sys_debug(false, errno, "aura_unix_cli_connect: socket error");
         return -1;
     }
 
@@ -405,10 +405,10 @@ err_out:
 /**
  * Tries to connect to daemon or errors
  */
-int aura_try_connect_or_error(void) {
+int aura_try_connect_or_error(char *sock_file) {
     struct aura_unix_sock cli_sock;
 
-    if (aura_unix_cli_connect(&cli_sock, A_UNIX_SOCK_FILE, A_UNIX_SOCK_CLI_FILE, A_UNIX_SOCK_CLI_FILE_PERM) < 0)
+    if (aura_unix_cli_connect(&cli_sock, sock_file, A_UNIX_SOCK_CLI_FILE, A_UNIX_SOCK_CLI_FILE_PERM) < 0)
         return -1;
 
     return cli_sock.fd;

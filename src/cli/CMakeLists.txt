@@ -11,6 +11,7 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/utils_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/memory/memory_lib_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/memory/slab_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/ipc/ipc.c
 )
 
 add_executable(aura 
@@ -45,6 +46,3 @@ target_include_directories(aura
 )
 
 list(POP_BACK CMAKE_MESSAGE_INDENT)
-
-# install(TARGETS cli RUNTIME DESTINATION bin)
-

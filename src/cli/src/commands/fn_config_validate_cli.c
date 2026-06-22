@@ -3,6 +3,7 @@
 #include "error_lib.h"
 #include "file_lib.h"
 #include "flag_cli.h"
+#include "ipc/ipc.h"
 #include "unix/sock.h"
 #include "utils_lib.h"
 
@@ -30,35 +31,48 @@ static void a_fn_config_validate_opt_deallocator(void *opts_ptr) {
 
 /* Handler fn */
 int aura_cli_run_fn_validate_config_cli(void *opts_ptr, void *glob_opts) {
-    char resolved_config_file_path[1024];
     struct fn_config_validate_opt *opts;
     int sock_fd, file_fd, res;
-    bool ret;
     struct aura_msg_hdr hdr;
-    struct aura_msg response;
     struct aura_iovec data;
+    char sock_file[A_MAX_SOCK_FILE_LEN];
+    bool dev_mode = false;
 
-    sock_fd = aura_try_connect_or_error();
-    if (sock_fd == -1)
-        app_exit(false, 0, "Failed to connect to daemon, use 'aura system start' to start aura daemon");
+#ifdef AURA_DEV_BUILD
+    dev_mode = true;
+#endif
+
+    aura_ipc_get_unix_sock_path(dev_mode, sock_file, sizeof(sock_file));
+    sock_fd = aura_try_connect_or_error(sock_file);
+    if (sock_fd == -1) {
+        app_info(false, 0, system_down);
+        app_info(false, 0, system_start);
+        return -1;
+    }
 
     opts = (struct fn_config_validate_opt *)opts_ptr;
-    if (!opts->fn_config_path)
-        sys_exit(false, 0, "Missing configuration file");
+    if (!opts->fn_config_path) {
+        app_info(false, 0, "Missing configuration file");
+        return -1;
+    }
 
-    if (!aura_open_file(opts->fn_config_path, &file_fd))
-        sys_exit(false, 0, "Failed to open file: %s\n", opts->fn_config_path);
+    if (!aura_open_file(opts->fn_config_path, &file_fd)) {
+        sys_info(false, errno, "%s %s:", file_error, opts->fn_config_path);
+        return -1;
+    }
 
     a_init_msg_hdr(hdr, 0, A_MSG_CMD_EXECUTE, A_CMD_FN_VALIDATE_CONF);
 
-    if (aura_msg_send(sock_fd, &hdr, NULL, 0, file_fd) != 0)
-        sys_exit(false, errno, "Failed to send aura cli command");
+    if (aura_msg_send(sock_fd, &hdr, NULL, 0, file_fd) != 0) {
+        sys_info(false, errno, cmd_send_failed);
+        return -1;
+    }
 
     res = aura_recv_resp(&data, sock_fd, NULL);
-    if (data.base != NULL) {
+    if (data.base != NULL)
         app_info(false, 0, "%s", data.base);
-    }
-    close(sock_fd); /** Is there need since the cli exits here */
+
+    close(sock_fd);
     return 0;
 }
 

@@ -69,10 +69,6 @@ struct aura_db_writer_queue {
 #define A_DB_CHK_PNT_MAGIC 0xC3C3C3C3
 #define A_DB_CHECK_PNT_RECORD_KEY "replay_checkpt"
 
-/**
- * @todo: A dedicated write thread with writer queue might be better
- */
-
 /* Record len structure */
 struct aura_db_rec_len {
     size_t raw_len;     /* Exact record length not aligned */
@@ -165,19 +161,27 @@ struct aura_db_checkpoint_rec {
  * Internal functions.
  */
 static AURA_DB *a_db_alloc(int);
+
 static void a_db_free(AURA_DB *);
+
 static off_t a_db_wal_commit(int wal_fd, int wal_op, struct aura_db_rec_hdr *hdr,
                              struct aura_iovec *key, struct aura_iovec *data);
+
 static int a_db_wal_replay(AURA_DB *);
+
 static int a_db_compact(AURA_DB *db);
 /* Dump database header */
 static void a_db_dump_header(struct aura_db_hdr *);
+
 /* Print wal record header */
 static void a_db_dump_wal_header(struct aura_db_wal_rec_hdr *);
+
 /* Print record header */
 static void a_db_dump_rec_header(struct aura_db_rec_hdr *);
+
 /**/
 static void a_db_job_dump(struct aura_db_job_rec *);
+
 /**/
 static void a_db_check_pnt_rec_dump(struct aura_db_checkpoint_rec *);
 
@@ -241,6 +245,7 @@ static AURA_DB *a_db_alloc(int namelen) {
     db->buckets = calloc(1, bucket_arr_size);
     if (!db->buckets)
         goto exception;
+
     db->shutdown = false;
     db->is_busy = false;
     db->append_off = 0;
@@ -288,15 +293,14 @@ static inline ssize_t a_db_meta_read(int fd, struct iovec *hdr, struct iovec *bu
 }
 
 /**
- * Open a database file with the defined flags
- * and defined modes. Taking into account EEXIST
- * error if the file was already created
+ * Open/Create database with defined flags
+ * and modes.
  */
-static inline int a_db_file_open(int dir_fd, const char *filename, int *flags, int mode) {
+static inline int a_db_file_open(const char *file, int *flags, int mode) {
     int fd;
 
     if (*flags & O_CREAT) {
-        fd = openat(dir_fd, filename, *flags, mode);
+        fd = open(file, *flags, mode);
 
         if (fd < 0) {
             if (errno != EEXIST)
@@ -305,11 +309,11 @@ static inline int a_db_file_open(int dir_fd, const char *filename, int *flags, i
             if (errno == EEXIST) {
                 /* Open normally */
                 *flags &= ~(O_CREAT | O_TRUNC | O_EXCL);
-                fd = openat(dir_fd, filename, *flags);
+                fd = open(file, *flags, mode);
             }
         }
     } else {
-        fd = openat(dir_fd, filename, *flags);
+        fd = open(file, *flags, mode);
     }
 
     return fd;
@@ -352,21 +356,22 @@ static inline int a_db_headers_init(AURA_DB *db, size_t file_size) {
 /*
  * Open or create a database.  Structured kind of similar to open(2).
  */
-AURA_DBHANDLE aura_db_open(struct aura_mem_ctx *mc, const char *app_path,
-                           const char *db_pathname, int oflag, ...) {
+AURA_DBHANDLE aura_db_open(struct aura_mem_ctx *mc, const char *db_file,
+                           const char *wal_file, int oflag, ...) {
     AURA_DB *db;
-    DIR *dp;
-    int db_namelen, mode, dir_fd;
+    int db_namelen, mode;
     size_t bucket_arr_size;
     struct stat statbuf;
+    char *db_dir, db_path_cpy[1024];
 
     /* Allocate a DB structure, and the buffers it needs. */
-    db_namelen = strlen(db_pathname);
+    db_namelen = strlen(db_file);
     db = a_db_alloc(db_namelen);
     if (!db)
         sys_exit(true, errno, "aura_db_open error");
-    strcpy(db->name, db_pathname);
+
     db->mc = mc;
+    strcpy(db->name, db_file);
 
     if (pthread_mutex_init(&db->db_lock, NULL) != 0)
         goto err_close;
@@ -380,15 +385,6 @@ AURA_DBHANDLE aura_db_open(struct aura_mem_ctx *mc, const char *app_path,
     if (pthread_cond_init(&db->writer_queue.cond, NULL) != 0)
         goto err_close;
 
-    dp = NULL;
-    dp = opendir(app_path);
-    if (!dp)
-        sys_exit(true, errno, "aura_db_open: opendir");
-
-    dir_fd = dirfd(dp);
-    if (dir_fd < 0)
-        sys_exit(true, errno, "aura_db_open: dirfd error");
-
     va_list ap;
 
     va_start(ap, oflag);
@@ -399,12 +395,12 @@ AURA_DBHANDLE aura_db_open(struct aura_mem_ctx *mc, const char *app_path,
     aura_list_head_init(&db->writer_queue.db_list);
 
     /* database file */
-    db->db_fd = a_db_file_open(dir_fd, AURA_DB_FILE, &oflag, mode);
+    db->db_fd = a_db_file_open(db_file, &oflag, mode);
     if (db->db_fd < 0)
         goto err_close;
 
     /* wal file */
-    db->wal_fd = a_db_file_open(dir_fd, AURA_DB_WAL_FILE, &oflag, mode);
+    db->wal_fd = a_db_file_open(wal_file, &oflag, mode);
     if (db->wal_fd < 0)
         goto err_close;
 
@@ -466,13 +462,10 @@ AURA_DBHANDLE aura_db_open(struct aura_mem_ctx *mc, const char *app_path,
         db->curr_file_size = db->db_file_hdr.file_size;
     }
 
-    closedir(dp);
     a_db_rewind(db->db_fd);
     return db;
 
 err_close:
-    if (dp)
-        closedir(dp);
     a_db_free(db);
     return NULL;
 }
@@ -482,9 +475,9 @@ err_close:
  * may point to.  Also close the file descriptors if still open.
  */
 static void a_db_free(AURA_DB *db) {
-    if (db->db_fd >= 0)
+    if (db->db_fd > 0)
         close(db->db_fd);
-    if (db->wal_fd >= 0)
+    if (db->wal_fd > 0)
         close(db->wal_fd);
 
     if (db->name != NULL)

@@ -6,7 +6,7 @@
 #include "command/server_dmn.h"
 #include "command/sys_dmn.h"
 #include "db_broker.h"
-#include "ipc_lib.h"
+#include "ipc/ipc.h"
 #include "unix/sock.h"
 #include "utils_lib.h"
 
@@ -26,6 +26,66 @@ const char *passphrase = "dev_default_password";
 #endif
 
 typedef int (*dmn_cb)(void *);
+
+static int a_ensure_app_path(const char *path, int mode) {
+    char temp[1024];
+    char *p;
+    size_t path_len = strlen(path);
+
+    snprintf(temp, sizeof(temp), "%s", path);
+    /* remove trailing slash */
+    if (temp[path_len - 1] == '/')
+        temp[path_len - 1] = '\0';
+
+    /* Traverse and create directory */
+    for (p = temp + 1; *p; ++p) {
+        if (*p == '/') {
+            *p = '\0';
+            if (mkdir(temp, mode) != 0 && errno != EEXIST)
+                return -1;
+            *p = '/';
+        }
+    }
+
+    if (mkdir(temp, mode) != 0 && errno != EEXIST)
+        return -1;
+
+    return 0;
+}
+
+int aura_path_get_db_file_path(char *path, size_t len, const char *db_file_name) {
+    bool dev_mode;
+    char *base;
+
+#ifdef AURA_DEV_BUILD
+    dev_mode = true;
+#else
+    dev_mode = false;
+#endif
+
+    memset(path, 0, len);
+    if (dev_mode) {
+        char *xdg_home = getenv("XDG_DATA_HOME");
+        if (xdg_home) {
+            base = xdg_home;
+        } else {
+            char *home = getenv("HOME");
+            base = home ? home : "~/.local/share/";
+        }
+        snprintf(path, len, "%s%s", base, "v_aura/");
+    } else {
+        /* Created by systemd.exec */
+        base = getenv("STATE_DIRECTORY");
+        snprintf(path, len, "%s/", base);
+    }
+
+    if (dev_mode)
+        if (a_ensure_app_path(path, S_IRWXU | S_IRGRP | S_IROTH) < 0)
+            return -1;
+
+    strncat(path, db_file_name, len - strlen(path));
+    return 0;
+}
 
 /**
  * Handle requests from server and cli
@@ -125,27 +185,26 @@ static void a_sig_ch_handler(int signo) {
     // glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd = -1;
 }
 
-static int a_setup_database(struct aura_dmn_glob_conf *glob_conf) {
+static int a_setup_database(struct aura_dmn_glob_conf *gc) {
     int res;
+    char db_file[1024], wal_file[1024];
 
-    res = aura_setup_database_file_path(&glob_conf->aura_app_path, &glob_conf->aura_db_path);
-    if (res == -1) {
-        sys_debug(true, errno, "a_setup_database: aura_setup_database_file_path error");
+    if (aura_path_get_db_file_path(db_file, sizeof(db_file), AURA_DB_FILE) < 0)
         return -1;
-    }
 
-    glob_conf->db_handle = aura_db_open(
-      &glob_conf->mc,
-      glob_conf->aura_app_path.base,
-      glob_conf->aura_db_path.base,
-      O_RDWR | O_CREAT | O_EXCL | O_TRUNC,
-      A_DB_FILE_MODE);
-    if (!glob_conf->db_handle) {
+    if (aura_path_get_db_file_path(wal_file, sizeof(wal_file), AURA_DB_WAL_FILE) < 0)
+        return -1;
+
+    gc->db_file.len = strlen(db_file);
+    gc->db_file.base = strndup(db_file, gc->db_file.len);
+
+    gc->db_handle = aura_db_open(&gc->mc, db_file, wal_file, O_RDWR | O_CREAT | O_EXCL | O_TRUNC, A_DB_FILE_MODE);
+    if (!gc->db_handle) {
         sys_debug(true, errno, "a_setup_database: aura_db_open error");
         return -1;
     }
 
-    res = aura_db_start_bg_tasks(glob_conf->db_handle);
+    res = aura_db_start_bg_tasks(gc->db_handle);
     if (res != 0) {
         sys_debug(true, errno, "a_setup_database: aura_db_start_bg_tasks");
         return -1;
@@ -189,8 +248,16 @@ int aura_daemon() {
         sys_exit(false, 0, "Daemon config error");
 
     /* Set up unix socket */
-    if (aura_unix_server_listen(&d_sock, A_UNIX_SOCK_FILE) < 0)
-        sys_exit(false, errno, "aura_daemon: aura_unix_server_listen error: %s", A_UNIX_SOCK_FILE);
+    char sock_path[256];
+    bool dev_mode = false;
+
+#ifdef AURA_DEV_BUILD
+    dev_mode = true;
+#endif
+
+    aura_ipc_get_unix_sock_path(dev_mode, sock_path, sizeof(sock_path));
+    if (aura_unix_server_listen(&d_sock, sock_path) < 0)
+        sys_exit(false, errno, "aura_daemon: aura_unix_server_listen error: %s", sock_path);
 
     for (int i = 0; i < A_MAX_FILE; ++i) {
         glob_conf.poll_fds[i].fd = -1;
@@ -208,10 +275,6 @@ int aura_daemon() {
     aura_mem_ctx_init(&glob_conf.mc);
     if (aura_create_dynamic_slab_alloc_caches(&glob_conf.mc) < 0)
         sys_exit(true, errno, "aura_daemon: aura_create_dynamic_slab_alloc_caches error:");
-
-    /* check app paths */
-    if (aura_setup_app_paths(&glob_conf.aura_app_path) < 0)
-        sys_exit(true, errno, "aura_daemon: a_setup_app_paths error:");
 
     /* Setup database */
     if (a_setup_database(&glob_conf) < 0)

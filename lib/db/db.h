@@ -152,7 +152,8 @@ struct aura_db_job_step_rec {
 };
 
 /** Create or open a database */
-AURA_DBHANDLE aura_db_open(struct aura_mem_ctx *mc, const char *app_path, const char *db_pathname, int oflag, ...);
+AURA_DBHANDLE aura_db_open(struct aura_mem_ctx *mc, const char *db_file,
+                           const char *wal_file, int oflag, ...);
 
 /**Store record with key and value into db */
 ssize_t aura_db_record_insert(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id, uint64_t job_id,

@@ -5,6 +5,7 @@
 #include "file_lib.h"
 #include "flag_cli.h"
 #include "function_lib.h"
+#include "ipc/ipc.h"
 #include "log_cli.h"
 #include "unix/sock.h"
 #include "utils_lib.h"
@@ -46,29 +47,43 @@ struct aura_cli_flag fn_deploy_flag = {
 };
 
 int aura_cli_run_fn_deploy(void *opts_ptr, void *glob_opts) {
-    char *fn_dir, *conf_file;
-    DIR *dp;
-    struct dirent *dirp;
     struct aura_msg_hdr hdr;
     struct fn_deploy_config *opts;
     struct aura_fn_evt *evt;
     struct aura_iovec data;
-    int sock_fd, file_fd, dir_fd, res;
+    char *fn_dir, *conf_file;
+    struct dirent *dirp;
+    DIR *dp;
+    int sock_fd, file_fd, dir_fd, rv;
+    char sock_file[A_MAX_SOCK_FILE_LEN];
+    bool dev_mode = false;
 
-    sock_fd = aura_try_connect_or_error();
-    if (sock_fd == -1)
-        app_exit(false, 0, "Failed to connect to daemon, use 'aura system start' to start aura daemon");
+#ifdef AURA_DEV_BUILD
+    dev_mode = true;
+#endif
+
+    aura_ipc_get_unix_sock_path(dev_mode, sock_file, sizeof(sock_file));
+    sock_fd = aura_try_connect_or_error(sock_file);
+    if (sock_fd == -1) {
+        app_info(false, 0, system_down);
+        app_info(false, 0, system_start);
+        return -1;
+    }
 
     conf_file = NULL;
     opts = (struct fn_deploy_config *)opts_ptr;
     fn_dir = opts->fn_dir_path ? opts->fn_dir_path : ".";
     dp = opendir(opts->fn_dir_path);
-    if (!dp)
-        sys_exit(false, errno, "Failed to open function directory: %s", opts->fn_dir_path);
+    if (!dp) {
+        sys_info(false, 0, "%s %s: error", dir_error, opts->fn_dir_path);
+        return -1;
+    }
 
     dir_fd = dirfd(dp);
-    if (dir_fd == -1)
-        sys_exit(false, errno, "Failed to open function directory: %s", opts->fn_dir_path);
+    if (dir_fd == -1) {
+        sys_info(false, 0, "%s %s: error", dir_error, opts->fn_dir_path);
+        return -1;
+    }
 
     while (true) {
         dirp = readdir(dp);
@@ -81,38 +96,42 @@ int aura_cli_run_fn_deploy(void *opts_ptr, void *glob_opts) {
         }
     }
 
-    if (!conf_file)
-        app_exit(false, 0, "Failed to locate function configuration, ensure a function.yaml or function.yml exists in the funtion directory");
+    if (!conf_file) {
+        app_exit(false, 0, "Missing function configuration, ensure a function.yaml or function.yml exists.");
+        return -1;
+    }
 
     /* do a simple check on the config file */
     file_fd = openat(dir_fd, conf_file, O_RDONLY);
-    if (file_fd < 0)
-        sys_exit(false, errno, "Failed to open configuration file: %s\n", conf_file);
+    if (file_fd < 0) {
+        sys_info(false, 0, "%s %s: error", file_error, conf_file);
+        return -1;
+    }
     close(file_fd);
 
     a_init_msg_hdr(hdr, 0, A_MSG_CMD_EXECUTE, A_CMD_FN_DEPLOY);
 
     /* send over the directory file descriptor */
-    if (aura_msg_send(sock_fd, &hdr, NULL, 0, dir_fd) != 0)
-        sys_exit(false, errno, "Failed to send aura cli command");
+    if (aura_msg_send(sock_fd, &hdr, NULL, 0, dir_fd) != 0) {
+        sys_info(false, errno, cmd_send_failed);
+        return -1;
+    }
 
     bool should_terminate;
     while (true) {
         should_terminate = false;
-        res = aura_recv_resp(&data, sock_fd, NULL);
-        if (res < 0) {
+        if (aura_recv_resp(&data, sock_fd, NULL) < 0) {
             closedir(dp);
             close(sock_fd);
-            return res;
+            return -1;
         }
 
         evt = (struct aura_fn_evt *)data.base;
         if (!evt)
             break;
 
-        if (evt->state == A_FN_OP_STATE_DONE || evt->state == A_FN_OP_STATE_FAILED) {
+        if (evt->state == A_FN_OP_STATE_DONE || evt->state == A_FN_OP_STATE_FAILED)
             should_terminate = true;
-        }
 
         if (evt->msg_len > 0)
             app_info(false, 0, "%s", evt->msg);

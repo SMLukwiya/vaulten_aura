@@ -5,34 +5,43 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static char test_dir[256] = {0};
+struct aura_mem_ctx mc;
 
-static void a_setup_temp_dir(void) {
+static char test_dir[128] = {0};
+static char db_file[256] = {0};
+static char wal_file[256] = {0};
+
+static void a_setup_temp_db_files(void) {
     int res;
 
+    aura_mem_ctx_init(&mc);
+    assert(aura_create_dynamic_slab_alloc_caches(&mc) == 0);
+
     snprintf(test_dir, sizeof(test_dir), "/tmp/aura_test_db_%u", getpid());
-    res = mkdir(test_dir, S_IRWXU);
-    assert(res == 0);
+    assert(mkdir(test_dir, S_IRWXU) == 0);
+
+    memset(db_file, 0, sizeof(db_file));
+    memset(wal_file, 0, sizeof(wal_file));
+    snprintf(db_file, sizeof(db_file), "%s/aura.db", test_dir);
+    snprintf(wal_file, sizeof(wal_file), "%s/aura_wal.db", test_dir);
 }
 
-static void a_cleanup_temp_dir(void) {
+static void a_cleanup_temp_db_files(void) {
     int res;
     char cmd[512];
 
     snprintf(cmd, sizeof(cmd), "rm -rf %s", test_dir);
     system(cmd);
+    aura_mem_ctx_destroy(&mc);
 }
 
 static void a_test_put_get_delete(void) {
     AURA_DBHANDLE *db;
-    char db_path[512];
     struct aura_iovec key, key1, data, data1;
     struct aura_db_rec rec, rec1;
     ssize_t res;
 
-    snprintf(db_path, sizeof(db_path), "%s/aura.db", test_dir);
-
-    db = aura_db_open(NULL, test_dir, db_path, O_RDWR | O_CREAT | O_EXCL | O_TRUNC, A_DB_FILE_MODE);
+    db = aura_db_open(&mc, db_file, wal_file, O_RDWR | O_CREAT | O_EXCL | O_TRUNC, A_DB_FILE_MODE);
     assert(db != NULL);
 
     /* PUT */
@@ -83,14 +92,11 @@ static void a_test_put_get_delete(void) {
 
 static void a_test_job_insert_update_delete(void) {
     AURA_DBHANDLE *db;
-    char db_path[512];
     int res, error;
     uint64_t job_id;
     struct aura_db_job_rec *job;
 
-    snprintf(db_path, sizeof(db_path), "%s/aura.db", test_dir);
-
-    db = aura_db_open(NULL, test_dir, db_path, O_RDWR | O_CREAT | O_EXCL | O_TRUNC, A_DB_FILE_MODE);
+    db = aura_db_open(&mc, db_file, wal_file, O_RDWR | O_CREAT | O_EXCL | O_TRUNC, A_DB_FILE_MODE);
     assert(db != NULL);
 
     /* PUT */
@@ -123,13 +129,10 @@ static void a_test_job_step_insert_update_delete(void) {
     struct aura_db_job_rec *job;
     struct aura_db_job_step_rec *job_step;
     struct aura_iovec key;
-    char db_path[512];
     uint64_t job_id;
     int res;
 
-    snprintf(db_path, sizeof(db_path), "%s/aura.db", test_dir);
-
-    db = aura_db_open(NULL, test_dir, db_path, O_RDWR | O_CREAT | O_EXCL | O_TRUNC, A_DB_FILE_MODE);
+    db = aura_db_open(&mc, db_file, wal_file, O_RDWR | O_CREAT | O_EXCL | O_TRUNC, A_DB_FILE_MODE);
     assert(db != NULL);
 
     key.base = "fn:job_step:v1";
@@ -166,16 +169,13 @@ extern int aura_db_clear_record_cache(AURA_DBHANDLE _db);
 
 static void a_test_wal_replay(void) {
     AURA_DBHANDLE db;
-    char db_path[512];
     ssize_t res;
     struct aura_iovec key, data, key1, data1, key2, data2, key3, data3, key4, data4, key5, data5;
     struct aura_db_rec rec, rec1, rec2, rec3, rec4, rec5;
     uint64_t job_id;
     off_t prev_job_rec;
 
-    snprintf(db_path, sizeof(db_path), "%s/aura.db", test_dir);
-
-    db = aura_db_open(NULL, test_dir, db_path, O_RDWR | O_CREAT | O_TRUNC, A_DB_FILE_MODE);
+    db = aura_db_open(&mc, db_file, wal_file, O_RDWR | O_CREAT | O_TRUNC, A_DB_FILE_MODE);
     assert(db != NULL);
 
     /* PUT */
@@ -333,7 +333,6 @@ extern int aura_db_force_compact(AURA_DBHANDLE db);
 
 static void a_test_db_compaction(void) {
     AURA_DBHANDLE db;
-    char db_path[512];
     struct aura_iovec key, key1, data, data1;
     struct aura_db_rec rec, rec1;
     int res;
@@ -341,9 +340,7 @@ static void a_test_db_compaction(void) {
     size_t old_file_size, new_file_size;
     uint64_t record_cnt, new_record_cnt;
 
-    snprintf(db_path, sizeof(db_path), "%s/aura.db", test_dir);
-
-    db = aura_db_open(NULL, test_dir, db_path, O_RDWR | O_CREAT | O_TRUNC, A_DB_FILE_MODE);
+    db = aura_db_open(&mc, db_file, wal_file, O_RDWR | O_CREAT | O_TRUNC, A_DB_FILE_MODE);
     assert(db != NULL);
 
     old_file_size = aura_db_get_size(db);
@@ -393,7 +390,7 @@ static void a_test_db_compaction(void) {
 }
 
 int main(int argc, char *argv[]) {
-    a_setup_temp_dir();
+    a_setup_temp_db_files();
 
     a_test_put_get_delete();
     a_test_job_insert_update_delete();
@@ -401,6 +398,6 @@ int main(int argc, char *argv[]) {
     a_test_wal_replay();
     // a_test_db_compaction();
 
-    a_cleanup_temp_dir();
+    a_cleanup_temp_db_files();
     return 0;
 }

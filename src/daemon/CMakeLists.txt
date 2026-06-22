@@ -14,7 +14,6 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/radix_v1_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/blobber_v1_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/encrypt_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/ipc_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/hasher_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/db/db.c
     ${vaulten_aura_SOURCE_DIR}/lib/db/db_broker.c
@@ -24,6 +23,7 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/memory/slab_lib_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/user/user.c
+    ${vaulten_aura_SOURCE_DIR}/lib/ipc/ipc.c
 )
 
 add_executable(aura_daemon

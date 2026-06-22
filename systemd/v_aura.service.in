@@ -1,0 +1,27 @@
+[Unit]
+Description=Vaulten Aura Runtime Daemon
+After=network.target
+
+[Service]
+Type=notify
+
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/aura_daemon
+
+User=vaulten_aura
+Group=vaulten_aura
+
+RuntimeDirectory=v_aura
+RuntimeDirectoryMode=0750
+
+StateDirectory=v_aura
+StateDirectoryMode=0750
+
+Restart=on-failure
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

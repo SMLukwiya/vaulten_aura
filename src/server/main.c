@@ -22,7 +22,6 @@
 #include "h2/server.h"
 #include "heap_lib.h"
 #include "host.h"
-#include "ipc_lib.h"
 #include "memory_lib.h"
 #include "openssl/err.h"
 #include "openssl/ocsp.h"

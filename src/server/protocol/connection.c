@@ -828,7 +828,7 @@ int aura_conn_tcp_listener_event_handler(struct aura_srv_listener *listener, str
     if (!conn)
         return -1;
 
-    if (A_UNIX_SOCK_FILE_accept(&conn->sock, listener->fd, is_tls, 0) < 0) {
+    if (aura_sock_accept(&conn->sock, listener->fd, is_tls, 0) < 0) {
         aura_conn_destroy(conn);
         return -1;
     }
