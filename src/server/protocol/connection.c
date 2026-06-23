@@ -1,5 +1,5 @@
 #include "connection.h"
-#include "data_path.h"
+#include "data_path/data_path.h"
 #include "h2/scheduler.h"
 #include "picotls.h"
 #include "server_srv.h"

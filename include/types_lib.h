@@ -1,8 +1,8 @@
 #ifndef AURA_TYPES_H
 #define AURA_TYPES_H
 
-#include "memory_lib.h"
-#include "slab_lib.h"
+#include "mem.h"
+#include "slab.h"
 #include <stdio.h>
 #include <stdlib.h>
 

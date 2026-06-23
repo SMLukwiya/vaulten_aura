@@ -9,7 +9,7 @@
 #include "route_srv.h"
 #include "runtime/js.h"
 #include "server_srv.h"
-#include "slab_lib.h"
+#include "slab.h"
 #include "socket_srv.h"
 #include "string_lib.h"
 #include "utils_lib.h"

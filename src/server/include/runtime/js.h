@@ -1,8 +1,8 @@
 #ifndef AURA_JS_RUNTIME_H
 #define AURA_JS_RUNTIME_H
 
-#include "function_lib.h"
-#include "memory_lib.h"
+#include "fn/lib.h"
+#include "mem.h"
 #include "quickjs.h"
 #include "runtime/request.h"
 #include "task_srv.h"

@@ -1,10 +1,10 @@
 #ifndef AURA_ROUTE_H
 #define AURA_ROUTE_H
 
-#include "function_lib.h"
+#include "fn/lib.h"
 #include "header_srv.h"
 #include "http_lib.h"
-#include "radix_lib.h"
+#include "radix/tree.h"
 #include "types_lib.h"
 
 #include <strings.h>

@@ -1,5 +1,5 @@
-#include "hashmap_lib.h"
-#include "memory_lib.h"
+#include "hashmap/map.h"
+#include "mem.h"
 #include "string_lib.h"
 #include <assert.h>
 

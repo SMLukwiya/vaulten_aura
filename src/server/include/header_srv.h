@@ -2,8 +2,8 @@
 #define AURA_SERVER_HEADER_H
 
 #include "interned.h"
-#include "memory_lib.h"
-#include "slab_lib.h"
+#include "mem.h"
+#include "slab.h"
 #include "types_lib.h"
 #include <stdbool.h>
 

@@ -10,11 +10,11 @@
 #include <sys/un.h>
 
 #include "http_lib.h"
-#include "memory_lib.h"
+#include "mem.h"
 #include "runtime/js.h"
 #include "runtime/request.h"
 #include "session.h"
-#include "slab_lib.h"
+#include "slab.h"
 
 struct aura_h2_client_conn;
 

@@ -6,7 +6,7 @@
 #include "error_lib.h"
 #include "h2/stream.h"
 #include "header_srv.h"
-#include "memory_lib.h"
+#include "mem.h"
 #include "sliding_buf.h"
 #include "token_srv.h"
 #include "types_lib.h"

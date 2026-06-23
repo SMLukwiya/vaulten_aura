@@ -8,8 +8,6 @@ set(QUICKJS_SOURCE_FILES
     ${PROJECT_SOURCE_DIR}/deps/quickjs/dtoa.c
     ${PROJECT_SOURCE_DIR}/deps/quickjs/libregexp.c
     ${PROJECT_SOURCE_DIR}/deps/quickjs/libunicode.c
-    ${PROJECT_SOURCE_DIR}/deps/quickjs/qjs.c
-    ${PROJECT_SOURCE_DIR}/deps/quickjs/qjsc.c
     ${PROJECT_SOURCE_DIR}/deps/quickjs/quickjs-libc.c
     ${PROJECT_SOURCE_DIR}/deps/quickjs/quickjs.c
     ${PROJECT_SOURCE_DIR}/deps/quickjs/unicode_gen.c

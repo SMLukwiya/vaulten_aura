@@ -2,13 +2,13 @@
 #define AURA_H2_SESSION_H
 
 #include "core.h"
-#include "dense_pool/dense_pool_static_lib.h"
-#include "flight_queue.h"
+#include "dense_pool/static.h"
+#include "flight_queue/queue.h"
 #include "h2/frame.h"
 #include "h2/hpack.h"
 #include "h2/scheduler.h"
 #include "h2/sentinel.h"
-#include "hashmap_lib.h"
+#include "hashmap/map.h"
 #include "list_lib.h"
 #include "protocol.h"
 

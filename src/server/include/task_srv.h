@@ -5,7 +5,7 @@
 #include "h2/stream.h"
 #include "header_srv.h"
 #include "list_lib.h"
-#include "memory_lib.h"
+#include "mem.h"
 #include "time_lib.h"
 
 typedef enum {

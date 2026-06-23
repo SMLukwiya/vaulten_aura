@@ -3,9 +3,9 @@
 
 #include "bug_lib.h"
 #include "h2/frame.h"
-#include "heap_lib.h"
+#include "heap/lib.h"
 #include "list_lib.h"
-#include "memory_lib.h"
+#include "mem.h"
 #include "request.h"
 #include "runtime/request.h"
 

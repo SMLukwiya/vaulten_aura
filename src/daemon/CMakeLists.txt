@@ -8,37 +8,38 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/unix/sock.c
     ${vaulten_aura_SOURCE_DIR}/lib/daemon_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/error_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/yaml_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/yaml/lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/utils_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/radix_v1_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/blobber_v1_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/encrypt_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/radix/tree_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/blobber/lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/encrypt/lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/hasher_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/db/db.c
-    ${vaulten_aura_SOURCE_DIR}/lib/db/db_broker.c
-    ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/function_v1_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/memory/memory_lib_v1.c
-    ${vaulten_aura_SOURCE_DIR}/lib/memory/slab_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/db/broker.c
+    ${vaulten_aura_SOURCE_DIR}/lib/file/lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/fn/lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory/mem_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory/slab_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/user/user.c
     ${vaulten_aura_SOURCE_DIR}/lib/ipc/ipc.c
 )
 
 add_executable(aura_daemon
-    src/main.c
-    src/aura_dmn.c
-    src/command/common_dmn.c
-    src/command/srv_start_dmn.c
-    src/command/srv_config_validate_dmn.c
-    src/command/fn_config_validate_dmn.c
-    src/command/fn_deploy_dmn.c
-    src/command/fn_delete_dmn.c
-    src/command/fn_status_dmn.c
-    src/command/fn_list_dmn.c
-    src/command/sys_dmn.c
-    src/db_broker.c
+    main.c
+    command/common_dmn.c
+    command/server/start.c
+    command/server/stop.c
+    command/server/status.c
+    command/server/stop.c
+    command/server/validate_conf.c
+    command/function/validate_conf.c
+    command/function/deploy.c
+    command/function/delete.c
+    command/function/status.c
+    command/function/list.c
+    command/system.c
+    db/broker.c
     ${lib_sources}
 )
 

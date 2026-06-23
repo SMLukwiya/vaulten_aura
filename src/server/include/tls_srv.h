@@ -4,7 +4,7 @@
 #include "bug_lib.h"
 #include "data_path/data_path.h"
 #include "error_lib.h"
-#include "memory_lib.h"
+#include "mem.h"
 #include "picotls.h"
 #include "picotls/certificate_compression.h"
 #include "picotls/openssl.h"

@@ -16,7 +16,7 @@
 #include "core.h"
 #include "evt_loop_srv.h"
 #include "list_lib.h"
-#include "memory_lib.h"
+#include "mem.h"
 #include "picotls.h"
 #include "tls_srv.h"
 

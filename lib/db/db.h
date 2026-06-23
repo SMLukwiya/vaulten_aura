@@ -4,7 +4,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "align_lib.h"
-#include "encrypt_lib.h"
+#include "encrypt/lib.h"
 #include "error_lib.h"
 #include "types_lib.h"
 #include "utils_lib.h"

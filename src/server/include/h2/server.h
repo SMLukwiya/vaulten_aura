@@ -5,7 +5,7 @@
 #include "error_lib.h"
 #include "h2/session.h"
 #include "h2/stream.h"
-#include "memory_lib.h"
+#include "mem.h"
 #include "types_lib.h"
 
 #include <stdint.h>

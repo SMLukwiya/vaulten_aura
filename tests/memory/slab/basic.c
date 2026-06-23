@@ -1,4 +1,4 @@
-#include "slab_lib.h"
+#include "slab.h"
 
 int main(int argc, char *argv[]) {
     return 0;

@@ -1,4 +1,4 @@
-#include "heap_lib.h"
+#include "heap/lib.h"
 #include "list_lib.h"
 #include <assert.h>
 #include <stdlib.h>

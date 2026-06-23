@@ -9,7 +9,7 @@
 #include "picotls.h"
 #include "server_srv.h"
 #include "socket_srv.h"
-#include "url_lib.h"
+#include "url/lib.h"
 
 extern const struct aura_hpack_static_table static_table;
 

@@ -1,6 +1,6 @@
 #include "sliding_buf.h"
 #include "error_lib.h"
-#include "slab_lib.h"
+#include "slab.h"
 #include <unistd.h>
 
 #define A_MIN_SLIDING_BUF_SIZE 1024

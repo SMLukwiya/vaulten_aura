@@ -5,8 +5,8 @@ project(vaulten_aura_test)
 set(common_sources
     ${vaulten_aura_SOURCE_DIR}/lib/error_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/utils_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/memory/memory_lib_v1.c
-    ${vaulten_aura_SOURCE_DIR}/lib/memory/slab_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory/mem_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory/slab_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/memory/sliding_buf.c
 )
 
@@ -15,8 +15,8 @@ add_executable(test_aura_db
     db/basic.c
     ${vaulten_aura_SOURCE_DIR}/lib/db/db.c
     ${vaulten_aura_SOURCE_DIR}/lib/hasher_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/encrypt_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/file/lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/encrypt/lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
     ${common_sources}
 )
@@ -65,7 +65,7 @@ set_tests_properties(slab_test PROPERTIES
 # System lifecycle
 add_executable(test_aura_daemon
     daemon/basic.c
-    ${vaulten_aura_SOURCE_DIR}/src/cli/src/commands/sys_cli.c
+    ${vaulten_aura_SOURCE_DIR}/src/cli/commands/sys_cli.c
     ${vaulten_aura_SOURCE_DIR}/lib/unix/sock.c
     ${vaulten_aura_SOURCE_DIR}/lib/ipc/ipc.c
     ${common_sources}
@@ -93,7 +93,7 @@ set_tests_properties(daemon_test PROPERTIES
 # Bytecode generation
 add_executable(test_bytecode_gen
     daemon/codegen.c
-    ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/file/lib.c
     ${common_sources}
 )
 
@@ -145,7 +145,7 @@ set_tests_properties(cli_test PROPERTIES
 # ----------------------- HEAP TEST ---------------------- #
 add_executable(test_aura_heap
     heap/basic.c
-    ${vaulten_aura_SOURCE_DIR}/lib/heap_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/heap/lib_v1.c
     ${common_sources}
 )
 
@@ -170,7 +170,7 @@ set_tests_properties(heap_test PROPERTIES
 # ----------------------- URL LIB TEST ---------------------- #
 add_executable(test_aura_url
     unit/url.c
-    ${vaulten_aura_SOURCE_DIR}/lib/url_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/url/lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
     ${common_sources}
 )
@@ -196,7 +196,7 @@ set_tests_properties(url_test PROPERTIES
 # --------------------- HASHMAP TEST ---------------------- #
 add_executable(test_aura_hashmap
     hashmap/basic.c
-    ${vaulten_aura_SOURCE_DIR}/lib/hashmap_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/hashmap/map_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/hasher_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
     ${common_sources}
@@ -254,7 +254,7 @@ set_tests_properties(hpack_test PROPERTIES
 # --------------------- QUICKJS_TEST --------------------- #
 add_executable(test_aura_qjs
     js/basic.c
-    ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/file/lib.c
     ${common_sources}
 )
 

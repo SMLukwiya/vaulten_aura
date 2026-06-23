@@ -1,8 +1,8 @@
 #ifndef AURA_SRV_OPTIMIZER_H
 #define AURA_SRV_OPTIMIZER_H
 
-#include "memory_lib.h"
-#include "slab_lib.h"
+#include "mem.h"
+#include "slab.h"
 #include "sliding_buf.h"
 #include "utils_lib.h"
 

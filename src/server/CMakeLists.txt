@@ -8,24 +8,24 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/error_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/user/user.c
     ${vaulten_aura_SOURCE_DIR}/lib/utils_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/blobber_v1_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/radix_v1_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/memory/memory_lib_v1.c
-    ${vaulten_aura_SOURCE_DIR}/lib/memory/slab_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/blobber/lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/radix/tree_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory/mem_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory/slab_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/memory/sliding_buf.c
     ${vaulten_aura_SOURCE_DIR}/lib/hasher_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/db/db.c
-    ${vaulten_aura_SOURCE_DIR}/lib/db/db_broker.c
-    ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/encrypt_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/function_v1_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/heap_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/db/broker.c
+    ${vaulten_aura_SOURCE_DIR}/lib/file/lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/encrypt/lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/fn/lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/heap/lib_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/url_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/hashmap_lib_v1.c
-    ${vaulten_aura_SOURCE_DIR}/lib/dense_pool/dense_pool_dynamic_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/url/lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/hashmap/map_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/dense_pool/dynamic_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/data_path/data_path.c
-    ${vaulten_aura_SOURCE_DIR}/lib/flight_queue.c
+    ${vaulten_aura_SOURCE_DIR}/lib/flight_queue/queue.c
 )
 
 add_executable(aura_server
@@ -69,8 +69,6 @@ target_link_libraries(aura_server
 target_include_directories(aura_server 
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE ${vaulten_aura_SOURCE_DIR}/lib/memory
-    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib/dense_pool
-    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib/data_path
     PRIVATE ${vaulten_aura_SOURCE_DIR}/lib
     PRIVATE ${PROJECT_INCLUDE_DIR}
 )

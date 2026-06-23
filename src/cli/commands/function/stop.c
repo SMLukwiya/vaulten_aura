@@ -1,0 +1,171 @@
+#include "cmdline.h"
+#include "command.h"
+#include "error_lib.h"
+#include "file/lib.h"
+#include "flag.h"
+#include "fn/lib.h"
+#include "ipc/ipc.h"
+#include "log_msg.h"
+#include "unix/sock.h"
+#include "utils_lib.h"
+
+struct fn_stop_config {
+    char *fn_name;
+};
+
+/* Allocator fn */
+static void *a_fn_stop_option_allocator(void) {
+    return malloc(sizeof(struct fn_stop_config));
+}
+
+/* Deallocator fn */
+static void a_fn_stop_option_deallocator(void *opts_ptr) {
+    struct fn_stop_config *opts = (struct fn_stop_config *)opts_ptr;
+    if (!opts_ptr)
+        return;
+
+    if (opts->fn_name)
+        free(opts->fn_name);
+
+    free(opts);
+}
+
+struct aura_cli_flag fn_stop_flag = {
+  .name = "function",
+  .short_name = 'f',
+  .default_value = NULL,
+  .is_hidden = false,
+  .deprecated = NULL,
+  .is_required = true,
+  .is_set = false,
+  .type = A_CLI_FLAG_STRING,
+  .offset_in_option = OPT_OFFSET(struct fn_stop_config, fn_name),
+  .description = "Name of the function",
+};
+
+int aura_cli_fn_stop(void *opts_ptr, void *glob_opts) {
+    struct aura_msg_hdr hdr;
+    struct fn_stop_config *opts;
+    uint32_t fn_verion;
+    struct aura_iovec data;
+    struct aura_fn_evt *evt;
+    char sock_file[A_MAX_SOCK_FILE_LEN];
+    char *fn_name, *sep;
+    int sock_fd;
+    bool dev_mode = false;
+
+#ifdef AURA_DEV_BUILD
+    dev_mode = true;
+#endif
+
+    aura_ipc_get_unix_sock_path(dev_mode, sock_file, sizeof(sock_file));
+    sock_fd = aura_try_connect_or_error(sock_file);
+    if (sock_fd == -1) {
+        app_info(false, 0, system_down);
+        app_info(false, 0, system_start);
+        return -1;
+    }
+
+    opts = (struct fn_stop_config *)opts_ptr;
+    fn_name = opts->fn_name;
+    sep = strchr(fn_name, ':');
+    if (sep) {
+        /* Try and parse fn version */
+        if (*(sep + 1) == '\0') {
+            app_info(false, 0, "Missing function version, Expected a valid integer");
+            return -1;
+        }
+
+        if (aura_scan_str(sep + 1, "%d" SCNu32, &fn_verion) == 0) {
+            app_info(false, 0, "Invalid function version: %s, Expected a valid integer", sep + 1);
+            return -1;
+        }
+    }
+
+    a_init_msg_hdr(hdr, strlen(fn_name), A_MSG_CMD_EXECUTE, A_CMD_FN_STOP);
+
+    /* send over the directory file descriptor */
+    if (aura_msg_send(sock_fd, &hdr, opts->fn_name, strlen(opts->fn_name), -1) != 0) {
+        sys_info(false, errno, cmd_send_failed);
+        return -1;
+    }
+
+    bool should_terminate;
+
+    while (true) {
+        should_terminate = false;
+        if (aura_recv_resp(&data, sock_fd, NULL) < 0) {
+            close(sock_fd);
+            return -1;
+        }
+
+        evt = (struct aura_fn_evt *)data.base;
+        if (!evt)
+            break;
+
+        if (evt->state == A_FN_OP_STATE_DONE || evt->state == A_FN_OP_STATE_FAILED) {
+            should_terminate = true;
+        }
+
+        if (evt->msg_len > 0) {
+            app_info(false, 0, "%s", evt->msg);
+        } else {
+            switch (evt->error_code) {
+            case A_FN_ERROR_GENERIC:
+                app_info(false, 0, cli_cmd_msg[A_FN_ERROR_GENERIC].base);
+                break;
+
+            case A_FN_ERROR_NOT_EXIST:
+                app_info(false, 0, cli_cmd_msg[A_FN_ERROR_NOT_EXIST].base);
+                break;
+
+            case A_FN_ERROR_NONE:
+                app_info(false, 0, "%s", cli_cmd_msg[A_FN_ERROR_NONE].base);
+                break;
+
+            default:
+                break;
+            }
+        }
+        free(evt);
+        if (should_terminate)
+            break;
+    }
+
+    close(sock_fd);
+    return 0;
+}
+
+/* HELP CMD */
+static void a_fn_stop_help() {
+    app_info(false, 0, "aura function stop -f <function name>");
+}
+
+struct aura_cli_flag *fn_stop_flags[] = {
+  &fn_stop_flag,
+};
+
+struct aura_cli_cmd fn_stop_cli = {
+  .version = "1.0.0",
+  .name = "stop",
+  .description = "Deactivate the provided function",
+  .usage = "aura function stop -f <function name>",
+  .deprecated = NULL,
+  .flags = fn_stop_flags,
+  .flag_cnt = ARRAY_SIZE(fn_stop_flags),
+  .args = NULL,
+  .args_cnt = 0,
+  .sub_cmds = NULL,
+  .sub_cmd_cnt = 0,
+  .min_args = 1,
+  .max_args = 1,
+  .is_top_level = false,
+  .is_hidden = false,
+  .is_experimental = false,
+  .options = NULL,
+  .options_size = sizeof(struct fn_stop_config),
+  .opt_allocator = a_fn_stop_option_allocator,
+  .opt_destructor = a_fn_stop_option_deallocator,
+  .handler = aura_cli_fn_stop,
+  .opt_help = a_fn_stop_help,
+};

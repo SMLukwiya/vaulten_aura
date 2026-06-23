@@ -3,8 +3,8 @@
 
 #include "error_lib.h"
 #include "list_lib.h"
-#include "memory_lib.h"
-#include "slab_lib.h"
+#include "mem.h"
+#include "slab.h"
 #include "task_srv.h"
 #include <pthread.h>
 

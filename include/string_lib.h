@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "memory_lib.h"
+#include "mem.h"
 
 #define BASE_16_TO_10(x) (((x) >= '0' && (x) <= '9') ? ((x) - '0') : (toupper((x)) - 'A' + 10))
 

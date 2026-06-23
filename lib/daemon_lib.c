@@ -1,6 +1,6 @@
 #include "daemon_lib.h"
 #include "error_lib.h"
-#include "file_lib.h"
+#include "file/lib.h"
 #include "unix/sock.h"
 #include <signal.h>
 #include <stdlib.h>

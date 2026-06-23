@@ -3,7 +3,7 @@
 
 #include <stdbool.h>
 
-#include "function_lib.h"
+#include "fn/lib.h"
 #include "js.h"
 #include "quickjs.h"
 #include "server_srv.h"

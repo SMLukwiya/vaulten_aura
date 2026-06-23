@@ -7,32 +7,32 @@ list(APPEND CMAKE_MESSAGE_INDENT " ")
 set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/unix/sock.c
     ${vaulten_aura_SOURCE_DIR}/lib/error_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/file_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/file/lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/utils_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/memory/memory_lib_v1.c
-    ${vaulten_aura_SOURCE_DIR}/lib/memory/slab_lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory/mem_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory/slab_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/ipc/ipc.c
 )
 
 add_executable(aura 
-    src/main.c
-    src/cmdline_cli.c
-    src/commands/function_cli.c
-    src/commands/fn_delete_cli.c
-    src/commands/fn_deploy_cli.c
-    src/commands/fn_status_cli.c
-    src/commands/fn_start_cli.c
-    src/commands/fn_stop_cli.c
-    src/commands/fn_config_validate_cli.c
-    src/commands/fn_list_cli.c
-    src/commands/srv_config_validate_cli.c
-    src/commands/srv_start_cli.c
-    src/commands/srv_stop_cli.c
-    src/commands/srv_status_cli.c
-    src/commands/sys_cli.c
-    src/commands/server_cli.c
-    src/commands/root_cli.c
-    src/flag_cli.c
+    main.c
+    cmdline.c
+    commands/function/cli.c
+    commands/function/deploy.c
+    commands/function/delete.c
+    commands/function/status.c
+    commands/function/start.c
+    commands/function/stop.c
+    commands/function/validate_conf.c
+    commands/function/list.c
+    commands/sys_cli.c
+    commands/server/cli.c
+    commands/server/validate_conf.c
+    commands/server/start.c
+    commands/server/stop.c
+    commands/server/status.c
+    commands/root_cli.c
+    flag.c
     ${lib_sources}
 )
 

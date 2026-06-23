@@ -8,7 +8,7 @@
 #include "list_lib.h"
 #include "picotls.h"
 #include "protocol.h"
-#include "slab_lib.h"
+#include "slab.h"
 #include "socket_srv.h"
 #include "string_lib.h"
 

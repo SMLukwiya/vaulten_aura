@@ -1,7 +1,7 @@
 #ifndef AURA_SRV_INTERNED_STR_H
 #define AURA_SRV_INTERNED_STR_H
 
-#include "memory_lib.h"
+#include "mem.h"
 
 #include <stdint.h>
 #include <stdlib.h>

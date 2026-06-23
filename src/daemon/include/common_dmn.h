@@ -1,9 +1,9 @@
 #ifndef AURA_COMMON_DMN_H
 #define AURA_COMMON_DMN_H
 
-#include "blobber_lib.h"
-#include "radix_lib.h"
-#include "yaml_lib.h"
+#include "blobber/lib.h"
+#include "radix/tree.h"
+#include "yaml/lib.h"
 #include <stdint.h>
 #include <stdio.h>
 

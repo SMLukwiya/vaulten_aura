@@ -1,5 +1,5 @@
 #include "string_lib.h"
-#include "slab_lib.h"
+#include "slab.h"
 #include <errno.h>
 
 /**

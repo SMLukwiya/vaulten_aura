@@ -1,4 +1,4 @@
-#include "function_lib.h"
+#include "fn/lib.h"
 #include "h2/client.h"
 #include "quickjs-libc.h"
 #include "quickjs.h"
@@ -8,7 +8,7 @@
 #include "task_srv.h"
 #include "time_lib.h"
 #include "types_lib.h"
-#include "url_lib.h"
+#include "url/lib.h"
 
 #include <pthread.h>
 #include <stdlib.h>

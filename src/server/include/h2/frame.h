@@ -2,7 +2,7 @@
 #define AURA_SRV_FRAME_H
 
 #include "list_lib.h"
-#include "memory_lib.h"
+#include "mem.h"
 #include "sliding_buf.h"
 #include "types_lib.h"
 

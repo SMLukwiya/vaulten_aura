@@ -3,7 +3,7 @@
 
 #include "header_srv.h"
 #include "types_lib.h"
-#include "url_lib.h"
+#include "url/lib.h"
 
 /* JS request object */
 typedef struct aura_js_request {

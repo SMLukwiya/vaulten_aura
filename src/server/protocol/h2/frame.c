@@ -1,6 +1,6 @@
 #include "h2/frame.h"
 #include "error_lib.h"
-#include "slab_lib.h"
+#include "slab.h"
 #include "types_lib.h"
 #include "utils_lib.h"
 

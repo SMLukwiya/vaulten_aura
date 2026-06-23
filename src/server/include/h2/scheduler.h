@@ -2,9 +2,9 @@
 #define AURA_H2_SCHEDULER
 
 #include "bitmap_lib.h"
-#include "dense_pool/dense_pool_static_lib.h"
-#include "flight_queue.h"
-#include "heap_lib.h"
+#include "dense_pool/static.h"
+#include "flight_queue/queue.h"
+#include "heap/lib.h"
 #include "list_lib.h"
 #include "stream.h"
 

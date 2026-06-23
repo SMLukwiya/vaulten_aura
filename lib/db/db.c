@@ -1,9 +1,9 @@
-#include "db/db.h"
-#include "file_lib.h"
+#include "db.h"
+#include "file/lib.h"
 #include "hasher_lib.h"
 #include "list_lib.h"
-#include "memory_lib.h"
-#include "slab_lib.h"
+#include "mem.h"
+#include "slab.h"
 #include "string_lib.h"
 #include "time_lib.h"
 
