@@ -3,12 +3,12 @@
 
 #include "types_lib.h"
 
-#define DIGEST_LEN (256 / 8)
+#define A_DIGEST_LEN (256 / 8)
 
 struct aura_iovec aura_decrypt_bytes(struct aura_iovec *bytes, const uint8_t *key_hex);
 
 struct aura_iovec aura_encrypt_bytes(struct aura_iovec *bytes, const uint8_t *key);
 
-struct aura_iovec aura_calculate_digest(struct aura_iovec *bytes);
+int aura_calculate_digest(struct aura_iovec *bytes, struct aura_iovec *digest);
 
 #endif

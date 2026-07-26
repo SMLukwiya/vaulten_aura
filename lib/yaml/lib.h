@@ -8,11 +8,11 @@
 
 #define a_init_yaml_node(yn, t, k, vt, te) \
     {                                      \
-        yn.type = t;                       \
-        yn.key = strdup(k);                \
-        yn.val_type = vt;                  \
-        yn.full_path = NULL;               \
-        yn.tab_entry = te;                 \
+        yn->type = t;                      \
+        yn->key = strdup(k);               \
+        yn->val_type = vt;                 \
+        yn->full_path = NULL;              \
+        yn->tab_entry = te;                \
     }
 
 typedef enum {
@@ -97,10 +97,12 @@ struct aura_validation_ctx {
 typedef void (*aura_hook_cb)(struct aura_yml_conf_parser *p, yaml_event_t *e, struct aura_validation_ctx *vc);
 
 /**
- *
+ * YAML node structure
+ * It represents a single
+ * yaml key value entry
  */
 struct aura_yml_node {
-    const char *key;       /* key as defined in yaml s*/
+    const char *key;       /* key as defined in yaml */
     const char *full_path; /* path for insertion into rax tree */
     union {
         void *ptr;

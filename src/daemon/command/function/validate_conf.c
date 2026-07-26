@@ -24,16 +24,16 @@ static inline uint32_t a_get_node_off(struct aura_yml_conf_parser *p, yaml_event
 
     us = (struct aura_yml_fn_data_ctx *)p->usr_data_ctx;
 
-    if (us->node_cnt >= us->node_cap) {
-        us->node_cap = us->node_cap < 5 ? 5 : us->node_cap * 2;
-        us->node_arr = realloc(us->node_arr, us->node_cap * sizeof(struct aura_yml_node));
-        if (!us->node_arr) {
+    if (us->node_vec.cnt >= us->node_vec.cap) {
+        us->node_vec.cap = us->node_vec.cap < 5 ? 5 : us->node_vec.cap * 2;
+        us->node_vec.entries = realloc(us->node_vec.entries, us->node_vec.cap * sizeof(struct aura_yml_node));
+        if (!us->node_vec.entries) {
             YAML_ADD_ERROR(p, evt, "Out of memory");
             return UINT32_MAX;
         }
     }
-    memset(&(us->node_arr[us->node_cnt]), 0, sizeof(struct aura_yml_node));
-    return us->node_cnt++;
+    memset(&(us->node_vec.entries[us->node_vec.cnt]), 0, sizeof(struct aura_yml_node));
+    return us->node_vec.cnt++;
 }
 
 /**
@@ -101,6 +101,7 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
     struct aura_yml_fn_data_ctx *usr_data;
     aura_rax_tree_t *rax;
     uint32_t node_off;
+    struct aura_yml_node *yml_node;
     int res;
 
     usr_data = (struct aura_yml_fn_data_ctx *)p->usr_data_ctx;
@@ -122,7 +123,8 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_FN_FUNCTION);
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NONE, A_IDX_FN_FUNCTION);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -134,8 +136,9 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_FN_NAME);
-            usr_data->node_arr[node_off].str_val = strdup(yn->str_val);
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_STRING, A_IDX_FN_NAME);
+            yml_node->str_val = strdup(yn->str_val);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -147,8 +150,9 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_FN_DESCRIPTION);
-            usr_data->node_arr[node_off].str_val = strdup(yn->str_val);
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_STRING, A_IDX_FN_DESCRIPTION);
+            yml_node->str_val = strdup(yn->str_val);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -160,13 +164,14 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
         a_ensure_node_is_scalar(p, evt, yn);
 
         res = aura_scan_str(yn->str_val, "%" SCNu32, &version);
-        if (res == 0 || version > UINT32_MAX)
+        if (res < 0 || version > UINT32_MAX)
             YAML_ADD_ERROR(p, evt, "Invalid %s, Expected a valid version number", yn->full_path);
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NUM, A_IDX_FN_VERSION);
-            usr_data->node_arr[node_off].int_val = version;
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NUM, A_IDX_FN_VERSION);
+            yml_node->int_val = version;
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -190,8 +195,9 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
             }
             close(entry_fd);
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_FN_ENTRY_POINT);
-            usr_data->node_arr[node_off].str_val = strdup(yn->str_val);
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_STRING, A_IDX_FN_ENTRY_POINT);
+            yml_node->str_val = strdup(yn->str_val);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -203,8 +209,9 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_FN_HOST);
-            usr_data->node_arr[node_off].str_val = strdup(yn->str_val);
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_STRING, A_IDX_FN_HOST);
+            yml_node->str_val = strdup(yn->str_val);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -216,6 +223,7 @@ void a_fn_validate_env(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct
     struct aura_yml_fn_data_ctx *usr_data;
     aura_rax_tree_t *rax;
     uint32_t node_off;
+    struct aura_yml_node *yml_node;
     int res;
 
     usr_data = (struct aura_yml_fn_data_ctx *)p->usr_data_ctx;
@@ -237,7 +245,8 @@ void a_fn_validate_env(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_FN_ENV);
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NONE, A_IDX_FN_ENV);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -248,7 +257,8 @@ void a_fn_validate_env(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_FN_NONE);
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NONE, A_IDX_FN_NONE);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -260,8 +270,9 @@ void a_fn_validate_env(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_FN_NONE);
-            usr_data->node_arr[node_off].str_val = strdup(yn->str_val);
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_STRING, A_IDX_FN_NONE);
+            yml_node->str_val = strdup(yn->str_val);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -273,8 +284,9 @@ void a_fn_validate_env(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_FN_NONE);
-            usr_data->node_arr[node_off].str_val = strdup(yn->str_val);
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_STRING, A_IDX_FN_NONE);
+            yml_node->str_val = strdup(yn->str_val);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -338,6 +350,7 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
     struct aura_yml_fn_data_ctx *usr_data;
     aura_rax_tree_t *rax;
     uint32_t node_off;
+    struct aura_yml_node *yml_node;
     int res;
 
     usr_data = (struct aura_yml_fn_data_ctx *)p->usr_data_ctx;
@@ -359,7 +372,8 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_FN_TRIGGERS);
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NONE, A_IDX_FN_TRIGGERS);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -371,7 +385,8 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_FN_HTTP_TRIGGER);
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NONE, A_IDX_FN_HTTP_TRIGGER);
             a_parse_tree_insert(p, evt, yn, node_off);
             usr_data->trigger_type = A_TRIGGER_HTTP;
         }
@@ -389,8 +404,9 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_FN_NONE);
-            usr_data->node_arr[node_off].str_val = strdup(yn->str_val);
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_STRING, A_IDX_FN_NONE);
+            yml_node->str_val = strdup(yn->str_val);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -413,8 +429,9 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NUM, A_IDX_FN_NONE);
-            usr_data->node_arr[node_off].int_val = method;
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NUM, A_IDX_FN_NONE);
+            yml_node->int_val = method;
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -426,7 +443,8 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_FN_CRON_TRIGGER);
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NONE, A_IDX_FN_CRON_TRIGGER);
             a_parse_tree_insert(p, evt, yn, node_off);
             usr_data->trigger_type = A_TRIGGER_CRON;
         }
@@ -444,8 +462,9 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_STRING, A_IDX_FN_NONE);
-            usr_data->node_arr[node_off].str_val = strdup(yn->str_val);
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_STRING, A_IDX_FN_NONE);
+            yml_node->str_val = strdup(yn->str_val);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -461,15 +480,16 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
             return;
         }
 
-        if (aura_scan_str(yn->str_val, "%d" SCNd32, &seconds) == 0 || seconds < 0) {
+        if (aura_scan_str(yn->str_val, "%d" SCNd32, &seconds) < 0 || seconds < 0) {
             YAML_ADD_ERROR(p, evt, "Invalid %s, %d", yn->full_path, seconds);
             return;
         }
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NUM, A_IDX_FN_NONE);
-            usr_data->node_arr[node_off].int_val = seconds;
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NUM, A_IDX_FN_NONE);
+            yml_node->int_val = seconds;
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -493,8 +513,9 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NUM, A_IDX_FN_NONE);
-            usr_data->node_arr[node_off].int_val = policy;
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NUM, A_IDX_FN_NONE);
+            yml_node->int_val = policy;
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -511,7 +532,8 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_FN_CRON_RETRIES);
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NONE, A_IDX_FN_CRON_RETRIES);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -528,6 +550,7 @@ void a_fn_validate_concurrency(struct aura_yml_conf_parser *p, yaml_event_t *evt
     struct aura_yml_fn_data_ctx *usr_data;
     aura_rax_tree_t *rax;
     uint32_t node_off;
+    struct aura_yml_node *yml_node;
     int res;
 
     usr_data = (struct aura_yml_fn_data_ctx *)p->usr_data_ctx;
@@ -548,7 +571,8 @@ void a_fn_validate_concurrency(struct aura_yml_conf_parser *p, yaml_event_t *evt
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_FN_CONCURRENCY);
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NONE, A_IDX_FN_CONCURRENCY);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -567,7 +591,7 @@ void a_fn_validate_concurrency(struct aura_yml_conf_parser *p, yaml_event_t *evt
         a_ensure_node_is_scalar(p, evt, yn);
         res = aura_scan_str(yn->str_val, "%d" SCNi32, &instances);
         if (is_max) {
-            if (res == 0 || res > INT32_MAX) {
+            if (res < 0 || res > INT32_MAX) {
                 /** @todo: define max instances */
                 YAML_ADD_ERROR(p, evt, "Invalid %s, Maximum value is %d", yn->full_path, INT32_MAX);
             }
@@ -579,8 +603,14 @@ void a_fn_validate_concurrency(struct aura_yml_conf_parser *p, yaml_event_t *evt
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NUM, is_max ? A_IDX_FN_MAX_INSTANCES : A_IDX_FN_MIN_INSTANCES);
-            usr_data->node_arr[node_off].int_val = instances;
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(
+              yml_node,
+              yn->type,
+              yn->key,
+              A_YAML_NUM,
+              is_max ? A_IDX_FN_MAX_INSTANCES : A_IDX_FN_MIN_INSTANCES);
+            yml_node->int_val = instances;
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -602,8 +632,9 @@ void a_fn_validate_concurrency(struct aura_yml_conf_parser *p, yaml_event_t *evt
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_BOOL, A_IDX_FN_PREWARM);
-            usr_data->node_arr[node_off].bool_val = pre_warm;
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_BOOL, A_IDX_FN_PREWARM);
+            yml_node->bool_val = pre_warm;
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -634,6 +665,7 @@ void a_fn_validate_resource(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
     struct aura_yml_fn_data_ctx *usr_data;
     aura_rax_tree_t *rax;
     uint32_t node_off;
+    struct aura_yml_node *yml_node;
     int res;
 
     usr_data = (struct aura_yml_fn_data_ctx *)p->usr_data_ctx;
@@ -654,7 +686,8 @@ void a_fn_validate_resource(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_FN_RESOURCES);
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NONE, A_IDX_FN_RESOURCES);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -665,7 +698,8 @@ void a_fn_validate_resource(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NONE, A_IDX_FN_MEMORY);
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NONE, A_IDX_FN_MEMORY);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -682,7 +716,7 @@ void a_fn_validate_resource(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
         else
             is_soft = false;
 
-        if (aura_scan_str(yn->str_val, "%d" SCNu32, &value) == 0) {
+        if (aura_scan_str(yn->str_val, "%d" SCNu32, &value) < 0) {
             YAML_ADD_ERROR(p, evt, "Invalid %s", yn->full_path);
             return;
         }
@@ -694,8 +728,9 @@ void a_fn_validate_resource(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NUM, is_soft ? A_IDX_FN_SOFT_MEM : A_IDX_FN_HARD_MEM);
-            usr_data->node_arr[node_off].int_val = value;
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NUM, is_soft ? A_IDX_FN_SOFT_MEM : A_IDX_FN_HARD_MEM);
+            yml_node->int_val = value;
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -713,8 +748,9 @@ void a_fn_validate_resource(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
-            a_init_yaml_node(usr_data->node_arr[node_off], yn->type, yn->key, A_YAML_NUM, A_IDX_FN_OOM_POLICY);
-            usr_data->node_arr[node_off].int_val = policy;
+            yml_node = &usr_data->node_vec.entries[node_off];
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NUM, A_IDX_FN_OOM_POLICY);
+            yml_node->int_val = policy;
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;
@@ -754,12 +790,12 @@ void a_fn_free_user_data_ctx(struct aura_yml_fn_data_ctx *usr_data) {
     if (!usr_data)
         return;
 
-    for (int i = 0; i < usr_data->node_cnt; ++i) {
-        if (usr_data->node_arr[i].key) {
-            free((void *)usr_data->node_arr[i].key);
+    for (int i = 0; i < usr_data->node_vec.cnt; ++i) {
+        if (usr_data->node_vec.entries[i].key) {
+            free((void *)usr_data->node_vec.entries[i].key);
         }
-        if (usr_data->node_arr[i].str_val && usr_data->node_arr[i].val_type == A_YAML_STRING) {
-            free((void *)usr_data->node_arr[i].str_val);
+        if (usr_data->node_vec.entries[i].str_val && usr_data->node_vec.entries[i].val_type == A_YAML_STRING) {
+            free((void *)usr_data->node_vec.entries[i].str_val);
         }
     }
 
@@ -769,8 +805,8 @@ void a_fn_free_user_data_ctx(struct aura_yml_fn_data_ctx *usr_data) {
     if (usr_data->extract)
         aura_blob_free(&usr_data->builder);
 
-    if (usr_data->node_arr)
-        free(usr_data->node_arr);
+    if (usr_data->node_vec.entries)
+        free(usr_data->node_vec.entries);
 }
 
 /**

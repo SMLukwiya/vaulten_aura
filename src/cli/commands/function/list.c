@@ -122,13 +122,13 @@ int aura_cli_fn_list(void *opts_ptr, void *glob_opts) {
             evt->_msg = (char *)evt + sizeof(*evt);
 
             fn_list = (struct aura_fn_list *)evt->_msg;
-            fn_list->fns = (struct aura_fn_rep *)((char *)fn_list + sizeof(*fn_list));
+            fn_list->func_tags = (struct aura_fn_tag *)((char *)fn_list + sizeof(*fn_list));
 
-            if (fn_list->cnt == 0) {
+            if (fn_list->func_cnt == 0) {
                 app_info(false, 0, "No functions deployed!");
             } else {
-                for (int i = 0; i < fn_list->cnt; ++i) {
-                    app_info(false, 0, "%s: %u", fn_list->fns[i].fn_name, fn_list->fns[i].fn_version);
+                for (int i = 0; i < fn_list->func_cnt; ++i) {
+                    app_info(false, 0, "%s: %u", fn_list->func_tags[i].fn_name, fn_list->func_tags[i].fn_version);
                 }
             }
         } else {
@@ -149,7 +149,8 @@ int aura_cli_fn_list(void *opts_ptr, void *glob_opts) {
                 break;
             }
         }
-        free(evt);
+
+        free(data.base);
         if (should_terminate)
             break;
     }

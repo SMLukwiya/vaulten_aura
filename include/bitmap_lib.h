@@ -142,7 +142,6 @@ static inline uint64_t aura_bitmap_find_next_bit(uint64_t *addr, uint64_t offset
 
     /* check if any bit is set */
     val = *addr & A_BITMAP_GENMASK(size - 1, offset);
-    // return val ? a_bitmap_find_bit(val) : size;
     return val ? a_ctz64(val) : size;
 }
 
@@ -154,8 +153,7 @@ static inline uint64_t aura_bitmap_find_next_empty_bit(uint64_t *addr, uint64_t 
 
     /* check if any bit is set */
     val = *addr & A_BITMAP_GENMASK(size - 1, offset);
-    // return val ? a_bitmap_find_bit(val) : size;
-    return val ? a_ctz64(~val) : size;
+    return ~val ? a_ctz64(~val) : size;
 }
 
 #endif

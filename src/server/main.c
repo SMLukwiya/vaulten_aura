@@ -1354,7 +1354,7 @@ void a_load_fn_destructor(const void *stat) {
 static void a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd) {
     struct aura_mem_ctx *mc = &gc->mem_ctx;
     struct aura_heap *hp;
-    struct aura_functions *fns, fns_copy;
+    struct aura_fn_list *fns, fns_copy;
     struct aura_fn_stat *fn_stat;
     struct aura_heap_ent *hp_ent;
     struct aura_fn_stat_wrapper *aux_stat, *_aux_stat;
@@ -1386,15 +1386,15 @@ static void a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd)
      * if latest can be listed first
      */
     if (fns->func_cnt > 0) {
-        fns_copy.funcs = calloc(1, sizeof(struct aura_fn_petite) * fns->func_cnt);
-        fns_copy.funcs[0] = fns->funcs[fns->func_cnt - 1];
+        fns_copy.func_tags = calloc(1, sizeof(struct aura_fn_tag) * fns->func_cnt);
+        fns_copy.func_tags[0] = fns->func_tags[fns->func_cnt - 1];
         fns_copy.func_cnt = 1;
         for (int i = fns->func_cnt - 2; i >= 0; --i) {
             int j = 0, k = fns_copy.func_cnt;
             while (j < k) {
                 /* add to copy list */
-                if (strcmp(fns_copy.funcs[j].fn_name, fns->funcs[i].fn_name) != 0) {
-                    fns_copy.funcs[fns_copy.func_cnt++] = fns->funcs[i];
+                if (strcmp(fns_copy.func_tags[j].fn_name, fns->func_tags[i].fn_name) != 0) {
+                    fns_copy.func_tags[fns_copy.func_cnt++] = fns->func_tags[i];
                 }
                 j++;
             }
@@ -1405,7 +1405,7 @@ static void a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd)
      * Load the top k functions using their stats
      */
     for (int i = 0; i < fns_copy.func_cnt; ++i) {
-        fn_stat = aura_fn_stat_fetch_broker(mc, fns_copy.funcs[i].fn_name, fns_copy.funcs[i].fn_version, dmn_sock_fd);
+        fn_stat = aura_fn_stat_fetch_broker(mc, fns_copy.func_tags[i].fn_name, fns_copy.func_tags[i].fn_version, dmn_sock_fd);
         if (!fn_stat)
             continue;
 
@@ -1414,8 +1414,8 @@ static void a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd)
             sys_exit(true, errno, "a_preload_functions: aura_alloc aux_stat error:");
 
         aux_stat->fn_stat = fn_stat;
-        aux_stat->fn_name = aura_strdup(mc, fns_copy.funcs[i].fn_name);
-        aux_stat->fn_version = fns_copy.funcs[i].fn_version;
+        aux_stat->fn_name = aura_strdup(mc, fns_copy.func_tags[i].fn_name);
+        aux_stat->fn_version = fns_copy.func_tags[i].fn_version;
 
         if (!aura_heap_is_full(hp)) {
             aura_heap_push(hp, &aux_stat->hp_ent);
@@ -1468,7 +1468,7 @@ static void a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd)
     }
 
     aura_free(fns);
-    free(fns_copy.funcs);
+    free(fns_copy.func_tags);
 
     /* Clean up heap */
     aura_heap_destroy(hp);

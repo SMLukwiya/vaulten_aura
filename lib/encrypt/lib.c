@@ -190,32 +190,29 @@ err_outbuf:
     return dec;
 }
 
-/* calculate file digest and store in digest buffer */
-struct aura_iovec aura_calculate_digest(struct aura_iovec *bytes) {
+/**
+ * calculate file digest and store in digest buffer,
+ * Pass a valid base for the digest
+ */
+int aura_calculate_digest(struct aura_iovec *bytes, struct aura_iovec *digest) {
     EVP_MD_CTX *digest_context;
     size_t in_nbytes, total_read;
-    struct aura_iovec md;
     int ok;
 
-    md.base = NULL;
-    md.len = 0;
-    md.base = malloc(DIGEST_LEN);
-    if (!md.base)
-        return md;
-
-    if (!bytes)
-        return md;
+    if (!bytes || !digest)
+        return -1;
 
     if (bytes->base == NULL || bytes->len == 0)
-        return md;
+        return -1;
 
     digest_context = EVP_MD_CTX_new();
     if (!digest_context)
-        goto err_md;
+        return -1;
 
     ok = EVP_DigestInit(digest_context, EVP_blake2s256());
     if (ok == 0) {
-        goto err_digest_ctx;
+        EVP_MD_CTX_free(digest_context);
+        return -1;
     }
 
     total_read = 0;
@@ -223,23 +220,20 @@ struct aura_iovec aura_calculate_digest(struct aura_iovec *bytes) {
         in_nbytes = a_min(bytes->len - total_read, 4096);
         ok = EVP_DigestUpdate(digest_context, bytes->base + total_read, in_nbytes);
         if (ok == 0) {
-            return md;
+            EVP_MD_CTX_free(digest_context);
+            return -1;
         }
         total_read += in_nbytes;
     }
 
-    ok = EVP_DigestFinal(digest_context, md.base, NULL);
+    ok = EVP_DigestFinal(digest_context, digest->base, NULL);
     if (ok == 0) {
-        goto err_digest_ctx;
+        EVP_MD_CTX_free(digest_context);
+        return -1;
     }
 
-    md.len = DIGEST_LEN;
+    digest->len = A_DIGEST_LEN;
     EVP_MD_CTX_free(digest_context);
-    return md;
 
-err_digest_ctx:
-    EVP_MD_CTX_free(digest_context);
-err_md:
-    free(md.base);
-    return md;
+    return 0;
 }

@@ -76,8 +76,7 @@ int aura_cli_run_fn_delete(void *opts_ptr, void *glob_opts) {
             return -1;
         }
 
-        rv = aura_scan_str(sep + 1, "%d" SCNu32, &fn_verion);
-        if (rv == 0) {
+        if (aura_scan_str(sep + 1, "%d" SCNu32, &fn_verion) < 0) {
             app_info(false, 0, "Invalid function version: %s, Expected a valid integer", sep + 1);
             return -1;
         }

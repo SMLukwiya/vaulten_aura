@@ -27,9 +27,10 @@ set(PROJECT_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/include)
 add_compile_definitions(_GNU_SOURCE)
 
 add_compile_definitions(AURA_APP_NAME="vaulten_aura")
-add_compile_definitions(AURA_DB_FILE="aura.db")
+add_compile_definitions(AURA_DB_CONTROL_FILE="aura_db.ctrl")
+add_compile_definitions(AURA_DB_DATA_FILE="aura_db.data")
 add_compile_definitions(AURA_DB_WAL_FILE="aura_db.wal")
-add_compile_definitions(AURA_DB_COMPACT_FILE="aura_compact.db")
+add_compile_definitions(AURA_DB_COMPACT_FILE="aura_db.compact")
 
 if (APP_DEV_BUILD)
     add_compile_definitions(AURA_DEV_BUILD="ON")

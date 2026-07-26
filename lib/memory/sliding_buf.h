@@ -14,31 +14,36 @@
 #define a_min(x, y) ((x) < (y) ? (x) : (y))
 #endif
 
+#ifndef a_max
+#define a_max(x, y) ((x) > (y) ? (x) : (y))
+#endif
+
 /* Sliding buffer structure */
 struct aura_sliding_buf {
     struct aura_mem_ctx *mc;
-    uint8_t *data;  /* Base pointer for underlying data */
     uint32_t cap;   /* capacity of buffer */
     uint32_t start; /* read offset */
     uint32_t end;   /* write offset */
     union {
         struct {
-            struct aura_list_head link; /* Link to next chained buffer */
+            struct aura_list_head link; /* Link to buffer list */
             _Atomic(uint8_t) ref_cnt;
         } allocated;
     };
+    uint8_t *data; /* Base pointer for underlying data */
     uint8_t flags;
 };
 
 /* Sliding buf flags */
 typedef enum {
     A_SLIDING_BUF_FL_NONE = 0,
-    A_SLIDING_BUF_FL_INLINED = 1,          /* Embedded as part of a parent structure */
-    A_SLIDING_BUG_FL_SHARED = 1 << 1,      /* Shared via ref counting */
-    A_SLIDING_BUF_FL_MOVABLE = 1 << 2,     /* can move across structures */
-    A_SLIDING_BUF_FL_FIXED = 1 << 3,       /* Size is fixed */
-    A_SLIDING_BUF_FL_COMPACTABLE = 1 << 4, /* Data can be compacted without losing meaning */
-    A_SLIDING_BUF_FL_CHAINED = 1 << 5      /* Can be chained in a list */
+    A_SLIDING_BUF_FL_INITIALIZED = 1,      /* Buffer initialized */
+    A_SLIDING_BUF_FL_INLINED = 1 << 1,     /* Embedded as part of a parent structure */
+    A_SLIDING_BUG_FL_SHARED = 1 << 2,      /* Shared via ref counting */
+    A_SLIDING_BUF_FL_MOVABLE = 1 << 3,     /* can move across structures */
+    A_SLIDING_BUF_FL_FIXED = 1 << 4,       /* Size is fixed */
+    A_SLIDING_BUF_FL_COMPACTABLE = 1 << 5, /* Data can be compacted without losing meaning */
+    A_SLIDING_BUF_FL_CHAINED = 1 << 6      /* Can be chained in a list */
 } aura_sliding_buf_flag;
 
 /* Get buffer actual capacity */
@@ -77,6 +82,11 @@ static inline uint8_t *aura_sliding_buf_write_ptr(const struct aura_sliding_buf 
 /* Reset buffer to empty state */
 static inline void aura_sliding_buf_reset(struct aura_sliding_buf *buf) {
     buf->start = buf->end = 0;
+}
+
+/* Is buffer initialized */
+static inline bool aura_sliding_buf_is_initialized(struct aura_sliding_buf *buf) {
+    return (buf->flags & A_SLIDING_BUF_FL_INITIALIZED);
 }
 
 /**

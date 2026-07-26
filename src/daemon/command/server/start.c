@@ -8,7 +8,7 @@
  * Defined in validator c file
  */
 extern struct aura_yml_validator aura_server_validator[];
-extern void a_srv_init_user_data_ctx(struct aura_yml_usr_data_ctx *usr_data, bool extract);
+extern void aura_srv_init_user_data_ctx(struct aura_yml_usr_data_ctx *usr_data, bool extract);
 extern void a_srv_free_user_data_ctx(struct aura_yml_usr_data_ctx *usr_data);
 extern int aura_server_validator_len;
 
@@ -44,7 +44,7 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, void *_conf) {
 
     parser_err = aura_create_yml_error_ctx(fail_fast);
 
-    a_srv_init_user_data_ctx(&usr_data, extract);
+    aura_srv_init_user_data_ctx(&usr_data, extract);
 
     res = aura_load_config_fd(
       msg->fd,
@@ -72,7 +72,7 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, void *_conf) {
     server_root = aura_build_blob_from_rax(
       usr_data.parse_tree,
       &usr_data.builder,
-      usr_data.node_arr,
+      usr_data.node_vec.entries,
       "server",
       sizeof("server") - 1,
       &srv_stack,
@@ -82,7 +82,7 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, void *_conf) {
     listener_root = aura_build_blob_from_rax(
       usr_data.parse_tree,
       &usr_data.builder,
-      usr_data.node_arr,
+      usr_data.node_vec.entries,
       "listeners",
       sizeof("listeners") - 1,
       &srv_stack,
@@ -92,7 +92,7 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, void *_conf) {
     tls_root = aura_build_blob_from_rax(
       usr_data.parse_tree,
       &usr_data.builder,
-      usr_data.node_arr,
+      usr_data.node_vec.entries,
       "tls",
       sizeof("tls") - 1,
       &srv_stack,
@@ -102,7 +102,7 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, void *_conf) {
     host_root = aura_build_blob_from_rax(
       usr_data.parse_tree,
       &usr_data.builder,
-      usr_data.node_arr,
+      usr_data.node_vec.entries,
       "hosts",
       sizeof("hosts") - 1,
       &srv_stack,

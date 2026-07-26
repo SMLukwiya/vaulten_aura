@@ -30,8 +30,8 @@ listeners:
 
 tls:
   identities:
-    - cert_file: /home/lukwiya/studies/C/vaulten_aura/examples/config/cert_chain.pem
-      key_file: /home/lukwiya/studies/C/vaulten_aura/examples/config/aura_leaf_keypair.pem
+    - cert_file: ./cert_chain.pem
+      key_file: ./aura_leaf_keypair.pem
       tag: default
   cipher_suites:
     - TLS_AES_256_GCM_SHA384

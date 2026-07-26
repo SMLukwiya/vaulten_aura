@@ -75,7 +75,8 @@ uint32_t a_rax_to_stack_builder(aura_rax_tree_t *t, st_aura_b_builder *b, struct
  *
  */
 uint32_t aura_build_blob_from_rax(aura_rax_tree_t *t, st_aura_b_builder *b, struct aura_yml_node *node_arr,
-                                  const char *prefix, size_t len, struct aura_builder_stack *stack, int *conf_tab) {
+                                  const char *prefix, size_t len, struct aura_builder_stack *stack,
+                                  int *conf_tab) {
     uint32_t root_off, start_off, node_off, parent_off;
     struct aura_yml_node *yn, *par_yn;
     int res;

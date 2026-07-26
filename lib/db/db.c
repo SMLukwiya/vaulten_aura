@@ -1,9 +1,12 @@
 #include "db.h"
+#include "bitmap_lib.h"
+#include "bug_lib.h"
 #include "file/lib.h"
 #include "hasher_lib.h"
 #include "list_lib.h"
 #include "mem.h"
 #include "slab.h"
+#include "stdatomic.h"
 #include "string_lib.h"
 #include "time_lib.h"
 
@@ -18,175 +21,351 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-/* DB header structure */
-struct aura_db_hdr {
-    uint32_t magic;
-    uint16_t version;
-    uint16_t flags;
-    uint64_t created_ts;
-    uint64_t last_compact_ts;
-    uint64_t last_rec_off; /* Record of last rec offset */
-    uint32_t hash_algo;
-    uint32_t bucket_cnt;
-    off_t bucket_off;
-    off_t record_off;
-    uint64_t lsn; /* Next record to be applied from WAL to DB */
-    uint64_t file_size;
-    uint64_t record_cnt;
-    uint64_t wasted_bytes; /* total deleted records in the db */
-};
+#define A_DB_MAX_TX_REC_CNT 64         /* Max nr of records per transaction */
+#define A_WAL_BUF_SZ (8 * 1024 * 1024) /* 8MB */
+#define A_DB_TH_CNT 16                 /* DB thread count */
+#define A_DB_NR_THREADS 3              /* Nr of DB threads */
 
-enum {
-    A_DB_REPLAY_MODE_RECOVERY,
-    A_DB_REPLAY_MODE_NORMAL
-};
+#define A_DB_TX_PRIVATE_DATA_SZ (64 * 1024) /* 64KB */
 
-/* WAL header structure */
-struct aura_db_wal_hdr {
-    uint32_t magic;
-    uint16_t version;
-    uint16_t flags;
-    uint64_t created_ts;
-    uint64_t last_replay_ts;
-    uint64_t last_file_offset;
-    uint64_t record_cnt;
-    uint64_t file_size;
-};
+/**
+ * Wal writer thread sleeps for
+ * 5ms intervals before attempting to
+ * flush again
+ */
+#define A_DB_WAL_WRITER_INTERVAL a_time_ms_to_s(500)
+#define A_DB_CHECKPOINTER_INTERVAL a_time_ms_to_s(1000)
+#define A_DB_BG_WRITER_INTERVAL a_time_ms_to_s(1000)
 
-struct aura_db_writer_queue {
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
-    struct aura_list_head db_list;
-};
+#define A_DB_READ_CACHE_BUF_SZ (4 * 1024 * 1024)                             /* 4MB */
+#define A_DB_WRITE_CACHE_BUF_SZ (4 * 1024 * 1024)                            /* 4MB */
+#define A_DB_WRITE_CACHE_LOW_BUF_THRESHOLD(size) ((size >> 1) + (size >> 2)) /* 0.75 cache size */
+
+#define A_DB_LOG_SZ_THRESHOLD (1 * 1024 * 1024) /* 1MB */
+
+#define A_DB_GRACEFUL_SHUTDOWN_TIMEOUT 30 /* 30 seconds */
+
+/* Time given to active tx to complete when taking checkpoint */
+#define A_DB_TX_CHECKPOINT_WAIT 1000 /* 1000ms */
 
 #define A_DB_MAGIC 0x5D5D5D5D
 #define A_DB_REC_MAGIC 0xED5EC001
 #define A_DB_WAL_MAGIC 0xED3A1001
-#define A_BUCKET_TAB_OFFSET sizeof(struct aura_db_hdr)
-#define A_DB_BUF_SIZE 4096
-#define A_DB_REC_BUF_SIZE (128 * 1024) /* 128KB */
-#define A_DB_VERSION 0x10000U
-#define A_DB_CHK_PNT_MAGIC 0xC3C3C3C3
-#define A_DB_CHECK_PNT_RECORD_KEY "replay_checkpt"
+#define A_DB_CACHE_SIZE (1024 * 1024) /* 1MB */
+#define A_DB_CHECKPOINT_KEY "checkpoint"
 
-/* Record len structure */
-struct aura_db_rec_len {
-    size_t raw_len;     /* Exact record length not aligned */
-    size_t aligned_len; /* Record len aligned */
-};
+static pthread_barrier_t barrier;
 
-/* record header structure */
-struct aura_db_rec_hdr {
-    uint32_t magic;
-    uint32_t version;
-    uint16_t ns; /* namespace */
-    uint16_t schema_id;
-    uint16_t flags;
-    uint64_t job_id;       /* Points to the job this record is bracketed under, helps with small transaction stuff */
-    uint64_t prev_job_rec; /* Previous record associated with this job */
-    struct aura_db_rec_len rec_len;
-    uint32_t key_len;
-    uint32_t data_len;
-    uint64_t timestamp;
-    uint64_t prev_off; /* link for bucket chain */
-    char check_sum[DIGEST_LEN];
-}; /* [key][data][padding] */
+/**
+ * Last important lsn appended to WAL
+ * Updated by any thread flushing the log buffer
+ */
+static _Atomic lsn_t last_important_lsn;
+/**
+ * Last checkpoint lsn
+ * Updated by checkpointer thread
+ */
+static _Atomic lsn_t last_checkpoint_lsn;
+
+/**
+ * global flushed lsn represents the start of the
+ * next record to be flushed. Synchronous operations
+ * use this to ensure data is durable before returning
+ * an ack to the user. This value can safely start
+ * at 0 since the first flush operation will set it to
+ * the correct value anyway.
+ */
+static uint64_t glob_flushed_lsn = 0;
 
 /* Bucket offset entry */
 struct aura_db_bucket_entry {
-    _Atomic off_t head_off; /* offset of newest record */
+    _Atomic lsn_t head_off; /* offset of newest record */
 };
+
+/* Record len structure */
+struct aura_db_rec_len {
+    uint64_t raw_len;     /* Exact record length */
+    uint64_t aligned_len; /* Aligned record len */
+};
+
+/**
+ * Record header structure
+ */
+struct aura_db_rec_hdr {
+    uint32_t magic;                 /* Unique record header identifier */
+    txid_t tx_id;                   /* Transaction id */
+    lsn_t rec_off;                  /* Records position in db file */
+    lsn_t prev_off;                 /* position of prev record as chained in the hash bucket */
+    uint64_t prev_cache_off;        /* position of prev record in cache buffer */
+    lsn_t prev_tx_rec_off;          /* position of prev record that is part of the same transaction */
+    struct aura_db_rec_len rec_len; /* Record length */
+    uint64_t timestamp_ms;          /* Time record was created */
+    uint32_t hash;                  /* Records hash */
+    uint32_t key_len;               /* Records key length */
+    uint32_t data_len;              /* Records Data length */
+    ns_t ns;                        /* Records namespace identifier */
+    schema_id_t schema_id;          /* Records schema identifier */
+    uint8_t flags;                  /* Record flags */
+    char checksum[A_DIGEST_LEN];    /* Records checksum */
+}; /* [key][data][padding] */
 
 /* WAL record header structure */
 struct aura_db_wal_rec_hdr {
-    uint32_t magic;
-    uint16_t op;
-    uint64_t rec_len;
-    uint64_t lsn;
+    txid_t tx_id;     /* Transaction ID */
+    lsn_t lsn;        /* Position of record in WAL */
+    lsn_t prev_lsn;   /* Previous record position with same tx id */
+    uint64_t rec_len; /* Record length */
+    uint32_t magic;   /* Unique wal header identifier */
+    uint8_t op;       /* Database operation */
+    uint8_t type;     /* WAL record type */
 }; /* [record] */
+
+typedef enum {
+    A_DB_THREAD_INVALID = 0,
+    A_DB_THREAD_WAL_WRITER,
+    A_DB_THREAD_BG_WRITER,
+    A_DB_THREAD_CHECKPOINTER,
+    A_DB_THREAD_COMPACTOR
+} aura_db_bg_worker_t;
+
+typedef enum {
+    A_DB_THREAD_BG_WRITER_SHUTDOWN = 1,
+    A_DB_THREAD_WAL_WRITER_SHUTDOWN
+} aura_db_bg_worker_flag;
+
+/* Thread status */
+typedef enum {
+    A_DB_BG_TH_INVALID,
+    A_DB_BG_TH_RUNNING,
+    A_DB_BG_TH_STOPPED,
+    A_DB_BG_TH_SHUTTING_DOWN,
+} aura_db_th_status;
+
+/* DB Record data structure */
+struct aura_db_rdata {
+    // struct aura_list_head list;
+    const void *data; /* Pointer to record data chunk */
+    uint32_t len;     /* Length of record data chunk */
+};
+
+/* Tx structure */
+struct aura_db_tx {
+    txid_t id;                                       /* Transaction id */
+    uint64_t timestamp;                              /* Tx start time */
+    uint64_t ttl;                                    /* Tx timeout */
+    struct aura_db_rdata rdata[A_DB_MAX_TX_REC_CNT]; /* Stage chunks of record data for processing */
+    struct aura_sliding_buf priv_buf;                /* Tx private buffer */
+    uint32_t rdata_cnt;                              /* WAL record fragment count */
+    uint32_t rec_cnt;                                /* WAL record cnt for transaction */
+    uint32_t rec_len;                                /* Total WAL record len */
+    uint32_t max_priv_data_sz;                       /* Max private data allowed per tx */
+    uint32_t reserved_off;                           /* reserved start offset in WAL buffer */
+    uint8_t kind;                                    /* Kind of transaction */
+    uint8_t state;                                   /* Transaction state */
+    uint8_t op;                                      /* Database Operation */
+    uint8_t flags;
+};
+
+/* DB db structure */
+struct aura_db_th {
+    pthread_t handle;
+    aura_db_bg_worker_t wrk_type; /* Worker type */
+    void *(*fn)(void *);          /* Main thread function */
+    void (*shutdown_fn)(void *);  /* Called to tell thread to shutdown */
+    uint32_t pool_idx;
+    uint8_t status;
+};
+
+struct aura_db_data {
+    int fd;
+    pthread_mutex_t lock; /* Protect structure */
+};
+
+/* DB WAL structure */
+struct aura_db_wal {
+    int fd;                          /* WAL file fd */
+    lsn_t write_lsn;                 /* current write offset in WAL file */
+    uint64_t file_sz;                /* WAL file size */
+    pthread_mutex_t lock;            /* Protect the WAL state */
+    pthread_cond_t cond;             /* WAL cond variable */
+    uint8_t cache_buf[A_WAL_BUF_SZ]; /* WAL buffer */
+    uint32_t buf_off;                /* current write offset in WAL buffer */
+    uint32_t holding_flush;          /* Number of thread holding the flush op from happening */
+};
+
+/* Cache buffer */
+struct aura_db_cache_buf {
+    char *data;
+    uint32_t size;
+    uint32_t cap;
+    struct aura_db_bucket_entry hash_bucket[A_DB_HASH_BUCKET_CNT];
+    uint8_t flags;
+};
+
+/* DB write cache structure */
+struct aura_db_write_cache {
+    struct aura_db_cache_buf bufs[2]; /* write buffers */
+    uint32_t next_off;                /* Next insert offset in write cache */
+    pthread_mutex_t lock;             /* cache mutex */
+    pthread_cond_t swap_cond;         /* condition for swapping active buf */
+    pthread_cond_t sync_cond;         /* cond for syncing inactive buf */
+    uint8_t active_idx;               /* active buffer idx (0 or 1) */
+    uint8_t write_idx;                /* Index of buffer to write */
+};
+
+/* DB read cache structure */
+struct aura_db_read_cache {
+    struct aura_db_cache_buf buf;
+    pthread_rwlock_t rwlock;
+};
+
+/* Cache structure */
+struct aura_db_cache {
+    struct aura_db_write_cache wrt_cache;
+    struct aura_db_read_cache read_cache;
+};
+
+/* commit structure */
+struct aura_db_commit {
+    txid_t tx_id;     /* Transaction ID */
+    uint32_t rec_cnt; /* Record cnt for this transaction */
+    uint8_t state;    /* Transaction state */
+};
+
+/* DB TX man structure */
+struct aura_db_tx_ctx {
+    txid_t next_id;
+    uint64_t id_mask;
+    pthread_mutex_t lock;
+    pthread_cond_t wait;
+    struct aura_db_tx_tab_ent tx_tab[A_DB_MAX_CONC_TX]; /* Active tx table */
+    A_BITMAP_CREATE(64, tx_tab_map);
+};
+
+/* DB checkpoint ctx structure */
+struct aura_db_checkpoint_ctx {
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    pthread_cond_t done;
+    uint32_t nr_of_reqs; /* Number of checkpointer requests */
+    uint32_t flags;
+    bool ckpt_done; /* Used to indicate checkpoint is done */
+    bool active;    /* Used to indicate checkpoint is active */
+};
+
+/* Background cache writer */
+struct aura_db_bgwriter {
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    bool do_work; /* Used to tell bg writer to perform some work */
+    int flags;
+};
+
+/* Log writer */
+struct aura_db_log_writer {
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    int reqs; /* Number of requests for log writer */
+    int flags;
+};
+
+/* Thread kind structure */
+struct aura_db_th_kind {
+    const char *desc;            /* Thread description */
+    void *(*fn)(void *db);       /* Thread main routine */
+    void (*shutdown_fn)(void *); /* Thread shutdown trigger routine */
+};
+
+/* Thread Key */
+static pthread_key_t thread_key;
+static pthread_once_t th_key_init_done = PTHREAD_ONCE_INIT;
+
+/**
+ * Database control structure
+ */
+struct aura_db_control {
+    uint32_t magic;                                            /* Uinque system identifier to ensure correct versioning */
+    int hash_algo;                                             /* Hash algorithm being used for key hashing */
+    lsn_t last_rec_lsn;                                        /* Position of last record written to database */
+    uint64_t record_cnt;                                       /* Nr of records */
+    uint64_t file_size;                                        /* Data file size */
+    uint64_t wasted_bytes;                                     /* total deleted records in the db */
+    uint64_t created_ms;                                       /* Database creation time */
+    uint64_t time_ms;                                          /* Time of last control update */
+    uint64_t compact_time_ms;                                  /* Database last compaction time */
+    uint32_t flags;                                            /* Flags */
+    struct aura_db_checkpoint chkpt_copy;                      /* Copy of the latest checkpoint saved */
+    struct aura_db_bucket_entry buckets[A_DB_HASH_BUCKET_CNT]; /* hash buckets */
+    aura_db_state_t shutdown_state;                            /* Database state */
+};
 
 /*
  * Library's private representation of the database.
  */
 typedef struct {
-    int db_fd;  /* fd for db file */
-    int wal_fd; /* fd for WAL file */
-    char *name; /* database file name */
-    struct aura_mem_ctx *mc;
-    struct aura_db_hdr db_file_hdr;           /* database header */
-    struct aura_db_wal_hdr wal_file_hdr;      /* WAL file header */
-    struct aura_db_bucket_entry *buckets;     /* hash buckets */
-    void *record_buf;                         /* In memory record buffer */
-    size_t record_buf_size;                   /* Size of record buffer */
-    off_t append_off;                         /* In memory append offset */
-    size_t curr_file_size;                    /* Local cache main db file size (updated on every wal replay and compact) */
-    pthread_mutex_t db_lock;                  /* Memory lock for in memory structure */
-    pthread_cond_t db_cond;                   /* DB conditional variable */
-    bool is_busy;                             /* DB is busy with replay or compaction */
-    bool shutdown;                            /* Signal for db to shutdown */
-    struct aura_db_writer_queue writer_queue; /* All db writes go through this */
-    uint32_t cnt_del_ok;                      /* delete OK */
-    uint32_t cnt_del_err;                     /* delete error */
-    uint32_t cnt_fetch_ok;                    /* fetch OK */
-    uint32_t cnt_fetch_err;                   /* fetch error */
-    uint32_t cnt_stor_ok;                     /* store OK */
-    uint32_t cnt_stor_err;                    /* store error */
+    struct aura_db_control control; /* Database control */
+    int ctrl_file_fd;
+    pthread_mutex_t ctrl_lock;                    /* Protect control structure */
+    pthread_cond_t ctrl_cond;                     /* Wait on control busy */
+    atomic_uint ref_cnt;                          /* Number of threads referencing the structure */
+    struct aura_mem_ctx *mc;                      /* Memory context */
+    struct aura_db_data main;                     /* Main DB context */
+    struct aura_db_wal wal;                       /* WAL context */
+    struct aura_db_cache cache;                   /* Cache */
+    struct aura_db_th th_pool[A_DB_TH_CNT];       /* Thread pool*/
+    struct aura_db_tx_ctx tx_ctx;                 /* Transaction context */
+    struct aura_db_checkpoint_ctx checkpoint_ctx; /* Checkpointer thread attributes */
+    struct aura_db_bgwriter bgwriter;             /* DB writer thread attributes */
+    struct aura_db_log_writer wal_writer;         /* WAL writer thread attributes */
+    lsn_t last_commit_offset;                     /* Last committed offset to WAL */
+    const char *file_name;                        /* database file name */
+    bool ctrl_busy;                               /* some operation being performed on db control */
+    uint8_t state;                                /* Database state */
+    bool shutdown;                                /* Signal for db to shutdown */
 } AURA_DB;
 
-/* Checkpoint record structure */
-struct aura_db_pending_job {
-    uint64_t job_id;
-    uint16_t job_state;
-    uint16_t job_type;
+/* Thread specific data structure */
+struct aura_db_th_data {
+    pid_t th_id;          /* Thread ID */
+    txid_t tx_id;         /* Local transaction ID */
+    int64_t glob_tx_idx;  /* Global Transaction ID */
+    struct aura_db_tx tx; /* Transaction per thread */
+    AURA_DB *db;          /* Pointer to global DB context */
 };
-
-struct aura_db_pending_job_rec {
-    uint64_t job_id;
-    off_t rec_off;
-    size_t rec_len;
-};
-
-/* Check point rec structure */
-struct aura_db_checkpoint_rec {
-    uint32_t version;
-    uint32_t magic;
-    uint64_t lsn;
-    size_t pending_job_cnt;
-    size_t pending_job_rec_cnt;
-    struct aura_db_pending_job *pending_jobs;
-    struct aura_db_pending_job_rec *pending_job_records;
-}; /* [replay tab] */
-
-/*
- * Internal functions.
- */
-static AURA_DB *a_db_alloc(int);
-
-static void a_db_free(AURA_DB *);
-
-static off_t a_db_wal_commit(int wal_fd, int wal_op, struct aura_db_rec_hdr *hdr,
-                             struct aura_iovec *key, struct aura_iovec *data);
-
-static int a_db_wal_replay(AURA_DB *);
-
-static int a_db_compact(AURA_DB *db);
-/* Dump database header */
-static void a_db_dump_header(struct aura_db_hdr *);
 
 /* Print wal record header */
-static void a_db_dump_wal_header(struct aura_db_wal_rec_hdr *);
+static void a_db_wal_hhdr_dump(struct aura_db_wal_rec_hdr *);
 
 /* Print record header */
-static void a_db_dump_rec_header(struct aura_db_rec_hdr *);
+static void a_db_rec_hdr_dump(struct aura_db_rec_hdr *);
 
 /**/
-static void a_db_job_dump(struct aura_db_job_rec *);
+static inline int a_db_log_flush(struct aura_db_wal *wal, int flags);
 
 /**/
-static void a_db_check_pnt_rec_dump(struct aura_db_checkpoint_rec *);
+static inline void a_db_reset_th_data(struct aura_db_th_data *th_data);
+
+/**/
+static void a_db_write_cache_scan(struct aura_db_write_cache *cache);
+
+/**/
+static int a_db_replay(AURA_DB *db);
+
+/**/
+static int a_db_write_cache_append(AURA_DB *db, struct aura_db_rec_hdr *rec_hdr,
+                                   struct aura_iovec *key, struct aura_iovec *data);
+
+/**/
+static int a_db_write_cache_flush(AURA_DB *db, int flags);
+
+/**/
+static void *a_db_checkpointer(void *arg);
+
+/**/
+static inline void a_db_request_checkpoint(struct aura_db_checkpoint_ctx *c, int flags);
 
 /**
- * Get record size possibly 8-byte aligned
+ * Get record size  8-byte aligned
  */
 static inline struct aura_db_rec_len a_get_db_record_len(size_t key_len, size_t data_len) {
     struct aura_db_rec_len len;
@@ -197,80 +376,29 @@ static inline struct aura_db_rec_len a_get_db_record_len(size_t key_len, size_t 
 }
 
 /* Calculate key hash */
-static inline uint32_t a_fnv1a_hash(uint32_t bucket_cnt, uint16_t namespace, struct aura_iovec *key) {
+static inline uint32_t a_fnv1a_hash(uint32_t bucket_cnt, ns_t namespace, struct aura_iovec *key) {
     uint32_t hash, hash_val;
 
     hash_val = FNV1_32A_INIT;
     hash_val ^= (uint32_t)namespace;
     hash = fnv_32a_buf((void *)key->base, key->len, hash_val);
-    hash &= (bucket_cnt - 1);
-    return hash;
-}
-
-static inline void a_db_rewind(int fd) {
-    off_t res;
-
-    /* Back to beginning for now */
-    res = lseek(fd, 0, SEEK_SET);
-    if (res < 0)
-        sys_exit(true, errno, "a_db_rewind error");
-}
-
-/*
- * Allocate & initialize a DB structure and its buffers.
- */
-static AURA_DB *a_db_alloc(int namelen) {
-    AURA_DB *db;
-    size_t bucket_arr_size;
-
-    db = calloc(1, sizeof(AURA_DB));
-    if (!db)
-        goto exception;
-    /* init db file descriptor */
-    db->db_fd = -1;
-
-    /* Null terminated string */
-    db->name = malloc(namelen + 1);
-    if (!db->name)
-        goto exception;
-    memset(db->name, 0, namelen + 1);
-
-    db->record_buf = malloc(A_DB_REC_BUF_SIZE);
-    if (!db->record_buf)
-        goto exception;
-    db->record_buf_size = A_DB_REC_BUF_SIZE;
-    memset(db->record_buf, 0, A_DB_REC_BUF_SIZE);
-
-    bucket_arr_size = sizeof(struct aura_db_bucket_entry) * A_DB_BUCKET_CNT;
-    db->buckets = calloc(1, bucket_arr_size);
-    if (!db->buckets)
-        goto exception;
-
-    db->shutdown = false;
-    db->is_busy = false;
-    db->append_off = 0;
-
-    return db;
-exception:
-    sys_exit(true, errno, "a_db_alloc: error");
+    return hash & A_DB_HASH_BUCKET_MASK;
 }
 
 /**
  * Save db meta data
  * Pass an immutable memory to this function
  */
-static inline ssize_t a_db_meta_write(int fd, struct iovec *hdr, struct iovec *bucket) {
+static inline ssize_t a_db_meta_write(int fd, void *meta, size_t len) {
     struct iovec iov[2];
 
     if (lseek(fd, 0, SEEK_SET) < 0)
         return -1;
 
-    iov[0].iov_base = hdr->iov_base;
-    iov[0].iov_len = hdr->iov_len;
-    iov[1].iov_base = bucket->iov_base;
-    iov[1].iov_len = bucket->iov_len;
+    if (write(fd, meta, len) != len)
+        return -1;
 
-    return writev(fd, iov, 2);
+    return 0;
 }
 
 /**
@@ -278,298 +406,2109 @@ static inline ssize_t a_db_meta_write(int fd, struct iovec *hdr, struct iovec *b
  * This is called only on startup for now
  * So there may not be need to lock!
  */
-static inline ssize_t a_db_meta_read(int fd, struct iovec *hdr, struct iovec *bucket) {
+static inline ssize_t a_db_meta_read(int fd, void *meta, size_t len) {
     struct iovec iov[2];
 
     if (lseek(fd, 0, SEEK_SET) < 0)
         return -1;
 
-    iov[0].iov_base = hdr->iov_base;
-    iov[0].iov_len = hdr->iov_len;
-    iov[1].iov_base = bucket->iov_base;
-    iov[1].iov_len = bucket->iov_len;
-
-    return readv(fd, iov, 2);
-}
-
-/**
- * Open/Create database with defined flags
- * and modes.
- */
-static inline int a_db_file_open(const char *file, int *flags, int mode) {
-    int fd;
-
-    if (*flags & O_CREAT) {
-        fd = open(file, *flags, mode);
-
-        if (fd < 0) {
-            if (errno != EEXIST)
-                return -1;
-
-            if (errno == EEXIST) {
-                /* Open normally */
-                *flags &= ~(O_CREAT | O_TRUNC | O_EXCL);
-                fd = open(file, *flags, mode);
-            }
-        }
-    } else {
-        fd = open(file, *flags, mode);
-    }
-
-    return fd;
-}
-
-/**
- * Initialize the database header structure
- */
-static inline int a_db_headers_init(AURA_DB *db, size_t file_size) {
-    uint64_t created_ts;
-
-    created_ts = aura_now_ms(CLOCK_REALTIME);
-
-    db->db_file_hdr.magic = A_DB_MAGIC;
-    db->db_file_hdr.version = (uint16_t)0x10000; /* 1.0.0 */
-    db->db_file_hdr.hash_algo = A_FNV1A_HASH_ALGO;
-    db->db_file_hdr.created_ts = created_ts;
-    db->db_file_hdr.flags = 0;
-    db->db_file_hdr.last_compact_ts = 0;
-    db->db_file_hdr.bucket_cnt = A_DB_BUCKET_CNT;
-    db->db_file_hdr.bucket_off = A_BUCKET_TAB_OFFSET;
-    db->db_file_hdr.record_off = A_BUCKET_TAB_OFFSET + (A_DB_BUCKET_CNT * sizeof(void *));
-    db->db_file_hdr.file_size = file_size;
-    db->db_file_hdr.record_cnt = 0;
-    db->db_file_hdr.last_rec_off = 0;
-    db->db_file_hdr.lsn = 0;
-
-    db->wal_file_hdr.flags = 0;
-    db->wal_file_hdr.magic = A_DB_WAL_MAGIC;
-    db->wal_file_hdr.version = (uint16_t)0x10000;
-    db->wal_file_hdr.created_ts = created_ts;
-    db->wal_file_hdr.last_file_offset = 0;
-    db->wal_file_hdr.last_replay_ts = created_ts;
-    db->wal_file_hdr.record_cnt = 0;
-    db->wal_file_hdr.file_size = sizeof(struct aura_db_wal_hdr);
+    if (read(fd, meta, len) != len)
+        return -1;
 
     return 0;
+}
+
+/**
+ * Destroy thread specific resources
+ */
+static void a_th_db_data_destroy(void *_data) {
+    struct aura_db_th_data *data = _data;
+
+    if (data) {
+        a_db_reset_th_data(data);
+        free(data);
+    }
+}
+
+/**
+ * Initialize thread key for thread
+ * specific data
+ */
+static void a_db_th_key_init(void) {
+    pthread_key_create(&thread_key, a_th_db_data_destroy);
+}
+
+/* Log writer thread cleanup function */
+static void a_db_wal_writer_th_cleanup(void *arg) {
+    AURA_DB *db = arg;
+
+    db->th_pool[A_DB_THREAD_WAL_WRITER].status = A_DB_BG_TH_STOPPED;
+    atomic_fetch_sub(&db->ref_cnt, 1);
+}
+
+/**
+ * Log file writer
+ */
+static void *a_db_wal_writer_routine(void *arg) {
+    AURA_DB *db = arg;
+    struct timespec ts;
+    bool shutdown, timedout;
+    int rv;
+
+    /**
+     * Register thread using DB
+     * Add reference count on DB
+     */
+    atomic_store(&(db->th_pool[A_DB_THREAD_WAL_WRITER].status), A_DB_BG_TH_RUNNING);
+    atomic_fetch_add(&db->ref_cnt, 1);
+    pthread_cleanup_push(a_db_wal_writer_th_cleanup, arg);
+
+    pthread_barrier_wait(&barrier);
+
+    shutdown = false;
+    for (;;) {
+        timedout = false;
+        pthread_mutex_lock(&db->wal_writer.lock);
+        while (db->wal_writer.reqs == 0) {
+            ts.tv_sec = time(NULL) + A_DB_WAL_WRITER_INTERVAL;
+            ts.tv_nsec = 0;
+
+            rv = pthread_cond_timedwait(&db->wal_writer.cond, &db->wal_writer.lock, &ts);
+            if (rv != 0 && rv != ETIMEDOUT)
+                goto out;
+
+            if (rv == ETIMEDOUT)
+                timedout = true;
+
+            break;
+        }
+
+        if (db->wal_writer.flags & A_DB_THREAD_WAL_WRITER_SHUTDOWN)
+            shutdown = true;
+        db->wal_writer.reqs = 0;
+        pthread_mutex_unlock(&db->wal_writer.lock);
+
+        /* Perform flush if needed. */
+        pthread_mutex_lock(&db->wal.lock);
+        while (db->wal.holding_flush > 0)
+            pthread_cond_wait(&db->wal.cond, &db->wal.lock);
+
+        rv = a_db_log_flush(&db->wal, A_DB_LOG_WRITER_TIMED);
+        pthread_mutex_unlock(&db->wal.lock);
+
+        if (rv < 0 || shutdown) {
+            break;
+        }
+
+        /* Request checkpoint */
+        if (rv == 1) {
+            a_db_request_checkpoint(&db->checkpoint_ctx, A_DB_CHECKPOINT_LOG);
+        }
+    }
+
+out:
+    /* Run cleanup */
+    pthread_cleanup_pop(1);
+    return NULL;
+}
+
+static void a_db_wal_writer_shutdown(void *arg) {
+    AURA_DB *db = arg;
+    pthread_mutex_lock(&db->wal_writer.lock);
+    db->wal_writer.flags |= A_DB_THREAD_WAL_WRITER_SHUTDOWN;
+    ++db->wal_writer.reqs;
+    pthread_cond_signal(&db->wal_writer.cond);
+    pthread_mutex_unlock(&db->wal_writer.lock);
+}
+
+/* Background db writer thread cleanup function */
+static void a_db_bg_writer_th_cleanup(void *arg) {
+    AURA_DB *db = arg;
+
+    db->th_pool[A_DB_THREAD_BG_WRITER].status = A_DB_BG_TH_STOPPED;
+    atomic_fetch_sub(&db->ref_cnt, 1);
+}
+
+static void *a_db_bg_writer_routine(void *arg) {
+    AURA_DB *db = arg;
+    struct timespec ts;
+    bool shutdown, timedout = false;
+    int rv;
+
+    /**
+     * Register thread using DB
+     */
+    atomic_store(&(db->th_pool[A_DB_THREAD_BG_WRITER].status), A_DB_BG_TH_RUNNING);
+    atomic_fetch_add(&db->ref_cnt, 1);
+    pthread_cleanup_push(a_db_bg_writer_th_cleanup, arg);
+
+    pthread_barrier_wait(&barrier);
+    shutdown = false;
+    for (;;) {
+        pthread_mutex_lock(&db->bgwriter.lock);
+        while (db->bgwriter.do_work == false) {
+            ts.tv_sec = time(NULL) + A_DB_BG_WRITER_INTERVAL;
+            ts.tv_nsec = 0;
+
+            rv = pthread_cond_timedwait(&db->bgwriter.cond, &db->bgwriter.lock, &ts);
+            if (rv != 0 && rv != ETIMEDOUT)
+                goto out;
+
+            if (rv == ETIMEDOUT)
+                timedout = true;
+
+            break;
+        }
+
+        if (db->bgwriter.flags & A_DB_THREAD_BG_WRITER_SHUTDOWN)
+            shutdown = true;
+
+        db->bgwriter.do_work = false;
+        pthread_mutex_unlock(&db->bgwriter.lock);
+
+        if (a_db_write_cache_flush(db, 0) < 0)
+            break;
+
+        if (shutdown) {
+            break;
+        }
+    }
+
+out:
+    pthread_cleanup_pop(1);
+    return NULL;
+}
+
+static void a_db_bg_writer_shutdown(void *arg) {
+    AURA_DB *db = arg;
+    pthread_mutex_lock(&db->bgwriter.lock);
+    db->bgwriter.flags |= A_DB_THREAD_BG_WRITER_SHUTDOWN;
+    db->bgwriter.do_work = true;
+    pthread_cond_signal(&db->bgwriter.cond);
+    pthread_mutex_unlock(&db->bgwriter.lock);
+}
+
+static void a_db_checkpointer_shutdown(void *arg) {
+    AURA_DB *db = arg;
+    pthread_mutex_lock(&db->checkpoint_ctx.lock);
+    ++db->checkpoint_ctx.nr_of_reqs;
+    db->checkpoint_ctx.flags |= A_DB_CHECKPOINT_SHUTDOWN;
+    pthread_cond_signal(&db->checkpoint_ctx.cond);
+    pthread_mutex_unlock(&db->checkpoint_ctx.lock);
+}
+
+static void *a_db_compactor(void *arg) {
+    AURA_DB *db = arg;
+    return NULL;
+}
+
+static void a_db_compactor_shutdown(void *arg) {
+    /**/
+}
+
+static struct aura_db_th_kind a_db_thread_kinds[] = {
+#define A_THREAD_KIND(type, desc, fn, shutdown_fn) [type] = {desc, fn, shutdown_fn}
+  A_THREAD_KIND(A_DB_THREAD_WAL_WRITER, "wal writer", a_db_wal_writer_routine, a_db_wal_writer_shutdown),
+  A_THREAD_KIND(A_DB_THREAD_BG_WRITER, "bg writer", a_db_bg_writer_routine, a_db_bg_writer_shutdown),
+  A_THREAD_KIND(A_DB_THREAD_CHECKPOINTER, "check pointer", a_db_checkpointer, a_db_checkpointer_shutdown),
+  A_THREAD_KIND(A_DB_THREAD_COMPACTOR, "compactor", a_db_compactor, a_db_compactor_shutdown),
+#undef A_THREAD_KIND
+};
+
+/* Start background worker thread of type = @type */
+static int a_db_start_bg_thread(AURA_DB *db, aura_db_bg_worker_t type) {
+    struct aura_db_th *thread;
+
+    thread = &db->th_pool[type];
+    thread->wrk_type = type;
+    thread->fn = a_db_thread_kinds[type].fn;
+    thread->shutdown_fn = a_db_thread_kinds[type].shutdown_fn;
+
+    if (pthread_create(&thread->handle, NULL, thread->fn, (void *)db) != 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+/**
+ * Initialize control file and structure
+ */
+static int a_db_ctrl_init(AURA_DB *db, const char *ctrl_file, int oflag, int mode, bool init) {
+    struct aura_db_control *ctrl = &db->control;
+    struct stat s_buf;
+
+    db->ctrl_file_fd = open(ctrl_file, oflag, mode);
+    if (db->ctrl_file_fd < 0)
+        return -1;
+
+    if (fstat(db->ctrl_file_fd, &s_buf) < 0) {
+        close(db->ctrl_file_fd);
+        return -1;
+    }
+
+    /* */
+    if (s_buf.st_size == 0) {
+        ctrl->magic = A_DB_MAGIC;
+        ctrl->hash_algo = A_FNV1A_HASH_ALGO;
+        ctrl->created_ms = aura_now_ms(CLOCK_MONOTONIC);
+        ctrl->flags = 0;
+        ctrl->compact_time_ms = 0;
+        ctrl->file_size = 0;
+        ctrl->record_cnt = 0;
+        ctrl->last_rec_lsn = 0;
+        /* Fake we shutdown cleanly for the case of DB initialization, so we don't run recovery */
+        ctrl->shutdown_state = init ? A_DB_STATE_SHUTDOWN : 0;
+
+        last_checkpoint_lsn = 0;
+        last_important_lsn = 0;
+
+        for (int i = 0; i < A_DB_HASH_BUCKET_CNT; ++i)
+            ctrl->buckets[i].head_off = UINT64_MAX;
+
+        if (a_db_meta_write(db->ctrl_file_fd, ctrl, sizeof(*ctrl)) < 0) {
+            close(db->ctrl_file_fd);
+            return -1;
+        }
+    } else if (s_buf.st_size != sizeof(*ctrl)) {
+        app_debug(true, 0, "Possibly corrupted control file");
+        return -1;
+    } else {
+        if (a_db_meta_read(db->ctrl_file_fd, ctrl, sizeof(*ctrl)) < 0) {
+            close(db->ctrl_file_fd);
+            return -1;
+        }
+
+        last_checkpoint_lsn = db->control.chkpt_copy.rec_lsn;
+        last_important_lsn = last_checkpoint_lsn;
+    }
+
+    if (pthread_mutex_init(&db->ctrl_lock, NULL) != 0) {
+        close(db->ctrl_file_fd);
+        return -1;
+    }
+
+    if (pthread_cond_init(&db->ctrl_cond, NULL) != 0) {
+        pthread_mutex_destroy(&db->ctrl_lock);
+        close(db->ctrl_file_fd);
+        return -1;
+    }
+
+    return 0;
+}
+
+static void a_db_ctrl_destroy(AURA_DB *db) {
+    pthread_mutex_destroy(&db->ctrl_lock);
+    pthread_cond_destroy(&db->ctrl_cond);
+    close(db->ctrl_file_fd);
+}
+
+/**
+ * Initialize database file and structure
+ */
+static int a_db_data_init(struct aura_db_data *data, const char *data_file, int oflag, int mode) {
+    struct stat s_buf;
+
+    /* database file */
+    data->fd = open(data_file, oflag, mode);
+    if (data->fd < 0) {
+        return -1;
+    }
+
+    if (pthread_mutex_init(&data->lock, NULL) != 0) {
+        close(data->fd);
+        return -1;
+    }
+
+    return 0;
+}
+
+static void a_db_data_destroy(struct aura_db_data *data) {
+    pthread_mutex_destroy(&data->lock);
+    close(data->fd);
+}
+
+/**
+ * Initialize Log structure and Log file
+ */
+static int a_db_wal_init(struct aura_db_wal *wal, const char *wal_file, int oflag, int mode) {
+    struct stat s_buf;
+
+    /* database file */
+    wal->fd = open(wal_file, oflag, mode);
+    if (wal->fd < 0)
+        return -1;
+
+    if (pthread_mutex_init(&wal->lock, NULL) != 0) {
+        close(wal->fd);
+        return -1;
+    }
+
+    if (pthread_cond_init(&wal->cond, NULL) != 0) {
+        close(wal->fd);
+        pthread_mutex_destroy(&wal->lock);
+        return -1;
+    }
+
+    if (fstat(wal->fd, &s_buf) < 0) {
+        close(wal->fd);
+        pthread_mutex_destroy(&wal->lock);
+        pthread_cond_destroy(&wal->cond);
+        return -1;
+    }
+
+    wal->write_lsn = s_buf.st_size;
+    wal->file_sz = s_buf.st_size;
+    wal->holding_flush = 0;
+    wal->buf_off = 0;
+    glob_flushed_lsn = 0;
+
+    return 0;
+}
+
+static void a_db_log_destroy(struct aura_db_wal *wal) {
+    pthread_mutex_destroy(&wal->lock);
+    pthread_cond_destroy(&wal->cond);
+    close(wal->fd);
+}
+
+/**
+ * Initialize DB cache structure
+ */
+static int a_db_init_cache(struct aura_db_cache *cache, uint32_t write_cache_sz, uint32_t read_cache_sz) {
+    struct aura_db_write_cache *wrt_cache;
+    struct aura_db_read_cache *rd_cache;
+
+    memset(cache, 0, sizeof(*cache));
+
+    /* setup write cache */
+    wrt_cache = &cache->wrt_cache;
+
+    wrt_cache->active_idx = 0;
+    wrt_cache->write_idx = 0;
+    for (int i = 0; i < 2; ++i) {
+        wrt_cache->bufs[i].data = calloc(1, write_cache_sz);
+        if (!(wrt_cache->bufs[i].data)) {
+            if (i == 1)
+                free(cache->wrt_cache.bufs[i].data);
+            return -1;
+        }
+
+        wrt_cache->bufs[i].cap = write_cache_sz;
+        for (int j = 0; j < A_DB_HASH_BUCKET_CNT; ++j)
+            wrt_cache->bufs[i].hash_bucket[j].head_off = UINT64_MAX;
+    }
+
+    /* setup read cache */
+    rd_cache = &cache->read_cache;
+    if (pthread_rwlock_init(&rd_cache->rwlock, NULL) != 0)
+        goto err_wrt_cache;
+
+    rd_cache->buf.data = calloc(1, read_cache_sz);
+    if (!rd_cache->buf.data) {
+        pthread_rwlock_destroy(&rd_cache->rwlock);
+        goto err_wrt_cache;
+    }
+
+    rd_cache->buf.cap = read_cache_sz;
+
+    /**
+     * A cache offset starts at zero making zero
+     * a valid offset, therefore, we initialize
+     * hash entries to 'UINT64_MAX'
+     */
+    for (int i = 0; i < A_DB_HASH_BUCKET_CNT; ++i)
+        rd_cache->buf.hash_bucket[i].head_off = UINT64_MAX;
+
+    if (pthread_mutex_init(&wrt_cache->lock, NULL) != 0)
+        goto err_rd_cache;
+
+    if (pthread_cond_init(&wrt_cache->swap_cond, NULL) != 0)
+        goto err_wrt_lock;
+
+    if (pthread_cond_init(&wrt_cache->sync_cond, NULL) != 0) {
+        pthread_mutex_destroy(&wrt_cache->lock);
+        goto err_wrt_lock;
+    }
+
+    return 0;
+
+err_wrt_lock:
+    pthread_mutex_destroy(&wrt_cache->lock);
+
+err_rd_cache:
+    pthread_rwlock_destroy(&rd_cache->rwlock);
+    free(rd_cache->buf.data);
+
+err_wrt_cache:
+    for (int i = 0; i < 2; ++i)
+        free(cache->wrt_cache.bufs[i].data);
+
+    return -1;
+}
+
+/* Destroy DB cache */
+static void a_db_destroy_cache(struct aura_db_cache *cache) {
+    pthread_cond_destroy(&cache->wrt_cache.sync_cond);
+    pthread_cond_destroy(&cache->wrt_cache.swap_cond);
+    pthread_mutex_destroy(&cache->wrt_cache.lock);
+
+    for (int i = 0; i < 2; ++i)
+        free(cache->wrt_cache.bufs[i].data);
+
+    pthread_rwlock_destroy(&cache->read_cache.rwlock);
+    free(cache->read_cache.buf.data);
+}
+
+/* Initilize tx context */
+static int a_db_tx_ctx_init(struct aura_db_tx_ctx *tx_ctx) {
+    memset(tx_ctx, 0, sizeof(*tx_ctx));
+    tx_ctx->id_mask = A_DB_MAX_CONC_TX - 1;
+
+    if (pthread_mutex_init(&tx_ctx->lock, NULL) != 0)
+        return -1;
+
+    if (pthread_cond_init(&tx_ctx->wait, NULL) != 0) {
+        pthread_mutex_destroy(&tx_ctx->lock);
+        return -1;
+    }
+
+    return 0;
+};
+
+/* Destroy tx context */
+static void a_db_tx_ctx_destroy(struct aura_db_tx_ctx *tx_ctx) {
+    pthread_mutex_destroy(&tx_ctx->lock);
+    pthread_cond_destroy(&tx_ctx->wait);
+}
+
+/* Initialize checkpoint context */
+static int a_db_checkpoint_ctx_init(struct aura_db_checkpoint_ctx *c) {
+    if (pthread_mutex_init(&c->lock, NULL) != 0)
+        return -1;
+
+    if (pthread_cond_init(&c->cond, NULL) != 0) {
+        pthread_mutex_destroy(&c->lock);
+        return -1;
+    }
+
+    if (pthread_cond_init(&c->done, NULL) != 0) {
+        pthread_cond_destroy(&c->cond);
+        pthread_mutex_destroy(&c->lock);
+        return -1;
+    }
+
+    return 0;
+}
+
+/* Destroy checkpoint context */
+static void a_db_checkpoint_ctx_destroy(struct aura_db_checkpoint_ctx *c) {
+    pthread_cond_destroy(&c->cond);
+    pthread_cond_destroy(&c->done);
+    pthread_mutex_destroy(&c->lock);
+}
+
+/* Initialize log writer context */
+static int a_db_log_writer_ctx_init(struct aura_db_log_writer *lw) {
+    if (pthread_mutex_init(&lw->lock, NULL) != 0)
+        return -1;
+
+    if (pthread_cond_init(&lw->cond, NULL) != 0) {
+        pthread_mutex_destroy(&lw->lock);
+        return -1;
+    }
+
+    return 0;
+}
+
+/* Destroy log writer context */
+static void a_db_log_writer_ctx_destroy(struct aura_db_log_writer *lw) {
+    pthread_mutex_destroy(&lw->lock);
+    pthread_cond_destroy(&lw->cond);
+}
+
+/* Initialize background writer context */
+static int a_db_bg_writer_ctx_init(struct aura_db_bgwriter *bg) {
+    if (pthread_mutex_init(&bg->lock, NULL) != 0)
+        return -1;
+
+    if (pthread_cond_init(&bg->cond, NULL) != 0) {
+        pthread_mutex_destroy(&bg->lock);
+        return -1;
+    }
+
+    return 0;
+}
+
+/* Destroy background writer context */
+static void a_db_bg_writer_ctx_destroy(struct aura_db_bgwriter *bg) {
+    pthread_mutex_destroy(&bg->lock);
+    pthread_cond_destroy(&bg->cond);
+}
+
+/* Update database state */
+static inline void a_db_update_state(AURA_DB *db, int state) {
+    atomic_store(&db->state, state);
+}
+
+static AURA_DB *a_db_open(struct aura_mem_ctx *mc, const char *db_path, int oflag, int mode,
+                          uint32_t write_cache_sz, uint32_t read_cache_sz) {
+    AURA_DB *db;
+    struct stat s_buf;
+    char ctrl_file[A_DB_MAX_FILE_PATH_LEN + 32] = {0};
+    char data_file[A_DB_MAX_FILE_PATH_LEN + 32] = {0};
+    char wal_file[A_DB_MAX_FILE_PATH_LEN + 32] = {0};
+    bool init;
+    int rv;
+
+    snprintf(ctrl_file, sizeof(ctrl_file), "%s%s", db_path, AURA_DB_CONTROL_FILE);
+    snprintf(data_file, sizeof(data_file), "%s%s", db_path, AURA_DB_DATA_FILE);
+    snprintf(wal_file, sizeof(wal_file), "%s%s", db_path, AURA_DB_WAL_FILE);
+
+    /* Allocate a DB structure, and the buffers it needs. */
+    db = calloc(1, sizeof(AURA_DB));
+    if (!db)
+        return NULL;
+
+    // db->file_name = strndup(db_file, strlen(db_file));
+    // if (!db->file_name) {
+    //     free(db);
+    //     return NULL;
+    // }
+    db->mc = mc;
+    db->shutdown = false;
+    a_db_update_state(db, A_DB_STATE_STARTUP);
+
+    /* Check control file */
+    init = false;
+    if (stat(ctrl_file, &s_buf) < 0) {
+        if (errno != ENOENT)
+            return NULL;
+        init = true;
+    }
+
+    if (init) {
+        oflag |= O_CREAT | O_TRUNC | O_EXCL;
+    }
+
+    /* Setup control */
+    if (a_db_ctrl_init(db, ctrl_file, oflag, mode, init) < 0)
+        goto err_main;
+
+    /* Setup data */
+    if (a_db_data_init(&db->main, data_file, oflag, mode) < 0)
+        goto err_ctrl;
+
+    /** @todo: use different mode for WAL file */
+    /* Setup wal */
+    if (a_db_wal_init(&db->wal, wal_file, oflag, mode) < 0) {
+        goto err_log;
+    }
+
+    /* Setup cache */
+    if (a_db_init_cache(&db->cache, write_cache_sz, read_cache_sz) < 0) {
+        goto err_cache;
+    }
+
+    /* Setup transaction context */
+    if (a_db_tx_ctx_init(&db->tx_ctx) < 0) {
+        goto err_tx;
+    }
+
+    /* Checkpointer */
+    if (a_db_checkpoint_ctx_init(&db->checkpoint_ctx) < 0)
+        goto err_chkpt;
+
+    /* Log writer */
+    if (a_db_log_writer_ctx_init(&db->wal_writer) < 0)
+        goto err_logwrt;
+
+    /* Bg writer */
+    if (a_db_bg_writer_ctx_init(&db->bgwriter) < 0)
+        goto err_bgwrt;
+
+    return db;
+
+err_bgwrt:
+    a_db_log_writer_ctx_destroy(&db->wal_writer);
+
+err_logwrt:
+    a_db_checkpoint_ctx_destroy(&db->checkpoint_ctx);
+
+err_chkpt:
+    a_db_tx_ctx_destroy(&db->tx_ctx);
+
+err_tx:
+    a_db_destroy_cache(&db->cache);
+
+err_cache:
+    a_db_log_destroy(&db->wal);
+
+err_log:
+    a_db_data_destroy(&db->main);
+
+err_ctrl:
+    a_db_ctrl_destroy(db);
+
+err_main:
+    free((void *)db->file_name);
+    free(db);
+    return NULL;
 }
 
 /*
  * Open or create a database.  Structured kind of similar to open(2).
  */
-AURA_DBHANDLE aura_db_open(struct aura_mem_ctx *mc, const char *db_file,
-                           const char *wal_file, int oflag, ...) {
+AURA_DBHANDLE aura_db_open(struct aura_mem_ctx *mc, const char *db_path) {
     AURA_DB *db;
-    int db_namelen, mode;
-    size_t bucket_arr_size;
-    struct stat statbuf;
-    char *db_dir, db_path_cpy[1024];
 
-    /* Allocate a DB structure, and the buffers it needs. */
-    db_namelen = strlen(db_file);
-    db = a_db_alloc(db_namelen);
+    db = a_db_open(
+      mc,
+      db_path,
+      O_RDWR,
+      A_DB_FILE_MODE,
+      A_DB_WRITE_CACHE_BUF_SZ,
+      A_DB_READ_CACHE_BUF_SZ);
     if (!db)
-        sys_exit(true, errno, "aura_db_open error");
+        return NULL;
 
-    db->mc = mc;
-    strcpy(db->name, db_file);
-
-    if (pthread_mutex_init(&db->db_lock, NULL) != 0)
-        goto err_close;
-
-    if (pthread_cond_init(&db->db_cond, NULL) != 0)
-        goto err_close;
-
-    if (pthread_mutex_init(&db->writer_queue.mutex, NULL) != 0)
-        goto err_close;
-
-    if (pthread_cond_init(&db->writer_queue.cond, NULL) != 0)
-        goto err_close;
-
-    va_list ap;
-
-    va_start(ap, oflag);
-    mode = va_arg(ap, int);
-    va_end(ap);
-
-    /* init writer queue */
-    aura_list_head_init(&db->writer_queue.db_list);
-
-    /* database file */
-    db->db_fd = a_db_file_open(db_file, &oflag, mode);
-    if (db->db_fd < 0)
-        goto err_close;
-
-    /* wal file */
-    db->wal_fd = a_db_file_open(wal_file, &oflag, mode);
-    if (db->wal_fd < 0)
-        goto err_close;
-
-    bucket_arr_size = sizeof(struct aura_db_bucket_entry) * A_DB_BUCKET_CNT;
-    size_t file_size = sizeof(struct aura_db_hdr) + bucket_arr_size;
-    if ((oflag & (O_CREAT | O_TRUNC)) == (O_CREAT | O_TRUNC)) {
-        if (fstat(db->db_fd, &statbuf) < 0)
-            sys_exit(true, errno, "db_open: fstat error");
-
-        if (statbuf.st_size == 0) {
-            /* Initialize db header */
-            a_db_headers_init(db, file_size);
-
-            /* Store current file size */
-            db->curr_file_size = file_size;
-
-            struct iovec hdr, bucket;
-            hdr.iov_base = &db->db_file_hdr;
-            hdr.iov_len = sizeof(struct aura_db_hdr);
-            bucket.iov_base = db->buckets;
-            bucket.iov_len = bucket_arr_size;
-
-            if (a_db_meta_write(db->db_fd, &hdr, &bucket) <= 0)
-                sys_exit(true, errno, "db_open: db file init write error");
-
-            hdr.iov_base = &db->wal_file_hdr;
-            hdr.iov_len = sizeof(struct aura_db_wal_hdr);
-            bucket.iov_base = NULL;
-            bucket.iov_len = 0;
-
-            if (a_db_meta_write(db->wal_fd, &hdr, &bucket) <= 0)
-                sys_exit(true, errno, "db_open: db file init write error");
+    /* Check if we should boot in recovery */
+    if (db->control.shutdown_state != A_DB_STATE_SHUTDOWN) {
+        if (a_db_replay(db) < 0) {
+            app_debug(true, 0, "Failed to boot recovery");
+            return NULL;
         }
-    } else {
-        /* read db hdr and buckets into their buffers */
-        if (lseek(db->db_fd, 0, SEEK_SET) < 0)
-            goto err_close;
-
-        struct iovec hdr_iov, bucket_iov;
-
-        /* Read db header */
-        hdr_iov.iov_base = &db->db_file_hdr;
-        hdr_iov.iov_len = sizeof(struct aura_db_hdr);
-        bucket_iov.iov_base = db->buckets;
-        bucket_iov.iov_len = bucket_arr_size;
-        if (a_db_meta_read(db->db_fd, &hdr_iov, &bucket_iov) <= 0)
-            goto err_close;
-
-        /* Read wal header */
-        hdr_iov.iov_base = &db->wal_file_hdr;
-        hdr_iov.iov_len = sizeof(struct aura_db_wal_hdr);
-        bucket_iov.iov_base = NULL;
-        bucket_iov.iov_len = 0;
-        if (a_db_meta_read(db->wal_fd, &hdr_iov, &bucket_iov) <= 0) {
-            goto err_close;
-        }
-
-        /* Store current file size */
-        db->curr_file_size = db->db_file_hdr.file_size;
     }
 
-    a_db_rewind(db->db_fd);
+    a_db_update_state(db, A_DB_STATE_RUNNING);
+
+    /* Initialize pthread key for thread specific data */
+    pthread_once(&th_key_init_done, a_db_th_key_init);
+
+    /**
+     * We would want to wait for all threads to start before
+     * we return, this is because we would want routines
+     * that depend on some particular threads starting do
+     * error as a result of the thread missing on the entity
+     * the thread sets up is still uninitialized
+     */
+    pthread_barrier_init(&barrier, NULL, A_DB_NR_THREADS + 1); /* +1 for main*/
+
+    a_db_start_bg_thread(db, A_DB_THREAD_BG_WRITER);
+    a_db_start_bg_thread(db, A_DB_THREAD_WAL_WRITER);
+    a_db_start_bg_thread(db, A_DB_THREAD_CHECKPOINTER);
+
+    /**
+     * We wait for all threads to start before returning
+     */
+    pthread_barrier_wait(&barrier);
+
+    /* Open for business */
     return db;
-
-err_close:
-    a_db_free(db);
-    return NULL;
 }
 
-/*
- * Free up a DB structure, and all the malloc'ed buffers it
- * may point to.  Also close the file descriptors if still open.
+void _a_db_close(AURA_DB *db) {
+    a_db_data_destroy(&db->main);
+    a_db_log_destroy(&db->wal);
+    a_db_destroy_cache(&db->cache);
+    a_db_checkpoint_ctx_destroy(&db->checkpoint_ctx);
+    a_db_log_writer_ctx_destroy(&db->wal_writer);
+    a_db_bg_writer_ctx_destroy(&db->bgwriter);
+}
+
+/**
+ * Wait for active transactions to finish
  */
-static void a_db_free(AURA_DB *db) {
-    if (db->db_fd > 0)
-        close(db->db_fd);
-    if (db->wal_fd > 0)
-        close(db->wal_fd);
+static void a_db_finalize_active_transactions(AURA_DB *db) {
+    struct timespec ts;
+    uint64_t timeout;
+    int rv;
 
-    if (db->name != NULL)
-        free(db->name);
-    if (db->buckets)
-        free(db->buckets);
-    if (db->record_buf)
-        free(db->record_buf);
+    pthread_mutex_lock(&db->tx_ctx.lock);
+    aura_now_ts(&ts, CLOCK_MONOTONIC);
+    ts.tv_sec = time(NULL) + 1;
+    ts.tv_sec = 0;
+    timeout = ts.tv_sec;
 
-    pthread_cond_destroy(&db->db_cond);
-    pthread_mutex_destroy(&db->db_lock);
-    pthread_cond_destroy(&db->writer_queue.cond);
-    pthread_mutex_destroy(&db->writer_queue.mutex);
-    free(db);
+    while (aura_bitmap_find_next_bit(db->tx_ctx.tx_tab_map, 0, A_DB_MAX_CONC_TX) != A_DB_MAX_CONC_TX) {
+        rv = pthread_cond_timedwait(&db->tx_ctx.wait, &db->tx_ctx.lock, &ts);
+        if (rv == ETIMEDOUT)
+            break;
+
+        /**
+         * In the case where a signal happens to fire at
+         * same time as the timeout. The signal takes
+         * precedence and the timeout is lost. So we do a manual
+         * check for that case.
+         */
+        if (time(NULL) - timeout > A_DB_GRACEFUL_SHUTDOWN_TIMEOUT)
+            break;
+    }
+
+    /* Abort current active transactions if timeout */
+    if (aura_bitmap_find_next_bit(db->tx_ctx.tx_tab_map, 0, A_DB_MAX_CONC_TX) != A_DB_MAX_CONC_TX) {
+        uint64_t i = aura_bitmap_find_next_bit(db->tx_ctx.tx_tab_map, 0, A_DB_MAX_CONC_TX);
+        for (; i != A_DB_MAX_CONC_TX;) {
+            db->tx_ctx.tx_tab[i].abort = true;
+            i = aura_bitmap_find_next_bit(db->tx_ctx.tx_tab_map, i, A_DB_MAX_CONC_TX);
+        }
+    }
+    pthread_mutex_unlock(&db->tx_ctx.lock);
+
+    /* Freeze anymore new work requests to the db */
+    a_db_update_state(db, A_DB_STATE_STORAGE_SYNC);
+}
+
+/* Request a checkpoint */
+static inline void a_db_request_checkpoint(struct aura_db_checkpoint_ctx *c, int flags) {
+    pthread_mutex_lock(&c->lock);
+    c->ckpt_done = false;
+    ++c->nr_of_reqs;
+    c->flags |= flags;
+    pthread_cond_signal(&c->cond);
+    pthread_mutex_unlock(&c->lock);
 }
 
 /*
- * Relinquish access to the database.
+ * Close and destroy DB resources
  */
 void aura_db_close(AURA_DBHANDLE _db) {
-    AURA_DB *db;
+    AURA_DB *db = _db;
+    uint32_t idx;
+    int shutdown_mode = A_DB_SHUTDOWN_GRACEFUL;
+    int timeout;
 
-    db = (AURA_DB *)_db;
-    pthread_mutex_lock(&db->writer_queue.mutex);
-    db->shutdown = true;
-    pthread_cond_signal(&db->writer_queue.cond);
-    pthread_mutex_unlock(&db->writer_queue.mutex);
+    a_db_update_state(db, A_DB_STATE_QUIESCING);
 
-    a_db_wal_replay(db);
-    a_db_free(db);
-}
-
-void aura_db_record_free(struct aura_db_rec *rec) {
-    if (!rec)
-        return;
-
-    aura_free(rec->data.base);
-}
-
-static inline off_t a_db_record_append(int fd, struct aura_db_rec_hdr *rec_hdr,
-                                       void *key, void *data, off_t start_offset) {
-    struct iovec iov[4];
-    off_t offset;
-    ssize_t written;
-    size_t pad_len;
-    static const uint64_t db_zero = 0;
-
-    iov[0].iov_base = rec_hdr;
-    iov[0].iov_len = sizeof(*rec_hdr);
-    iov[1].iov_base = key;
-    iov[1].iov_len = rec_hdr->key_len;
-    iov[2].iov_base = data;
-    iov[2].iov_len = rec_hdr->data_len;
-
-    pad_len = rec_hdr->rec_len.aligned_len - rec_hdr->rec_len.raw_len;
-    char pad[pad_len];
-    memset(pad, 0, pad_len);
-    iov[3].iov_base = (void *)pad;
-    iov[3].iov_len = pad_len;
-
-    /* Append the record */
-    if (start_offset == 0) {
-        offset = lseek(fd, 0, SEEK_END);
-    } else {
-        offset = lseek(fd, start_offset, SEEK_SET);
+    /* Allow active transactions to finish */
+    if (shutdown_mode == A_DB_SHUTDOWN_GRACEFUL) {
+        a_db_finalize_active_transactions(db);
     }
-    if (offset < 0)
-        return offset;
 
-    written = writev(fd, iov, 4);
-    if (written != rec_hdr->rec_len.aligned_len)
+    /* shutdown background writer thread */
+    db->th_pool[A_DB_THREAD_BG_WRITER].shutdown_fn(db);
+
+    /* shutdown wal writer  thread */
+    db->th_pool[A_DB_THREAD_WAL_WRITER].shutdown_fn(db);
+
+    /**
+     * Run final checkpoint
+     * Checkpointer caches and forces syncing manually.
+     * It also updates the control file, so order of shutting
+     * down the other threads should not affect the db.
+     */
+    a_db_request_checkpoint(&db->checkpoint_ctx, A_DB_CHECKPOINT_SHUTDOWN);
+
+    /* Wait for checkpoint */
+    pthread_mutex_lock(&db->checkpoint_ctx.lock);
+    while (!db->checkpoint_ctx.ckpt_done) {
+        pthread_cond_wait(&db->checkpoint_ctx.done, &db->checkpoint_ctx.lock);
+    }
+    pthread_mutex_unlock(&db->checkpoint_ctx.lock);
+
+    /* Stop workers */
+    // for (int i = 0; i < A_DB_TH_CNT; ++i)
+    //     if (db->th_pool[i].status == A_DB_BG_TH_RUNNING) {
+    //         db->th_pool[i].shutdown_fn(db);
+    //     }
+
+    while (db->ref_cnt > 0) {
+        sleep(0.25);
+    }
+
+out:
+    _a_db_close(db);
+    pthread_barrier_destroy(&barrier);
+    // free((void *)db->file_name);
+    free(_db);
+}
+
+enum {
+    A_DB_REQ_OK,
+    A_DB_REQ_REJECTED,
+    A_DB_REQ_ABORT
+};
+/**
+ * Determine if the database can accept a
+ * new work request
+ */
+static int a_db_can_accept_req(AURA_DB *db, int64_t tx_id, int32_t tx_idx) {
+    struct aura_db_tx_tab_ent *g_tx;
+    int db_state = atomic_load(&db->state);
+    int rv;
+
+    switch (db_state) {
+    case A_DB_STATE_RUNNING:
+        return A_DB_REQ_OK;
+
+    case A_DB_STATE_QUIESCING:
+        /* Reject brand new work */
+        if (tx_id == -1 || tx_id == -1)
+            return A_DB_REQ_REJECTED;
+
+        pthread_mutex_lock(&db->tx_ctx.lock);
+        g_tx = &db->tx_ctx.tx_tab[tx_idx];
+        /* This invariant must hold unless the code becomes flawed */
+        A_BUG_ON_2(tx_id != g_tx->id, true);
+
+        if (g_tx->abort)
+            rv = A_DB_REQ_ABORT;
+        else if (g_tx->state == A_DB_TX_IN_PROGRESS)
+            rv = A_DB_REQ_OK;
+        else
+            rv = A_DB_REQ_REJECTED;
+        pthread_mutex_unlock(&db->tx_ctx.lock);
+        return rv;
+
+    default:
+        return A_DB_REQ_REJECTED;
+    }
+}
+
+/**
+ * Reset thread specific data for a new context
+ */
+static inline void a_db_reset_th_data(struct aura_db_th_data *th_data) {
+    struct aura_sliding_buf *buf;
+    th_data->glob_tx_idx = -1;
+
+    if (th_data->tx.flags & A_DB_TX_FL_MR) {
+        // while (!aura_list_is_empty(&th_data->tx.buf_list)) {
+        //     /* Destroy chained sliding buf */
+        //     a_list_dequeue(buf, &th_data->tx.buf_list, allocated.link);
+        //     aura_sliding_buf_destroy(buf);
+        // }
+        aura_sliding_buf_destroy(&th_data->tx.priv_buf);
+    }
+
+    th_data->tx.rdata_cnt = 0;
+    th_data->tx.reserved_off = 0;
+    th_data->tx.rec_cnt = 0;
+    th_data->tx.rec_len = 0;
+    th_data->tx.flags = A_DB_TX_FL_NIL;
+    th_data->tx.id = -1;
+    th_data->tx.state = A_DB_TX_NIL;
+}
+
+/** Construct DB record header */
+static inline int64_t a_db_rec_hdr_init(AURA_DB *db, struct aura_db_rec_hdr *rec_hdr,
+                                        ns_t namespace, schema_id_t schema_id, txid_t tx_id,
+                                        lsn_t prev_tx_rec, struct aura_iovec *key,
+                                        struct aura_iovec *data, uint16_t flags) {
+    uint32_t hash, old_head;
+    struct aura_iovec checksum;
+
+    hash = a_fnv1a_hash(A_DB_HASH_BUCKET_CNT, namespace, key);
+    /** @todo: acquire lock to read old_head, no need since I update it when writing record */
+    // old_head = atomic_load(&(db->main.db_hdr.buckets[hash].head_off));
+
+    rec_hdr->magic = A_DB_REC_MAGIC;
+    rec_hdr->ns = namespace;
+    rec_hdr->flags = flags;
+    rec_hdr->schema_id = schema_id;
+    rec_hdr->prev_off = old_head;
+    rec_hdr->tx_id = tx_id;
+    rec_hdr->prev_tx_rec_off = prev_tx_rec;
+    rec_hdr->timestamp_ms = aura_now_ms(CLOCK_MONOTONIC);
+    rec_hdr->key_len = key->len;
+    rec_hdr->hash = hash;
+
+    if (data) {
+        rec_hdr->data_len = data->len;
+        rec_hdr->rec_len = a_get_db_record_len(key->len, data->len);
+        checksum.base = rec_hdr->checksum;
+
+        if (aura_calculate_digest(data, &checksum) < 0) {
+            app_debug(true, 0, "a_db_init_rec_hdr: aura_calculate_digest error");
+            return -1;
+        }
+    } else {
+        rec_hdr->data_len = 0;
+        rec_hdr->rec_len = a_get_db_record_len(key->len, 0);
+    }
+
+    return 0;
+}
+
+/* Initialize log record header */
+static inline void a_db_wal_rec_hdr_init(struct aura_db_wal_rec_hdr *wal_rec_hdr, int wal_type,
+                                         struct aura_db_rec_hdr *rec_hdr, uint8_t db_op) {
+    wal_rec_hdr->type = wal_type;
+    wal_rec_hdr->tx_id = rec_hdr->tx_id;
+    wal_rec_hdr->op = db_op;
+    wal_rec_hdr->rec_len = A_ALIGN(sizeof(*wal_rec_hdr) + rec_hdr->rec_len.aligned_len, 8);
+    wal_rec_hdr->magic = 0;
+}
+
+/* Get slot in active transaction table */
+static inline void a_db_tx_tab_get_active_slot_idx(AURA_DB *db, uint64_t *idx, uint64_t *tx_id) {
+    uint64_t _idx;
+
+    pthread_mutex_lock(&db->tx_ctx.lock);
+
+    _idx = aura_bitmap_find_next_empty_bit(db->tx_ctx.tx_tab_map, 0, A_DB_MAX_CONC_TX);
+    while (_idx == A_DB_MAX_CONC_TX) {
+        pthread_cond_wait(&db->tx_ctx.wait, &db->tx_ctx.lock);
+        /** @todo: check tx timeout */
+        _idx = aura_bitmap_find_next_bit(db->tx_ctx.tx_tab_map, 0, A_DB_MAX_CONC_TX);
+    }
+
+    aura_bitmap_set_bit(_idx, db->tx_ctx.tx_tab_map);
+    /* Store slot index and tx id */
+    *idx = _idx;
+    *tx_id = db->tx_ctx.next_id;
+
+    db->tx_ctx.next_id = (db->tx_ctx.next_id + 1) & db->tx_ctx.id_mask;
+
+    pthread_mutex_unlock(&db->tx_ctx.lock);
+}
+
+/**
+ * Assign a true transaction ID for this
+ * transaction. Previous transaction ID
+ * was a virtual ID from the specific thread
+ */
+static inline void a_db_tx_promote(AURA_DB *db, struct aura_db_th_data *th_data) {
+    struct aura_db_tx_tab_ent *e;
+    struct aura_db_tx *tx;
+    uint64_t idx, tx_id;
+
+    A_BUG_ON_2(th_data->glob_tx_idx != -1, true);
+    tx = &th_data->tx;
+    A_BUG_ON_2((tx->flags & A_DB_TX_FL_VIRT) == 0, true);
+
+    a_db_tx_tab_get_active_slot_idx(db, &idx, &tx_id);
+    e = &db->tx_ctx.tx_tab[idx];
+    e->thread_id = th_data->th_id;
+    e->state = tx->state;
+    e->id = tx_id;
+
+    th_data->glob_tx_idx = idx;
+    /* remove virtual tx flag */
+    tx->flags = tx->flags & ~A_DB_TX_FL_VIRT;
+    tx->id = tx_id;
+}
+
+/**
+ * Resets cache buffer.
+ */
+static inline void a_db_reset_cache_buf(struct aura_db_cache_buf *buf) {
+    buf->size = 0;
+    buf->flags = 0;
+    memset(buf->data, 0, buf->cap);
+    for (int i = 0; i < A_DB_HASH_BUCKET_CNT; ++i)
+        buf->hash_bucket[i].head_off = UINT64_MAX;
+}
+
+/**
+ * Add record to read cache
+ * Cache write lock must be held before
+ * calling this function
+ */
+static int a_db_read_cache_insert(struct aura_db_read_cache *cache, struct aura_db_rec_hdr *rec_hdr,
+                                  struct aura_iovec *key, struct aura_iovec *data) {
+    uint64_t next_append_off;
+    uint64_t prev_rec_cache_off;
+
+    /**
+     * Because the hash bucket chain is updated on
+     * checkpoint, this records previous off in the chain
+     * is correctly updated before adding it to the
+     * permanent DB. Since we always read the correct prev off
+     * from file, we can use the cache records cache offset to
+     * create a correct cache chain as this will not touch the real
+     * file prev off associated with this record.
+     */
+    prev_rec_cache_off = cache->buf.hash_bucket[rec_hdr->hash].head_off;
+    next_append_off = cache->buf.size + rec_hdr->rec_len.aligned_len;
+
+    /**
+     * Bypass huge records that can not all fit in cache
+     */
+    if (rec_hdr->rec_len.aligned_len > A_DB_CACHE_SIZE) {
+        return 0;
+    }
+
+    /**
+     * If cummulative records can't fit in cache
+     * Simplest way is to reset cache currently.
+     */
+    if (next_append_off > A_DB_CACHE_SIZE) {
+        a_db_reset_cache_buf(&cache->buf);
+        /**
+         * If cache is reset, the previous record
+         * should point to an empty slot.
+         */
+        prev_rec_cache_off = UINT64_MAX;
+    }
+
+    char *write_ptr = cache->buf.data + cache->buf.size;
+    memcpy(write_ptr, rec_hdr, sizeof(*rec_hdr));
+
+    /* key offset */
+    write_ptr += sizeof(*rec_hdr);
+    memcpy(write_ptr, key->base, rec_hdr->key_len);
+
+    if (data) {
+        /* data offset */
+        write_ptr += rec_hdr->key_len;
+        memcpy(write_ptr, data->base, data->len);
+    }
+
+    // rec_hdr->prev_off = prev_rec_off;
+    rec_hdr->prev_cache_off = prev_rec_cache_off;
+    cache->buf.hash_bucket[rec_hdr->hash].head_off = cache->buf.size;
+    cache->buf.size += rec_hdr->rec_len.aligned_len;
+
+    return 0;
+}
+
+/**
+ * Reserve space in the WAL buffer
+ * Returns start append position in WAL buffer
+ * Must be called while holding the wal lock
+ * to avoid concurrency issues
+ */
+static inline uint64_t aura_db_wal_buf_reserve(struct aura_db_wal *wal, size_t len) {
+    uint64_t off = wal->buf_off;
+    wal->buf_off += len;
+    return off;
+}
+
+/**
+ * Append the staged transaction data to WAL buffer.
+ * This function does not touch the stored data that
+ * is private to the buffer.
+ * Returns the insert offset of the record
+ */
+static off_t a_db_log_buf_append(AURA_DB *db, struct aura_db_tx *tx) {
+    uint64_t buf_len; /* available cache len */
+    uint64_t bytes_to_write, written, chunk, off;
+    off_t rec_lsn;
+    const uint8_t *src;
+    bool did_reserve = false;
+    struct aura_db_wal *wal = &db->wal;
+
+    /* Try and reserve log buffer space */
+    pthread_mutex_lock(&wal->lock);
+    rec_lsn = wal->write_lsn;
+
+    /* Update the lsn */
+    last_important_lsn = rec_lsn;
+
+    wal->write_lsn += tx->rec_len;
+    buf_len = A_WAL_BUF_SZ - wal->buf_off;
+
+    if (buf_len >= tx->rec_len) {
+        tx->reserved_off = aura_db_wal_buf_reserve(wal, tx->rec_len);
+        did_reserve = true;
+        wal->holding_flush++;
+    }
+    pthread_mutex_unlock(&wal->lock);
+
+    if (did_reserve) {
+        /**
+         * Reserved wal buffer space should correctly
+         * accomodate all WAL fragments
+         */
+        for (int i = 0; i < tx->rdata_cnt; ++i) {
+            bytes_to_write = tx->rdata[i].len;
+            src = tx->rdata[i].data;
+
+            memcpy(wal->cache_buf + tx->reserved_off, src, bytes_to_write);
+            tx->reserved_off += bytes_to_write;
+        }
+
+        /**
+         * Permit flush to execute, and wake
+         * up anybody waiting to flush the buffer
+         */
+        pthread_mutex_lock(&wal->lock);
+        wal->holding_flush--;
+        pthread_cond_signal(&wal->cond);
+        pthread_mutex_unlock(&wal->lock);
+    } else {
+        int rv = 0;
+
+        /**
+         * Long path, hold the WAL lock, append
+         * to WAL buffer and flush, since we are flushing,
+         * wait for all thread to write their reserved spaces
+         * so we don't get a possible data corruption
+         */
+        pthread_mutex_lock(&wal->lock);
+        while (wal->holding_flush > 0)
+            pthread_cond_wait(&wal->cond, &wal->lock);
+
+        for (int i = 0; i < tx->rdata_cnt; ++i) {
+            bytes_to_write = tx->rdata[i].len;
+            src = tx->rdata[i].data;
+            written = 0;
+
+            while (written < bytes_to_write) {
+                buf_len = A_WAL_BUF_SZ - wal->buf_off;
+                if (buf_len == 0) {
+                    rv = a_db_log_flush(wal, A_DB_LOG_WRITER_FORCE);
+                    if (rv < 0)
+                        return -1;
+
+                    continue;
+                }
+
+                chunk = a_min(bytes_to_write, buf_len);
+                memcpy(wal->cache_buf + wal->buf_off, src + written, chunk);
+                wal->buf_off += chunk;
+                written += chunk;
+            }
+        }
+        pthread_mutex_unlock(&wal->lock);
+
+        /* Request checkpoint if buffer size is adequate */
+        if (rv == 1) {
+            pthread_mutex_lock(&db->checkpoint_ctx.lock);
+            ++db->checkpoint_ctx.nr_of_reqs;
+            db->checkpoint_ctx.flags |= A_DB_CHECKPOINT_LOG;
+            pthread_mutex_unlock(&db->checkpoint_ctx.lock);
+            pthread_cond_signal(&db->checkpoint_ctx.cond);
+        }
+    }
+
+    /**
+     * ASYNC mode return immediately and
+     * do not wait for record to make it to
+     * disk
+     */
+    if (tx->flags & A_DB_TX_FL_ASYNC)
+        return rec_lsn;
+
+    /* Wait for record to be flushed to disk */
+    pthread_mutex_lock(&wal->lock);
+    while (glob_flushed_lsn < rec_lsn)
+        pthread_cond_wait(&wal->cond, &wal->lock);
+    pthread_mutex_unlock(&wal->lock);
+
+    return rec_lsn;
+}
+
+static int a_db_tx_stage_data(struct aura_db_tx *tx, const void *data_ptr, uint32_t len) {
+    struct aura_db_rdata *slot;
+
+    if (tx->rdata_cnt > A_DB_MAX_TX_REC_CNT) {
+        /* Too many WAL rec fragments */
+        return -1;
+    }
+
+    slot = &tx->rdata[tx->rdata_cnt++];
+    slot->data = data_ptr;
+    slot->len = len;
+
+    return 0;
+}
+
+/**
+ * stage record data in transaction context
+ */
+static inline int a_db_stage_rec(struct aura_db_tx *tx, struct aura_db_wal_rec_hdr *wal_hdr,
+                                 struct aura_db_rec_hdr *rec_hdr, struct aura_iovec *key,
+                                 struct aura_iovec *data) {
+    if (a_db_tx_stage_data(tx, (void *)wal_hdr, sizeof(*wal_hdr)) < 0)
         return -1;
 
-    return offset;
+    if (a_db_tx_stage_data(tx, (void *)rec_hdr, sizeof(*rec_hdr)) < 0)
+        return -1;
+
+    if (a_db_tx_stage_data(tx, (void *)key->base, key->len) < 0)
+        return -1;
+
+    /* Records can lack the data when it's a delete record */
+    if (data && a_db_tx_stage_data(tx, (void *)data->base, data->len) < 0)
+        return -1;
+
+    return 0;
 }
 
-static inline struct aura_db_rec_hdr *a_db_record_cache_fetch(AURA_DB *db, uint16_t namespace,
-                                                              uint16_t schema_id, struct aura_iovec *key,
-                                                              off_t offset, uint32_t hash) {
-    struct aura_db_rec_hdr *rec_hdr;
-    ssize_t res;
-    off_t cache_offset;
-    const char *key_buf;
+/**
+ * Spill data stored in private tx buffers into the WAL buffer.
+ * This function does not touch the staged data at all, and
+ * only works with private stored record data
+ */
+static int a_db_tx_spill_to_wal_buf(struct aura_db_wal *wal, struct aura_db_tx *tx) {
+    uint64_t wbuf_len; /* available cache len */
+    uint64_t bytes_to_write, written, chunk, off;
+    // struct aura_sliding_buf *buf;
+    const uint8_t *src;
+    bool did_reserve = false;
+    int rv = 0;
 
-    while (offset >= db->curr_file_size) {
-        cache_offset = offset - db->curr_file_size;
-        rec_hdr = db->record_buf + cache_offset;
+    // A_BUG_ON_2(aura_list_is_empty(&tx->buf_list), true);
+    A_BUG_ON_2(aura_sliding_buf_is_empty(&tx->priv_buf), true);
+
+    /* Try and reserve wal buffer space */
+    pthread_mutex_lock(&wal->lock);
+    /* Update the lsn */
+    wal->write_lsn += tx->rec_len;
+    wbuf_len = A_WAL_BUF_SZ - wal->buf_off;
+    if (wbuf_len >= tx->rec_len) {
+        tx->reserved_off = aura_db_wal_buf_reserve(wal, tx->rec_len);
+        did_reserve = true;
+        wal->holding_flush++;
+    }
+    pthread_mutex_unlock(&wal->lock);
+
+    if (did_reserve) {
+        // a_list_for_each(buf, &tx->buf_list, allocated.link) {
+        bytes_to_write = aura_sliding_buf_read_len(&tx->priv_buf);
+        src = aura_sliding_buf_read_ptr(&tx->priv_buf);
+
+        /**
+         * Copy to WAL buffer starting at the reserved byte (tx->start_off)
+         */
+        memcpy(wal->cache_buf + tx->reserved_off, src, bytes_to_write);
+        //     tx->reserved_off += bytes_to_write;
+        // }
+
+        /**
+         * Permit flush to execute, and wake
+         * up anybody waiting to flush the buffer
+         */
+        pthread_mutex_lock(&wal->lock);
+        --(wal->holding_flush);
+        pthread_cond_signal(&wal->cond);
+        pthread_mutex_unlock(&wal->lock);
+    } else {
+        /**
+         * Long path, hold the WAL lock, append
+         * to WAL buffer and flush, since we are flushing,
+         * wait for all thread to write their reserved spaces
+         * so we don't get a possible data corruption
+         */
+        pthread_mutex_lock(&wal->lock);
+        while (wal->holding_flush > 0)
+            pthread_cond_wait(&wal->cond, &wal->lock);
+
+        // a_list_for_each(buf, &tx->buf_list, allocated.link) {
+        bytes_to_write = aura_sliding_buf_read_len(&tx->priv_buf);
+        src = aura_sliding_buf_read_ptr(&tx->priv_buf);
+        written = 0;
+
+        while (written < bytes_to_write) {
+            wbuf_len = A_WAL_BUF_SZ - wal->buf_off;
+            if (wbuf_len == 0) {
+                rv = a_db_log_flush(wal, A_DB_LOG_WRITER_FORCE);
+                if (rv < 0) {
+                    break;
+                }
+                continue;
+            }
+
+            chunk = a_min(bytes_to_write, wbuf_len);
+            memcpy(wal->cache_buf + wal->buf_off, src + written, chunk);
+            wal->buf_off += chunk;
+            written += chunk;
+        }
+        // }
+
+        pthread_mutex_unlock(&wal->lock);
+    }
+
+    /* Remove private data flag */
+    tx->flags &= ~A_DB_TX_FL_PRIV_DATA;
+    /* let thread data reset cleanup the private buffers */
+
+    return rv;
+}
+
+static void a_db_init_tx(AURA_DB *db, struct aura_db_th_data *th_data,
+                         int tx_kind, uint64_t timeout, int flags) {
+    struct aura_db_tx *tx = &th_data->tx;
+
+    th_data->glob_tx_idx = -1;
+    tx->id = A_DB_NIL_TX_ID;
+    tx->kind = tx_kind;
+    tx->ttl = timeout;
+    tx->flags = flags | A_DB_TX_FL_VIRT;
+    tx->max_priv_data_sz = A_DB_TX_PRIVATE_DATA_SZ;
+
+    // aura_list_head_init(&tx->buf_list);
+    tx->timestamp = aura_now_ms(CLOCK_MONOTONIC);
+}
+
+/**
+ * Begin multi record transcation
+ */
+int aura_db_transaction_begin(AURA_DBHANDLE _db, int tx_type, uint64_t timeout) {
+    AURA_DB *db = _db;
+    struct aura_db_th_data *th_data = pthread_getspecific(thread_key);
+    /**
+     * First invocation, create the thread data
+     */
+    if (!th_data) {
+        th_data = calloc(1, sizeof(*th_data));
+        if (!th_data)
+            return -1;
+    } else {
+        A_BUG_ON_2(th_data->glob_tx_idx != -1, true);
+        A_BUG_ON_2(th_data->tx.flags != A_DB_TX_FL_NIL, true);
+        A_BUG_ON_2(th_data->tx.state != A_DB_TX_NIL, true);
+    }
+
+    int flags = A_DB_TX_FL_MR | A_DB_TX_FL_SYNC | A_DB_TX_FL_PRIV_DATA;
+    a_db_init_tx(db, th_data, tx_type, timeout, flags);
+
+    pthread_setspecific(thread_key, (void *)th_data);
+
+    return 0;
+}
+
+int aura_db_transaction_commit(AURA_DBHANDLE _db) {
+    struct aura_db_th_data *th_data;
+    struct aura_db_tx *tx;
+    struct aura_db_commit rec;
+    struct aura_db_rec_hdr rec_hdr;
+    struct aura_db_wal_rec_hdr wal_rec_hdr;
+    AURA_DB *db = _db;
+    bool has_private_data = false;
+    char commit_key[64];
+
+    th_data = pthread_getspecific(thread_key);
+    A_BUG_ON_2(!th_data, true);
+
+    tx = &th_data->tx;
+    memset(commit_key, 0, sizeof(commit_key));
+    snprintf(commit_key, sizeof(commit_key), "tx:%ld", tx->id);
+
+    rec.rec_cnt = tx->rec_cnt;
+    rec.tx_id = tx->id;
+    rec.state = A_DB_TX_COMMITTED;
+
+    struct aura_iovec c_key = {
+      .base = commit_key,
+      .len = strlen(commit_key),
+    };
+
+    struct aura_iovec c_data = {
+      .base = (char *)&rec,
+      .len = sizeof(rec),
+    };
+
+    if (a_db_rec_hdr_init(
+          db,
+          &rec_hdr,
+          A_DB_TX_NS,
+          A_DB_COMMIT_SCHEMA_ID,
+          A_DB_NIL_TX_ID,
+          A_DB_NIL_PREV_TX_REC_OFF,
+          &c_key,
+          &c_data,
+          A_DB_NIL_FLAGS) < 0) {
+        goto err;
+    }
+
+    a_db_wal_rec_hdr_init(&wal_rec_hdr, A_DB_LOG_TYPE_COMMIT, &rec_hdr, tx->op);
+
+    /**
+     * Stage commit record
+     */
+    if (a_db_stage_rec(tx, &wal_rec_hdr, &rec_hdr, &c_key, &c_data) < 0)
+        goto err;
+
+    /**
+     * If data was stored in private tx buffer, we must append
+     * it to the WAL before handling adding the commit record.
+     * If data was not stored in private buffer, then the commit
+     * rec is the last rec of the transaction we will handle.
+     * We store the private data state because spilling to wal
+     * removes the flag.
+     */
+    has_private_data = tx->flags & A_DB_TX_FL_PRIV_DATA;
+    if (has_private_data) {
+        if (a_db_tx_spill_to_wal_buf(&db->wal, tx) < 0)
+            goto err;
+    }
+
+    if (a_db_log_buf_append(db, tx) < 0)
+        goto err;
+
+    /**
+     * For privately stored data, we can merge the
+     * scattered data into one continuous block, and be
+     * able to add it to the write cache in exact order
+     */
+    if (has_private_data) {
+        struct aura_sliding_buf *buf;
+        struct aura_db_wal_rec_hdr *wal_hdr;
+        struct aura_db_rec_hdr *rec_hdr;
+        uint64_t buf_len, read_len;
+        uint8_t *src;
+        // struct aura_iovec tx_data;
+
+        /** @todo: */
+        if (tx->rec_len > A_DB_CACHE_SIZE) {
+            /* force checkpoint */
+            return 0;
+        }
+
+        /**
+         * Merge scattered data into one block
+         */
+        // tx_data.base = aura_alloc(db->mc, tx->rec_len);
+        // if (!tx_data.base)
+        //     goto err;
+        // tx_data.len = 0;
+
+        // while (!aura_list_is_empty(&tx->buf_list)) {
+        //     a_list_dequeue(buf, &tx->buf_list, allocated.link);
+
+        //     buf_len = aura_sliding_buf_read_len(buf);
+        //     src = aura_sliding_buf_read_ptr(buf);
+
+        //     memcpy(tx_data.base + tx_data.len, src, buf_len);
+        //     tx_data.len += buf_len;
+        // }
+
+        /**
+         * For each tx log record, append to write cache
+         */
+        struct aura_iovec key, data;
+        read_len = 0;
+        buf_len = aura_sliding_buf_read_len(&tx->priv_buf);
+        src = aura_sliding_buf_read_ptr(&tx->priv_buf);
+
+        // while (read_len < tx_data.len) {
+        while (read_len < buf_len) {
+            // wal_hdr = (struct aura_db_wal_rec_hdr *)(tx_data.base);
+            // rec_hdr = (struct aura_db_rec_hdr *)(tx_data.base + sizeof(*wal_hdr));
+            wal_hdr = (struct aura_db_wal_rec_hdr *)(src);
+            rec_hdr = (struct aura_db_rec_hdr *)(src + sizeof(*wal_hdr));
+
+            // key.base = tx_data.base + sizeof(*wal_hdr) + sizeof(*rec_hdr);
+            key.base = src + sizeof(*wal_hdr) + sizeof(*rec_hdr);
+            key.len = rec_hdr->key_len;
+            data.base = key.base + key.len;
+            data.len = rec_hdr->data_len;
+
+            /* skip tx related records */
+            if (rec_hdr->ns != A_DB_TX_NS)
+
+                if (a_db_write_cache_append(db, rec_hdr, &key, &data) < 0) {
+                    // aura_free(tx_data.base);
+                    goto err;
+                }
+
+            read_len += wal_hdr->rec_len;
+            // tx_data.base += wal_hdr->rec_len;
+            src += wal_hdr->rec_len;
+        }
+    } else {
+        /* checkpoint as record already spilled into WAL */
+    }
+
+    a_db_reset_th_data(th_data);
+    pthread_setspecific(thread_key, (void *)th_data);
+    return 0;
+
+err:
+    a_db_reset_th_data(th_data);
+    pthread_setspecific(thread_key, (void *)th_data);
+    return -1;
+}
+
+static inline int a_db_transaction_abort(AURA_DB *db, struct aura_db_tx *tx) {
+    struct aura_db_commit commit_rec;
+    struct aura_db_rec_hdr rec_hdr;
+    struct aura_db_wal_rec_hdr log_hdr;
+    char commit_key[64];
+    int rv;
+
+    /* Transactions */
+    if (tx->flags & A_DB_TX_FL_MR) {
+        /**
+         * If data was already spilled to the WAL,
+         * then we need to insert the abort record
+         */
+        if ((tx->flags & A_DB_TX_FL_PRIV_DATA) == 0) {
+            commit_rec.state = A_DB_TX_ABORTED;
+            commit_rec.tx_id = tx->id;
+            commit_rec.rec_cnt = 0;
+
+            struct aura_iovec c_key = {
+              .base = commit_key,
+              .len = strlen(commit_key),
+            };
+
+            struct aura_iovec c_data = {
+              .base = (char *)&commit_rec,
+              .len = sizeof(commit_rec),
+            };
+
+            rv = a_db_rec_hdr_init(
+              db,
+              &rec_hdr,
+              A_DB_TX_NS,
+              A_DB_COMMIT_SCHEMA_ID,
+              A_DB_NIL_TX_ID,
+              A_DB_NIL_PREV_TX_REC_OFF,
+              &c_key,
+              &c_data,
+              A_DB_NIL_FLAGS);
+            if (rv < 0)
+                return -1;
+
+            a_db_wal_rec_hdr_init(&log_hdr, A_DB_LOG_TYPE_COMMIT, &rec_hdr, tx->op);
+
+            /**
+             * Stage commit record
+             */
+            rv = a_db_stage_rec(tx, &log_hdr, &rec_hdr, &c_key, &c_data);
+            if (rv < 0)
+                return -1;
+
+            rv = a_db_log_buf_append(db, tx);
+            if (rv < 0)
+                return -1;
+        }
+    }
+
+    return 0;
+}
+
+int aura_db_transaction_cancel(AURA_DBHANDLE _db) {
+    AURA_DB *db = _db;
+    struct aura_db_th_data *th_data;
+    struct aura_db_commit commit_rec;
+    struct aura_db_rec_hdr rec_hdr;
+    struct aura_db_wal_rec_hdr log_hdr;
+    struct aura_db_tx *tx;
+    char commit_key[64];
+    int rv;
+
+    th_data = pthread_getspecific(thread_key);
+    A_BUG_ON_2(!th_data, true);
+
+    rv = a_db_transaction_abort(db, &th_data->tx);
+out:
+    a_db_reset_th_data(th_data);
+    pthread_setspecific(thread_key, (void *)th_data);
+    return rv;
+}
+
+static inline bool a_db_trigger_checkpointer(struct aura_db_wal *wal) {
+    if ((last_important_lsn - last_checkpoint_lsn) > A_DB_LOG_SZ_THRESHOLD)
+        return true;
+
+    return false;
+}
+
+static inline bool a_db_log_should_write(struct aura_db_wal *wal, int flags) {
+    if (wal->write_lsn <= glob_flushed_lsn)
+        return false;
+
+    return true;
+}
+
+/**
+ * Flush WAL buffer to WAL log file
+ * WAL lock must be held when flushing
+ * When 1 is returned, it indicates we can
+ * request a checkpoint with LOG as the cause
+ */
+static inline int a_db_log_flush(struct aura_db_wal *wal, int flags) {
+    struct aura_db_wal_rec_hdr *wal_rec;
+    uint64_t lsn, written, to_write;
+    ssize_t w_len;
+    int rv = 0;
+
+    if (!a_db_log_should_write(wal, flags))
+        return rv;
+
+    to_write = wal->buf_off;
+    written = 0;
+
+    do {
+        to_write -= written;
+        w_len = write(wal->fd, wal->cache_buf, to_write);
+        written += w_len;
+    } while (written != to_write && (errno == EAGAIN || errno == EWOULDBLOCK));
+
+    if (written != wal->buf_off)
+        return -1;
+
+    fdatasync(wal->fd);
+
+    /**
+     * Reset wal buffer
+     */
+    wal->buf_off = 0;
+
+    /**
+     * Since this function is called when the WAL lock
+     * is held, the global flushed lsn can be updated
+     * safely and SYNC threads alerted
+     */
+    glob_flushed_lsn = wal->write_lsn;
+    if (a_db_trigger_checkpointer(wal))
+        rv = 1;
+
+    /* Any thread waiting for wal buffer can resume */
+    pthread_cond_broadcast(&wal->cond);
+
+    return rv;
+}
+
+/**
+ * Release an active slot held by this transaction
+ * and notify a thread waiting for get slot
+ */
+static inline void a_db_release_active_tx(struct aura_db_tx_ctx *tx, uint32_t idx) {
+    pthread_mutex_lock(&tx->lock);
+    aura_bitmap_clear_bit(idx, tx->tx_tab_map);
+    tx->tx_tab[idx].abort = false;
+    tx->tx_tab[idx].id = 0;
+    tx->tx_tab[idx].state = A_DB_TX_NIL;
+    pthread_mutex_unlock(&tx->lock);
+    pthread_cond_signal(&tx->wait);
+}
+
+static int a_db_tx_priv_buf_append(struct aura_db_tx *tx, struct aura_mem_ctx *mc, uint64_t curr_len) {
+    // struct aura_sliding_buf *last_buf, *buf;
+    uint64_t off, data_len, buf_len, chunk, pad_len, total_len;
+    const uint8_t *src;
+
+    /* Update transaction record len */
+    tx->rec_len += curr_len;
+    tx->rec_cnt++;
+
+    /* Total len minus padding */
+    total_len = 0;
+
+    /**
+     * Since we lazily create the first private tx buffer.
+     * We must check for it's existence here.
+     */
+    // if (aura_list_is_empty(&tx->buf_list)) {
+    //     buf = aura_sliding_buf_create(mc, A_DB_TX_BUF_SZ, A_SLIDING_BUF_FL_FIXED);
+    //     if (!buf)
+    //         return -1;
+
+    //     aura_list_add_tail(&tx->buf_list, &buf->allocated.link);
+    //     last_buf = buf;
+    // } else {
+    //     last_buf = a_list_last_entry(&tx->buf_list, struct aura_sliding_buf, allocated.link);
+    // }
+    if (!aura_sliding_buf_is_initialized(&tx->priv_buf)) {
+        if (aura_sliding_buf_init(&tx->priv_buf, mc, A_DB_TX_BUF_SZ, A_SLIDING_BUF_FL_NONE) < 0)
+            return -1;
+    }
+
+    for (int i = 0; i < tx->rdata_cnt; ++i) {
+        data_len = tx->rdata[i].len;
+        total_len += data_len;
+        src = tx->rdata[i].data;
+        // off = 0;
+
+        // while (data_len > 0) {
+        //     buf_len = aura_sliding_buf_write_len(last_buf);
+        //     if (buf_len == 0) {
+        //         buf = aura_sliding_buf_create(mc, A_DB_TX_BUF_SZ, A_SLIDING_BUF_FL_FIXED);
+        //         if (!buf)
+        //             return -1;
+
+        //         aura_list_add_tail(&tx->buf_list, &buf->allocated.link);
+        //         last_buf = buf;
+        //         buf_len = aura_sliding_buf_write_len(last_buf);
+        //     }
+
+        //     chunk = a_min(data_len, buf_len);
+        //     aura_sliding_buf_append(last_buf, src + off, chunk);
+        //     off += chunk;
+        //     data_len -= chunk;
+        // }
+        if (aura_sliding_buf_append(&tx->priv_buf, src, data_len) < 0)
+            return -1;
+    }
+
+    /**
+     * Because we align the record up to some alignment,
+     * but the rdata len is exact len per record. We can
+     * having padding at the end of ,
+     * which we take into account as seen below
+     */
+    pad_len = curr_len - total_len;
+    if (pad_len > 0) {
+        char pad[pad_len];
+        memset(pad, 0, pad_len);
+        off = 0;
+
+        if (aura_sliding_buf_append(&tx->priv_buf, pad, pad_len) < 0)
+            return -1;
+
+        // while (pad_len > 0) {
+        //     buf_len = aura_sliding_buf_write_len(last_buf);
+        //     if (buf_len == 0) {
+        //         buf = aura_sliding_buf_create(mc, A_DB_TX_BUF_SZ, A_SLIDING_BUF_FL_FIXED);
+        //         if (!buf)
+        //             return -1;
+
+        //         aura_list_add_tail(&tx->buf_list, &buf->allocated.link);
+        //         last_buf = buf;
+        //         buf_len = aura_sliding_buf_write_len(last_buf);
+        //     }
+
+        //     chunk = a_min(pad_len, buf_len);
+        //     aura_sliding_buf_append(last_buf, pad + off, chunk);
+        //     off += chunk;
+        //     pad_len -= chunk;
+        // }
+    }
+
+    /**
+     * Reset the rdata count since the data is
+     * already in the private buffer safely
+     */
+    tx->rdata_cnt = 0;
+
+    return 0;
+}
+
+static inline bool a_db_write_cache_should_flush(struct aura_db_cache_buf *buf, int flags) {
+    if (buf->size == 0)
+        return false;
+
+    if (flags & A_DB_WRITE_CACHE_FLUSH_FORCE)
+        return true;
+
+    if (buf->size <= A_DB_WRITE_CACHE_LOW_BUF_THRESHOLD(buf->cap))
+        return false;
+
+    return true;
+}
+
+/**
+ * Swap write cache active buffer
+ * cache lock must be held before
+ * calling the function.d
+ */
+static void a_db_write_cache_swap_active_buf(struct aura_db_write_cache *cache) {
+    struct aura_db_cache_buf *inactive_buf, *to_flush_buf;
+    int active_idx, inactive_idx;
+
+    to_flush_buf = &cache->bufs[active_idx];
+    inactive_idx = 1 - cache->active_idx;
+    inactive_buf = &cache->bufs[inactive_idx];
+
+    /**
+     * The case where both buffers are filled up.
+     * Just block and wait for the free buffer to be released
+     */
+    while (inactive_buf->flags & A_DB_WRITE_CACHE_SYNCING) {
+        pthread_cond_wait(&cache->sync_cond, &cache->lock);
+    }
+
+    /* Prepare the new buffer for write */
+    a_db_reset_cache_buf(inactive_buf);
+    cache->active_idx = inactive_idx;
+    cache->next_off = 0;
+    to_flush_buf->flags |= A_DB_WRITE_CACHE_SYNCING;
+}
+
+/**
+ *
+ */
+static int a_db_write_cache_append(AURA_DB *db, struct aura_db_rec_hdr *rec_hdr,
+                                   struct aura_iovec *key, struct aura_iovec *data) {
+    struct aura_db_cache_buf *active_buf;
+    struct aura_db_write_cache *cache = &db->cache.wrt_cache;
+    uint64_t next_append_off;
+    uint64_t prev_rec_cache_off;
+    bool should_flush = false;
+    int rv;
+
+    if (rec_hdr->rec_len.aligned_len > A_DB_CACHE_SIZE) {
+        /** @todo: avoid this case */
+        return 0;
+    }
+
+    pthread_mutex_lock(&cache->lock);
+
+    while (true) {
+        active_buf = &cache->bufs[cache->active_idx];
+
+        /**
+         * Because the hash bucket chain is updated on
+         * checkpoint, this records previous off in the chain
+         * is correctly updated before adding it to the
+         * permanent DB. Since we always read the correct prev off
+         * from file, we can use the cache records cache offset to
+         * create a correct cache chain as this will not touch the real
+         * file prev off associated with this record.
+         */
+        prev_rec_cache_off = active_buf->hash_bucket[rec_hdr->hash].head_off;
+        next_append_off = active_buf->size + rec_hdr->rec_len.aligned_len;
+
+        /* Current record can fit in cache */
+        if (next_append_off <= active_buf->cap) {
+            char *write_ptr = active_buf->data + active_buf->size;
+            memcpy(write_ptr, rec_hdr, sizeof(*rec_hdr));
+
+            /* key offset */
+            write_ptr += sizeof(*rec_hdr);
+            memcpy(write_ptr, key->base, rec_hdr->key_len);
+
+            if (data) {
+                /* data offset */
+                write_ptr += rec_hdr->key_len;
+                memcpy(write_ptr, data->base, data->len);
+            }
+
+            rec_hdr->prev_cache_off = prev_rec_cache_off;
+            active_buf->hash_bucket[rec_hdr->hash].head_off = cache->next_off;
+            cache->next_off += rec_hdr->rec_len.aligned_len;
+
+            active_buf->flags |= A_DB_WRITE_CACHE_DIRTY;
+            active_buf->size += rec_hdr->rec_len.aligned_len;
+
+            /* Trigger flush if threshold permits it */
+            if (a_db_write_cache_should_flush(active_buf, 0))
+                should_flush = true;
+
+            pthread_mutex_unlock(&cache->lock);
+
+            /* Trigger flush if threshold permits it */
+            if (should_flush) {
+                pthread_mutex_lock(&db->bgwriter.lock);
+                db->bgwriter.do_work = true;
+                pthread_cond_signal(&db->bgwriter.cond);
+                pthread_mutex_unlock(&db->bgwriter.lock);
+            }
+
+            return 0;
+        }
+
+        /* swap active buffer */
+        a_db_write_cache_swap_active_buf(cache);
+
+        /* Trigger buffer flush */
+        pthread_mutex_unlock(&cache->lock);
+
+        /* Acquire bg writer lock and trigger bg writer */
+        pthread_mutex_lock(&db->bgwriter.lock);
+        db->bgwriter.do_work = true;
+        pthread_cond_signal(&db->bgwriter.cond);
+        pthread_mutex_unlock(&db->bgwriter.lock);
+
+        /* Reacquire the write buf_cache and try again */
+        pthread_mutex_lock(&cache->lock);
+    }
+
+    return rv;
+}
+
+static int _a_db_rec_insert(AURA_DB *db, struct aura_db_th_data *th_data, ns_t namespace,
+                            schema_id_t schema_id, uint16_t flags, aura_db_log_rec_type log_type,
+                            aura_db_op op, struct aura_iovec *key, struct aura_iovec *data) {
+    struct aura_db_tx *tx;
+    struct aura_db_rec_hdr rec_hdr, commit_rec_hdr;
+    struct aura_db_wal_rec_hdr wal_rec_hdr, commit_rec_wal_hdr;
+    struct aura_db_commit commit_rec;
+    int rv;
+
+    tx = &th_data->tx;
+    rv = a_db_can_accept_req(db, tx->id, th_data->glob_tx_idx);
+
+    /* Abort transaction */
+    if (rv == A_DB_REQ_ABORT) {
+        rv = a_db_transaction_abort(db, tx);
+        a_db_release_active_tx(&db->tx_ctx, th_data->glob_tx_idx);
+        a_db_reset_th_data(th_data);
+        return rv;
+    } else if (rv == A_DB_REQ_REJECTED)
+        return -1;
+
+    if (tx->flags & A_DB_TX_FL_VIRT)
+        a_db_tx_promote(db, th_data);
+
+    /* construct wal record */
+    if (a_db_rec_hdr_init(
+          db,
+          &rec_hdr,
+          namespace,
+          schema_id,
+          tx->id,
+          A_DB_NIL_PREV_TX_REC_OFF,
+          key,
+          data,
+          flags) < 0) {
+        return -1;
+    }
+
+    a_db_wal_rec_hdr_init(&wal_rec_hdr, log_type, &rec_hdr, op);
+
+    /**
+     * stage WAL record
+     */
+    if (a_db_stage_rec(tx, &wal_rec_hdr, &rec_hdr, key, data) < 0)
+        return -1;
+
+    if (tx->flags & A_DB_TX_FL_MR) {
+        /**
+         * Accumulate data in tx private buffer when still
+         * under the threshold size for private tx data
+         */
+        if (tx->flags & A_DB_TX_FL_PRIV_DATA) {
+            if ((tx->rec_len + wal_rec_hdr.rec_len) < tx->max_priv_data_sz) {
+                if (a_db_tx_priv_buf_append(tx, db->mc, wal_rec_hdr.rec_len) < 0) {
+                    /* abandon transaction */
+                    return -1;
+                }
+            } else {
+                /**
+                 * private tx data has reached it maximum before
+                 * final commit, we spill into WAL buf and switch
+                 * to pushing directly into WAL buf.
+                 */
+                if (a_db_tx_spill_to_wal_buf(&db->wal, tx) < 0)
+                    return 1;
+
+                /**
+                 * Adjust the tx len to reflect new correct rec length
+                 */
+                tx->rec_len = wal_rec_hdr.rec_len;
+                if (a_db_log_buf_append(db, tx) < 0)
+                    return -1;
+            }
+        } else {
+            tx->rec_len = wal_rec_hdr.rec_len;
+            if (a_db_log_buf_append(db, tx) < 0)
+                return -1;
+        }
+    } else {
+        /**
+         * For single record, we do the shortcut
+         * and stage WAL commit record
+         */
+        char commit_key[64];
+        memset(commit_key, 0, sizeof(commit_key));
+        snprintf(commit_key, sizeof(commit_key), "tx:%ld", tx->id);
+
+        commit_rec.rec_cnt = 1;
+        commit_rec.tx_id = tx->id;
+        commit_rec.state = A_DB_TX_COMMITTED;
+
+        struct aura_iovec c_key = {
+          .base = commit_key,
+          .len = strlen(commit_key),
+        };
+
+        struct aura_iovec c_data = {
+          .base = (char *)&commit_rec,
+          .len = sizeof(commit_rec),
+        };
+
+        if (a_db_rec_hdr_init(
+              db,
+              &commit_rec_hdr,
+              A_DB_TX_NS,
+              A_DB_COMMIT_SCHEMA_ID,
+              A_DB_NIL_TX_ID,
+              A_DB_NIL_PREV_TX_REC_OFF,
+              &c_key,
+              &c_data,
+              A_DB_NIL_FLAGS) < 0) {
+            return -1;
+        }
+
+        a_db_wal_rec_hdr_init(&commit_rec_wal_hdr, A_DB_LOG_TYPE_COMMIT, &rec_hdr, op);
+
+        /**
+         * Stage commit record
+         */
+        if (a_db_stage_rec(tx, &commit_rec_wal_hdr, &commit_rec_hdr, &c_key, &c_data) < 0)
+            return -1;
+
+        tx->rec_len = wal_rec_hdr.rec_len + commit_rec_wal_hdr.rec_len;
+
+        /* Append to WAL buffer */
+        if (a_db_log_buf_append(db, tx) < 0)
+            return -1;
+
+        /* Append to data write cache */
+        if (a_db_write_cache_append(db, &rec_hdr, key, data) < 0) {
+            return -1;
+        }
+
+        /**
+         * In the case of no error
+         * Clear the active tx slot and reset thread specific data here
+         * since the caller only takes care of clearing these
+         * resources in the case of an error
+         */
+        a_db_release_active_tx(&db->tx_ctx, th_data->glob_tx_idx);
+        a_db_reset_th_data(th_data);
+    }
+
+    return 0;
+}
+
+int aura_db_insert(AURA_DBHANDLE _db, ns_t namespace, schema_id_t schema_id,
+                   uint16_t flags, aura_db_op op, struct aura_iovec *key,
+                   struct aura_iovec *data) {
+    struct aura_db_th_data *th_data;
+    AURA_DB *db = _db;
+    int rv;
+
+    th_data = pthread_getspecific(thread_key);
+
+    /**
+     * Single record not part of tx
+     * Handle implicit tx, skip the long
+     * way of using tx buffer and append
+     * directly into WAL buffer
+     */
+    if (!th_data || th_data->tx.state == A_DB_TX_NIL) {
+        if (!th_data) {
+            th_data = calloc(1, sizeof(*th_data));
+            if (!th_data)
+                return -1;
+            a_db_reset_th_data(th_data);
+        }
+
+        int flags = A_DB_TX_FL_SYNC;
+        a_db_init_tx(db, th_data, 0, A_DB_TO_INFINITY, flags);
+    } else {
+        /* Multi record tx */
+        A_BUG_ON_2(th_data->tx.state != A_DB_TX_IN_PROGRESS, true);
+    }
+
+    rv = _a_db_rec_insert(db, th_data, namespace, schema_id, flags, A_DB_LOG_TYPE_UPDATE, op, key, data);
+    if (rv < 0) {
+        int r = a_db_transaction_abort(db, &th_data->tx);
+        a_db_release_active_tx(&db->tx_ctx, th_data->glob_tx_idx);
+        a_db_reset_th_data(th_data);
+    }
+
+    pthread_setspecific(thread_key, (void *)th_data);
+    return rv;
+}
+
+static inline struct aura_db_rec_hdr *_a_db_read_cache_fetch(struct aura_db_read_cache *cache, ns_t namespace,
+                                                             schema_id_t schema_id, struct aura_iovec *key,
+                                                             uint32_t hash) {
+    struct aura_db_rec_hdr *rec_hdr;
+    const char *key_buf;
+    uint64_t off;
+
+    off = cache->buf.hash_bucket[hash].head_off;
+    while (off != UINT64_MAX) {
+        /* get record header offset */
+        rec_hdr = (struct aura_db_rec_hdr *)(cache->buf.data + off);
 
         if (rec_hdr->magic != A_DB_REC_MAGIC)
             break;
 
-        if (rec_hdr->ns == namespace && rec_hdr->schema_id == schema_id && rec_hdr->key_len == key->len) {
+        if (rec_hdr->ns == namespace &&
+            rec_hdr->schema_id == schema_id &&
+            rec_hdr->key_len == key->len &&
+            rec_hdr->hash == hash) {
             key_buf = (char *)rec_hdr + sizeof(*rec_hdr);
             if (aura_mem_is_eq(key_buf, rec_hdr->key_len, key->base, key->len)) {
                 if (rec_hdr->flags & A_DB_FLAG_REC_TOMBSTONE)
@@ -579,554 +2518,208 @@ static inline struct aura_db_rec_hdr *a_db_record_cache_fetch(AURA_DB *db, uint1
             }
         }
 
-        offset = rec_hdr->prev_off;
+        off = rec_hdr->prev_cache_off;
     }
 
     return NULL;
-}
-
-static inline int a_db_record_cache_append(AURA_DB *db, struct aura_db_rec_hdr *rec_hdr,
-                                           struct aura_iovec *key, struct aura_iovec *data,
-                                           uint32_t hash) {
-    off_t new_append_off;
-    off_t file_offset; /* actual offset in the main db file */
-
-    /* If single record can't fit in cache */
-    if (rec_hdr->rec_len.aligned_len > db->record_buf_size) {
-        /* Do nothing */
-        return 0;
-    }
-
-    /* actual file offset given by current main db file size + in memory offset */
-    file_offset = db->curr_file_size + db->append_off;
-    new_append_off = db->append_off + rec_hdr->rec_len.aligned_len;
-
-    /**
-     * If cummulative records can't fit in cache
-     * Cache is nearing full capacity if not already full
-     * Replay WAL and reset cache
-     */
-    if (new_append_off > db->record_buf_size) {
-
-        if (a_db_wal_replay(db) < 0)
-            return -1;
-
-        /* update new current db file size */
-        db->curr_file_size = db->db_file_hdr.file_size;
-
-        /** clear cache and start filling again */
-        char *write_ptr = (char *)db->record_buf;
-        memset(db->record_buf, 0, db->record_buf_size);
-        memcpy(write_ptr, rec_hdr, sizeof(*rec_hdr));
-        memcpy(write_ptr + sizeof(*rec_hdr), key->base, rec_hdr->key_len);
-        if (data)
-            memcpy(write_ptr + sizeof(*rec_hdr) + rec_hdr->key_len, data->base, data->len);
-        /**
-         * Update the file offset for the hash chain
-         */
-        db->append_off = 0;
-        file_offset = db->curr_file_size + db->append_off;
-        db->append_off += rec_hdr->rec_len.aligned_len;
-    } else {
-        char *write_ptr = (char *)db->record_buf + db->append_off;
-        memcpy(write_ptr, rec_hdr, sizeof(*rec_hdr));
-        memcpy(write_ptr + sizeof(*rec_hdr), key->base, rec_hdr->key_len);
-        if (data)
-            memcpy(write_ptr + sizeof(*rec_hdr) + rec_hdr->key_len, data->base, data->len);
-        db->append_off = new_append_off;
-    }
-
-    pthread_mutex_lock(&db->db_lock);
-    db->buckets[hash].head_off = file_offset;
-
-    pthread_mutex_unlock(&db->db_lock);
-    return 0;
-}
-
-/** Construct DB record header */
-static inline int64_t a_db_record_header_init(AURA_DB *db, struct aura_db_rec_hdr *rec_hdr,
-                                              uint16_t namespace, uint16_t schema_id, uint64_t job_id,
-                                              uint64_t prev_job_rec, struct aura_iovec *key,
-                                              struct aura_iovec *data, uint16_t flags) {
-    uint32_t hash, old_head;
-    struct aura_iovec data_checksum;
-
-    hash = a_fnv1a_hash(db->db_file_hdr.bucket_cnt, namespace, key);
-    old_head = db->buckets[hash].head_off;
-
-    data_checksum = aura_calculate_digest(data);
-    if (data_checksum.base == NULL && data->base != NULL) {
-        app_debug(true, 0, "a_db_init_rec_hdr: aura_calculate_digest error");
-        return -1;
-    }
-
-    rec_hdr->magic = A_DB_REC_MAGIC;
-    rec_hdr->version = A_DB_VERSION;
-    rec_hdr->ns = namespace;
-    rec_hdr->flags = flags;
-    rec_hdr->schema_id = schema_id;
-    rec_hdr->prev_off = old_head;
-    rec_hdr->job_id = job_id;
-    rec_hdr->prev_job_rec = prev_job_rec;
-    rec_hdr->timestamp = aura_now_ms(CLOCK_REALTIME);
-    rec_hdr->key_len = key->len;
-    if (data)
-        rec_hdr->rec_len = a_get_db_record_len(key->len, data->len);
-    else
-        rec_hdr->rec_len = a_get_db_record_len(key->len, 0);
-    rec_hdr->data_len = 0;
-    if (data)
-        rec_hdr->data_len = data->len;
-    memcpy(rec_hdr->check_sum, data_checksum.base, DIGEST_LEN);
-
-    return hash;
 }
 
 /**
- * Append given record to WAL and cache
+ * Fetch a record from read cache.
+ * Cache read lock must be held before
+ * calling this function.
  */
-static off_t a_db_record_insert_core(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id,
-                                     uint64_t job_id, uint64_t prev_job_rec, uint16_t flags,
-                                     aura_db_op op, struct aura_iovec *key, struct aura_iovec *data) {
-    struct aura_db_rec_hdr rec_hdr;
-    uint32_t hash;
-    AURA_DB *db;
-    off_t offset;
-    int res;
+static int a_db_read_cache_fetch(AURA_DB *db, ns_t namespace, schema_id_t schema_id,
+                                 struct aura_iovec *key, uint32_t hash,
+                                 struct aura_db_rec *data_out) {
+    struct aura_db_read_cache *rd_cache = &db->cache.read_cache;
+    struct aura_db_rec_hdr *rec_hdr;
 
-    db = (AURA_DB *)_db;
-    hash = a_db_record_header_init(db, &rec_hdr, namespace, schema_id, job_id, prev_job_rec, key, data, flags);
-    if (hash < 0)
-        return -1;
-
-    offset = a_db_wal_commit(db->wal_fd, op, &rec_hdr, key, data);
-    if (offset < 0) {
-        sys_debug(true, errno, "a_db_record_insert_code: a_db_wal_commit error:");
-        return offset;
-    }
-
-    /* update in memory */
-    if (a_db_record_cache_append(db, &rec_hdr, key, data, hash) < 0)
-        return -1;
-
-    pthread_mutex_lock(&db->db_lock);
-    db->wal_file_hdr.record_cnt++;
-    db->db_file_hdr.record_cnt++;
-    db->wal_file_hdr.file_size += rec_hdr.rec_len.aligned_len;
-    db->db_file_hdr.file_size += rec_hdr.rec_len.aligned_len;
-    if (op == A_DB_OP_DELETE)
-        db->db_file_hdr.wasted_bytes += rec_hdr.rec_len.aligned_len;
-    pthread_mutex_unlock(&db->db_lock);
-
-    return offset;
-}
-
-static int a_db_enqueue_request(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id,
-                                uint64_t job_id, uint64_t prev_job_rec, uint16_t flags,
-                                aura_db_op op, struct aura_iovec *key, struct aura_iovec *data,
-                                struct aura_db_completion *completion) {
-    AURA_DB *db;
-    struct aura_db_write_req *req;
-
-    db = (AURA_DB *)_db;
-
-    req = calloc(1, sizeof(*req));
-    if (!req)
-        return -1;
-
-    aura_list_head_init(&req->w_list);
-    req->namespace = namespace;
-    req->schema_id = schema_id;
-    req->op = op;
-    req->key = key;
-    req->job_id = job_id;
-    req->prev_job_rec = prev_job_rec;
-    req->flags = flags;
-    req->data = data;
-    req->completion = completion;
-
-    pthread_mutex_lock(&db->writer_queue.mutex);
-    aura_list_add_tail(&db->writer_queue.db_list, &req->w_list);
-    pthread_cond_signal(&db->writer_queue.cond);
-    pthread_mutex_unlock(&db->writer_queue.mutex);
-
-    return 0;
-}
-
-ssize_t aura_db_record_insert(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id,
-                              uint64_t job_id, uint64_t prev_job_rec, aura_db_op op,
-                              struct aura_iovec *key, struct aura_iovec *data,
-                              aura_db_exec_mode exec_mode, struct aura_db_completion *comp) {
-    if (exec_mode == A_DB_EXEC_DIRECT)
-        return a_db_record_insert_core(_db, namespace, schema_id, job_id, prev_job_rec, A_DB_FLAG_NONE, op, key, data);
-    else
-        return a_db_enqueue_request(_db, namespace, schema_id, job_id, prev_job_rec, A_DB_FLAG_NONE, op, key, data, comp);
-}
-
-uint64_t aura_db_job_insert(AURA_DBHANDLE _db, uint32_t job_type, uint8_t state, uint64_t timeout,
-                            int error, aura_db_exec_mode exec_mode, struct aura_db_completion *completion) {
-    AURA_DB *db;
-    struct aura_db_job_rec job;
-    char job_key[2046], job_step_key[2046];
-    struct aura_iovec key, data;
-    int res;
-    off_t offset;
-
-    db = (AURA_DB *)_db;
-    job.created_at = aura_now_ms(CLOCK_REALTIME);
-    job.job_id = job.created_at;
-    job.job_type = job_type;
-    job.last_rec_off = 0;
-    job.error_code = error;
-    job.version = A_DB_VERSION;
-    job.state = state;
-    job.ttl_epoch = timeout;
-
-    memset(job_key, 0, sizeof(job_key));
-    /* format: job:<jobid> */
-    snprintf(job_key, sizeof(job_key) - 1, "job:%lu", job.job_id);
-
-    if (exec_mode == A_DB_EXEC_DIRECT) {
-        key.base = job_key;
-        key.len = strlen(job_key);
-        data.base = (void *)&job;
-        data.len = sizeof(job);
-
-        offset = a_db_record_insert_core(
-          db,
-          A_DB_NS_JOB,
-          A_DB_SCHEMA_JOB_V1,
-          0,
-          0,
-          A_DB_FLAG_NONE,
-          A_DB_JOB_OP_CREATE,
-          &key,
-          &data);
-        if (offset < 0)
-            return 0;
-    } else if (exec_mode == A_DB_EXEC_ASYNC) {
-        struct aura_iovec *key_ptr, *data_ptr;
-
-        key_ptr = aura_iovec_init(db->mc, strlen(job_key), NULL);
-        if (!key_ptr)
-            return 0;
-        data_ptr = aura_iovec_init(db->mc, sizeof(job), NULL);
-        if (!data_ptr) {
-            aura_iovec_destroy(key_ptr);
-            return 0;
-        }
-
-        /* Copy over contents for queueing */
-        memcpy(key_ptr->base, job_key, key_ptr->len);
-        memcpy(data_ptr->base, &job, data_ptr->len);
-        res = a_db_enqueue_request(
-          db,
-          A_DB_NS_JOB,
-          A_DB_SCHEMA_JOB_V1,
-          0,
-          0,
-          A_DB_FLAG_NONE,
-          A_DB_JOB_OP_CREATE,
-          key_ptr,
-          data_ptr,
-          completion);
-        if (res != 0) {
-            aura_iovec_destroy(key_ptr);
-            aura_iovec_destroy(data_ptr);
-            return 0;
-        }
-    }
-
-    return job.job_id;
-}
-
-int aura_db_job_update(AURA_DBHANDLE _db, uint64_t job_id, uint16_t state,
-                       int error, uint64_t rec_off, aura_db_exec_mode exec_mode,
-                       struct aura_db_completion *comp) {
-    AURA_DB *db;
-    char buf[1024];
-    struct aura_iovec key, data;
-    struct aura_db_job_rec *job_rec;
-    int res, err;
-    off_t offset;
-
-    db = (AURA_DB *)_db;
-    job_rec = aura_db_job_fetch(_db, job_id, &err);
-    if (!job_rec) {
-        return err;
-    }
-
-    /* Update new state, last_rec_off and possibly error */
-    job_rec->state = state;
-    job_rec->error_code = error;
-    job_rec->last_rec_off = rec_off;
-
-    memset(buf, 0, sizeof(buf));
-    /* same key as current record */
-    snprintf(buf, sizeof(buf) - 1, "job:%lu", job_rec->job_id);
-
-    if (exec_mode == A_DB_EXEC_DIRECT) {
-        key.base = buf;
-        key.len = strlen(buf);
-        data.base = (void *)job_rec;
-        data.len = sizeof(*job_rec);
-
-        offset = a_db_record_insert_core(
-          db,
-          A_DB_NS_JOB,
-          A_DB_SCHEMA_JOB_V1,
-          0,
-          0,
-          A_DB_FLAG_NONE,
-          A_DB_JOB_OP_STEP,
-          &key,
-          &data);
-        /* No longer needed */
-        aura_free(job_rec);
-        if (offset < 0)
-            return offset;
-        return 0;
-    } else if (exec_mode == A_DB_EXEC_ASYNC) {
-        struct aura_iovec *key_ptr, *data_ptr;
-
-        key_ptr = aura_iovec_init(db->mc, strlen(buf), NULL);
-        if (!key_ptr)
-            return -1;
-        data_ptr = aura_iovec_init(db->mc, sizeof(*job_rec), NULL);
-        if (!data_ptr) {
-            aura_iovec_destroy(key_ptr);
-            return -1;
-        }
-
-        /* Copy over contents for queueing, they will be cleared when their operation completes */
-        memcpy(key_ptr->base, buf, key_ptr->len);
-        memcpy(data_ptr->base, job_rec, data_ptr->len);
-        /* No need for this record anymore */
-        aura_free(job_rec);
-        res = a_db_enqueue_request(
-          db,
-          A_DB_NS_JOB,
-          A_DB_SCHEMA_JOB_V1,
-          0,
-          0,
-          A_DB_FLAG_NONE,
-          A_DB_JOB_OP_STEP,
-          key_ptr,
-          data_ptr,
-          comp);
-        if (res != 0) {
-            aura_iovec_destroy(key_ptr);
-            aura_iovec_destroy(data_ptr);
-        }
-
-        return res;
-    }
-}
-
-struct aura_db_job_rec *aura_db_job_fetch(AURA_DBHANDLE _db, uint64_t job_id, int *error) {
-    AURA_DB *db;
-    struct aura_db_job_rec *job;
-    struct aura_db_rec rec;
-    struct aura_iovec key;
-    char key_buf[2046];
-
-    db = (AURA_DB *)_db;
-    if (job_id) {
-        snprintf(key_buf, sizeof(key_buf) - 1, "job:%lu", job_id);
-        key.base = key_buf;
-        key.len = strlen(key_buf);
-        *error = aura_db_record_fetch(_db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_V1, &key, &rec);
-        if (!rec.data.base) {
-            return NULL;
-        }
-
-        return (struct aura_db_job_rec *)rec.data.base;
-    }
-    return NULL;
-}
-
-int aura_db_job_step_insert(AURA_DBHANDLE _db, uint64_t job_id, uint32_t job_type, uint8_t step,
-                            struct aura_iovec *target, aura_db_exec_mode exec_mode,
-                            struct aura_db_completion *comp) {
-    AURA_DB *db;
-    struct aura_iovec key, data;
-    char job_step_key[2046];
-    int res;
-    off_t offset;
-
-    /* */
-    struct aura_db_job_step_rec job_step = {
-      .magic = 0,
-      .version = A_DB_VERSION,
-      .job_id = job_id,
-      .job_type = job_type,
-      .step = step,
-      .progress = 0,
-      .error = 0,
-      .updated_at = aura_now_ms(CLOCK_REALTIME),
-    };
-
-    /* format: fn_key */
-    snprintf(job_step_key, sizeof(job_step_key) - 1, "%s:job:%u", target->base, job_type);
-
-    db = (AURA_DB *)_db;
-    if (exec_mode == A_DB_EXEC_DIRECT) {
-        key.base = job_step_key;
-        key.len = strlen(job_step_key);
-        data.base = (void *)&job_step;
-        data.len = sizeof(job_step);
-
-        offset = a_db_record_insert_core(
-          _db,
-          A_DB_NS_JOB,
-          A_DB_SCHEMA_JOB_STEP_V1,
-          job_id,
-          0,
-          A_DB_FLAG_NONE,
-          A_DB_JOB_OP_EVENT,
-          &key,
-          &data);
-        if (offset < 0)
-            return -1;
-        return 0;
-    } else if (exec_mode == A_DB_EXEC_ASYNC) {
-        struct aura_iovec *key_ptr, *data_ptr;
-
-        key_ptr = aura_iovec_init(db->mc, strlen(job_step_key), NULL);
-        if (!key_ptr)
-            return -1;
-        data_ptr = aura_iovec_init(db->mc, sizeof(job_step), NULL);
-        if (!data_ptr) {
-            aura_iovec_destroy(key_ptr);
-            return -1;
-        }
-
-        /* Copy over contents for queueing */
-        memcpy(key_ptr->base, job_step_key, key_ptr->len);
-        memcpy(data_ptr->base, &job_step, data_ptr->len);
-        res = a_db_enqueue_request(
-          _db,
-          A_DB_NS_JOB,
-          A_DB_SCHEMA_JOB_STEP_V1,
-          job_id,
-          0,
-          A_DB_FLAG_NONE,
-          A_DB_JOB_OP_EVENT,
-          key_ptr,
-          data_ptr,
-          comp);
-        if (res != 0) {
-            aura_iovec_destroy(key_ptr);
-            aura_iovec_destroy(data_ptr);
-        }
-
-        return res;
-    }
-}
-
-struct aura_db_job_step_rec *aura_db_job_step_fetch(AURA_DBHANDLE _db, uint16_t job_type,
-                                                    struct aura_iovec *target) {
-    struct aura_db_job_step_rec *job_step;
-    struct aura_db_rec rec;
-    struct aura_iovec key;
-    char key_buf[2046];
-    int res;
-
-    /* format: fn:fn_name:fn_version:job:<job_type> */
-    snprintf(key_buf, sizeof(key_buf), "%s:job:%u", target->base, job_type);
-    key.base = key_buf;
-    key.len = strlen(key_buf);
-    res = aura_db_record_fetch(_db, A_DB_NS_JOB, A_DB_SCHEMA_JOB_STEP_V1, &key, &rec);
-    if (!rec.data.base) {
-        /* First step was never created: @todo: should create one and return it */
-        return NULL;
-    }
-
-    return (struct aura_db_job_step_rec *)rec.data.base;
-}
-
-static inline int a_db_construct_header(struct aura_db_rec_hdr *rec_hdr, aura_db_namespace namespace,
-                                        aura_db_schema_id schema_id, uint64_t old_head,
-                                        struct aura_iovec *key, struct aura_iovec *data) {
-    struct aura_iovec data_checksum;
-
-    data_checksum = aura_calculate_digest(data);
-    if (data_checksum.base == NULL && data->base != NULL) {
-        app_debug(true, 0, "a_db_construct_header: aura_calculate_digest error");
-        return -1;
-    }
-    rec_hdr->magic = A_DB_REC_MAGIC;
-    rec_hdr->version = A_DB_VERSION;
-    rec_hdr->ns = namespace;
-    rec_hdr->flags = 0;
-    rec_hdr->schema_id = schema_id;
-    rec_hdr->prev_off = old_head;
-    rec_hdr->timestamp = aura_now_ms(CLOCK_REALTIME);
-    rec_hdr->rec_len = a_get_db_record_len(key->len, data->len);
-    rec_hdr->key_len = key->len;
-    rec_hdr->data_len = data->len;
-    memcpy(rec_hdr->check_sum, data_checksum.base, DIGEST_LEN);
-}
-
-int aura_db_record_fetch(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id,
-                         struct aura_iovec *key, struct aura_db_rec *data_out) {
-    struct aura_db_rec_hdr rec_hdr, *hdr;
-    uint32_t hash;
-    off_t offset;
-    ssize_t res;
-    char key_buf[2000];
-    AURA_DB *db;
-
-    db = (AURA_DB *)_db;
-    hash = a_fnv1a_hash(db->db_file_hdr.bucket_cnt, namespace, key);
-    offset = db->buckets[hash].head_off;
-
-    if (data_out) {
-        memset(data_out, 0, sizeof(*data_out));
-    }
-
-    /* Value possible in cache */
-    pthread_mutex_lock(&db->db_lock);
-    if (offset >= db->curr_file_size) {
-        hdr = a_db_record_cache_fetch(db, namespace, schema_id, key, offset, hash);
-        if (hdr) {
-            if (hdr->flags & A_DB_FLAG_REC_TOMBSTONE) {
-                pthread_mutex_unlock(&db->db_lock);
+    pthread_rwlock_rdlock(&rd_cache->rwlock);
+    if (rd_cache->buf.size > 0) {
+        rec_hdr = _a_db_read_cache_fetch(rd_cache, namespace, schema_id, key, hash);
+        if (rec_hdr) {
+            if (rec_hdr->flags & A_DB_FLAG_REC_TOMBSTONE) {
+                pthread_rwlock_unlock(&rd_cache->rwlock);
                 return A_DB_REC_NOT_FOUND;
             }
 
             if (data_out) {
-                data_out->data.len = hdr->data_len;
+                data_out->data.len = rec_hdr->data_len;
                 data_out->data.base = aura_alloc(db->mc, data_out->data.len);
                 if (!data_out->data.base) {
-                    pthread_mutex_unlock(&db->db_lock);
-                    goto exception;
+                    pthread_rwlock_unlock(&rd_cache->rwlock);
+                    return -1;
                 }
 
-                data_out->rec_meta.timestamp = hdr->timestamp;
-                memcpy(data_out->rec_meta.check_sum, hdr->check_sum, DIGEST_LEN);
-                memcpy(data_out->data.base, (char *)hdr + sizeof(*hdr) + hdr->key_len, hdr->data_len);
+                data_out->rec_meta.timestamp = rec_hdr->timestamp_ms;
+                memcpy(data_out->rec_meta.check_sum, rec_hdr->checksum, A_DIGEST_LEN);
+                memcpy(data_out->data.base, (char *)rec_hdr + sizeof(*rec_hdr) + rec_hdr->key_len, rec_hdr->data_len);
             }
-            pthread_mutex_unlock(&db->db_lock);
 
+            pthread_rwlock_unlock(&rd_cache->rwlock);
             return 0;
         }
     }
-    pthread_mutex_unlock(&db->db_lock);
+    pthread_rwlock_unlock(&rd_cache->rwlock);
 
-    while (offset != 0) {
-        res = pread(db->db_fd, &rec_hdr, sizeof(rec_hdr), offset);
-        if (res < 0)
-            goto exception;
+    return A_DB_REC_NOT_FOUND;
+}
+
+static inline struct aura_db_rec_hdr *_a_db_write_cache_fetch(struct aura_db_write_cache *cache, ns_t namespace,
+                                                              schema_id_t schema_id, struct aura_iovec *key,
+                                                              uint32_t hash) {
+    struct aura_db_rec_hdr *rec_hdr;
+    struct aura_db_cache_buf *buf;
+    const char *key_buf;
+    uint64_t off;
+    int check_idx;
+    bool inactive_buf_checked = false;
+
+    check_idx = cache->active_idx;
+redo:
+    buf = &cache->bufs[check_idx];
+    off = buf->hash_bucket[hash].head_off;
+    while (off != UINT64_MAX && buf->size > 0) {
+        /* get record header offset */
+        rec_hdr = (struct aura_db_rec_hdr *)(buf->data + off);
+
+        if (rec_hdr->magic != A_DB_REC_MAGIC)
+            break;
+
+        if (rec_hdr->ns == namespace &&
+            rec_hdr->schema_id == schema_id &&
+            rec_hdr->key_len == key->len &&
+            rec_hdr->hash == hash) {
+            key_buf = (char *)rec_hdr + sizeof(*rec_hdr);
+            if (aura_mem_is_eq(key_buf, rec_hdr->key_len, key->base, key->len)) {
+                if (rec_hdr->flags & A_DB_FLAG_REC_TOMBSTONE)
+                    return NULL;
+
+                return rec_hdr;
+            }
+        }
+
+        off = rec_hdr->prev_cache_off;
+    }
+
+    /* If inactive buffer has data and hasn't been cleared yet */
+    if (inactive_buf_checked)
+        return NULL;
+
+    check_idx = 1 - cache->active_idx;
+    inactive_buf_checked = true;
+    goto redo;
+}
+
+/* Check if transaction for this particular record is active */
+static inline bool a_db_tx_active(struct aura_db_tx_tab_ent *txs, txid_t id) {
+    for (int i = 0; i < A_DB_MAX_CONC_TX; ++i)
+        if (txs[i].id == id && txs[i].state == A_DB_TX_IN_PROGRESS)
+            return true;
+
+    return false;
+}
+
+/* Check for record visibility */
+static inline bool a_db_rec_visible(AURA_DB *db, txid_t tx_id) {
+    if (tx_id == A_DB_NIL_TX_ID)
+        return true;
+
+    if (a_db_tx_active(db->tx_ctx.tx_tab, tx_id))
+        return false;
+
+    return true;
+}
+
+/**
+ * Fetch a record from write cache.
+ * Cache read lock must be held before
+ * calling this function.
+ */
+static int a_db_write_cache_fetch(AURA_DB *db, ns_t namespace, schema_id_t schema_id,
+                                  struct aura_iovec *key, uint32_t hash,
+                                  struct aura_db_rec *data_out) {
+    struct aura_db_write_cache *wrt_cache = &db->cache.wrt_cache;
+    struct aura_db_rec_hdr *rec_hdr;
+
+    pthread_mutex_lock(&wrt_cache->lock);
+    rec_hdr = _a_db_write_cache_fetch(wrt_cache, namespace, schema_id, key, hash);
+    if (rec_hdr) {
+        if (a_db_rec_visible(db, rec_hdr->tx_id)) {
+            if (rec_hdr->flags & A_DB_FLAG_REC_TOMBSTONE) {
+                pthread_mutex_unlock(&wrt_cache->lock);
+                return A_DB_REC_NOT_FOUND;
+            }
+
+            if (data_out) {
+                data_out->data.len = rec_hdr->data_len;
+                data_out->data.base = aura_alloc(db->mc, data_out->data.len);
+                if (!data_out->data.base) {
+                    pthread_mutex_unlock(&wrt_cache->lock);
+                    return -1;
+                }
+
+                data_out->rec_meta.timestamp = rec_hdr->timestamp_ms;
+                memcpy(data_out->rec_meta.check_sum, rec_hdr->checksum, A_DIGEST_LEN);
+                memcpy(data_out->data.base, (char *)rec_hdr + sizeof(*rec_hdr) + rec_hdr->key_len, rec_hdr->data_len);
+            }
+
+            pthread_mutex_unlock(&wrt_cache->lock);
+            return 0;
+        }
+    }
+    pthread_mutex_unlock(&wrt_cache->lock);
+
+    return A_DB_REC_NOT_FOUND;
+}
+
+static int a_db_cache_fetch(AURA_DB *db, ns_t namespace, schema_id_t schema_id,
+                            struct aura_iovec *key, uint32_t hash,
+                            struct aura_db_rec *data_out) {
+    struct aura_db_write_cache *wrt_cache = &db->cache.wrt_cache;
+    struct aura_db_read_cache *rd_cache = &db->cache.read_cache;
+    struct aura_db_rec_hdr *rec_hdr;
+    int rv;
+
+    /* Write cache possibly has the latest record version */
+    rv = a_db_write_cache_fetch(db, namespace, schema_id, key, hash, data_out);
+    if (rv < 0)
+        return -1;
+
+    /* Record found */
+    if (rv == 0)
+        return 0;
+
+    /* Otherwise try read cache */
+    return a_db_read_cache_fetch(db, namespace, schema_id, key, hash, data_out);
+}
+
+static int a_db_fetch(AURA_DB *db, ns_t namespace, schema_id_t schema_id,
+                      struct aura_iovec *key, struct aura_db_rec *data_out) {
+    struct aura_db_rec_hdr rec_hdr, *hdr;
+    char key_buf[2000];
+    uint32_t hash;
+    lsn_t offset;
+    ssize_t res;
+
+    hash = a_fnv1a_hash(A_DB_HASH_BUCKET_CNT, namespace, key);
+
+    pthread_mutex_lock(&db->ctrl_lock);
+    offset = db->control.buckets[hash].head_off;
+    pthread_mutex_unlock(&db->ctrl_lock);
+
+    while (offset != UINT64_MAX) {
+        if (pread(db->main.fd, &rec_hdr, sizeof(rec_hdr), offset) < 0)
+            return -1;
 
         if (rec_hdr.magic != A_DB_REC_MAGIC)
             break;
 
         memset(key_buf, 0, sizeof(key_buf));
         if (rec_hdr.ns == namespace && rec_hdr.schema_id == schema_id && rec_hdr.key_len == key->len) {
-            res = pread(db->db_fd, key_buf, rec_hdr.key_len, offset + sizeof(rec_hdr));
-            if (res < 0)
-                goto exception;
+            if (pread(db->main.fd, key_buf, rec_hdr.key_len, offset + sizeof(rec_hdr)) < 0)
+                return -1;
 
             if (aura_mem_is_eq(key_buf, strlen(key_buf), key->base, key->len)) {
                 if (rec_hdr.flags & A_DB_FLAG_REC_TOMBSTONE)
@@ -1136,22 +2729,24 @@ int aura_db_record_fetch(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_
                     data_out->data.len = rec_hdr.data_len;
                     data_out->data.base = aura_alloc(db->mc, data_out->data.len);
                     if (!data_out->data.base) {
-                        goto exception;
+                        return -1;
                     }
 
-                    res = pread(db->db_fd, data_out->data.base, rec_hdr.data_len, offset + sizeof(rec_hdr) + rec_hdr.key_len);
+                    res = pread(db->main.fd, data_out->data.base, rec_hdr.data_len, offset + sizeof(rec_hdr) + rec_hdr.key_len);
                     if (res != rec_hdr.data_len) {
                         aura_free(data_out->data.base);
-                        goto exception;
+                        return -1;
                     }
 
-                    data_out->rec_meta.timestamp = rec_hdr.timestamp;
-                    memcpy(data_out->rec_meta.check_sum, rec_hdr.check_sum, DIGEST_LEN);
+                    data_out->rec_meta.timestamp = rec_hdr.timestamp_ms;
+                    memcpy(data_out->rec_meta.check_sum, rec_hdr.checksum, A_DIGEST_LEN);
 
-                    res = a_db_record_cache_append(db, &rec_hdr, key, &data_out->data, hash);
-                    if (res < 0) {
-                        /**/
+                    pthread_rwlock_wrlock(&db->cache.read_cache.rwlock);
+                    if (a_db_read_cache_insert(&db->cache.read_cache, &rec_hdr, key, &data_out->data) < 0) {
+                        pthread_rwlock_unlock(&db->cache.read_cache.rwlock);
+                        return -1;
                     }
+                    pthread_rwlock_unlock(&db->cache.read_cache.rwlock);
                 }
 
                 return 0;
@@ -1162,1198 +2757,934 @@ int aura_db_record_fetch(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_
     }
 
     return A_DB_REC_NOT_FOUND;
-
-exception:
-    sys_exit(true, errno, "aura_db_record_fetch error");
 }
 
-int aura_db_record_delete(AURA_DBHANDLE _db, uint16_t namespace, uint16_t schema_id, uint64_t job_id,
-                          struct aura_iovec *key, aura_db_exec_mode exec_mode,
-                          struct aura_db_completion *comp) {
-    AURA_DB *db;
+int aura_db_fetch(AURA_DBHANDLE _db, ns_t namespace, schema_id_t schema_id,
+                  struct aura_iovec *key, struct aura_db_rec *data_out) {
+    struct aura_db_rec_hdr rec_hdr, *hdr;
+    uint32_t hash;
     off_t offset;
-    int res;
-
-    db = (AURA_DB *)_db;
-    if (exec_mode == A_DB_EXEC_DIRECT) {
-        offset = a_db_record_insert_core(
-          _db,
-          namespace,
-          schema_id,
-          job_id,
-          0,
-          A_DB_FLAG_REC_TOMBSTONE,
-          A_DB_OP_DELETE,
-          key,
-          NULL);
-        if (offset < 0)
-            return -1;
-        return 0;
-
-    } else if (exec_mode == A_DB_EXEC_ASYNC) {
-        struct aura_iovec *key_ptr;
-
-        key_ptr = aura_iovec_init(db->mc, key->len, NULL);
-        if (!key_ptr)
-            return -1;
-
-        memcpy(key_ptr->base, key->base, key_ptr->len);
-        res = a_db_enqueue_request(
-          _db,
-          namespace,
-          schema_id,
-          job_id,
-          0,
-          A_DB_FLAG_REC_TOMBSTONE,
-          A_DB_OP_DELETE,
-          key_ptr,
-          NULL,
-          comp);
-        if (res < 0) {
-            aura_iovec_destroy(key_ptr);
-            return -1;
-        }
-        return 0;
-    }
-}
-
-/* Append to WAL file */
-static inline off_t a_db_wal_append(int wal_fd, struct aura_db_wal_rec_hdr *wal_rec_hdr,
-                                    struct aura_db_rec_hdr *rec_hdr, struct aura_iovec *key,
-                                    struct aura_iovec *data) {
-    off_t offset;
-    struct iovec iov[5];
     ssize_t res;
-    size_t pad_len;
+    char key_buf[2000];
+    AURA_DB *db = _db;
+    int rv;
 
-    offset = lseek(wal_fd, 0, SEEK_END);
-    if (offset < 0)
-        sys_exit(true, errno, "a_db_wal_append: lseek error:");
+    hash = a_fnv1a_hash(A_DB_HASH_BUCKET_CNT, namespace, key);
 
-    /* Update lsn */
-    wal_rec_hdr->lsn = offset;
-
-    iov[0].iov_base = wal_rec_hdr;
-    iov[0].iov_len = sizeof(*wal_rec_hdr);
-    iov[1].iov_base = (void *)rec_hdr;
-    iov[1].iov_len = sizeof(*rec_hdr);
-    iov[2].iov_base = key->base;
-    iov[2].iov_len = key->len;
-    iov[3].iov_base = NULL;
-    iov[3].iov_len = 0;
-    if (data) {
-        iov[3].iov_base = data->base;
-        iov[3].iov_len = data->len;
+    if (data_out) {
+        memset(data_out, 0, sizeof(*data_out));
     }
 
-    /* Add padding */
-    pad_len = rec_hdr->rec_len.aligned_len - rec_hdr->rec_len.raw_len;
-    char pad[pad_len];
-    memset(pad, 0, pad_len);
-    iov[4].iov_base = pad;
-    iov[4].iov_len = pad_len;
+    /**
+     * Cache
+     */
+    rv = a_db_cache_fetch(db, namespace, schema_id, key, hash, data_out);
+    if (rv < 0) {
+        return -1;
+    }
 
-    res = writev(wal_fd, iov, 5);
-    if (res < 0)
-        sys_exit(true, errno, "a_db_wal_append: writev error:");
+    if (rv == 0) {
+        /* Record found */
+        return 0;
+    }
 
-    fsync(wal_fd);
-    return offset;
+    /**
+     * DB
+     */
+    return a_db_fetch(db, namespace, schema_id, key, data_out);
 }
 
-/** Write operation to WAL file */
-static off_t a_db_wal_commit(int wal_fd, int wal_op, struct aura_db_rec_hdr *rec_hdr,
-                             struct aura_iovec *key, struct aura_iovec *data) {
-    struct aura_db_wal_rec_hdr wal_hdr;
+int aura_db_delete(AURA_DBHANDLE _db, ns_t namespace, schema_id_t schema_id, struct aura_iovec *key) {
+    AURA_DB *db = _db;
+    struct aura_db_th_data *th_data;
     off_t offset;
+    int rv;
 
-    wal_hdr.magic = A_DB_WAL_MAGIC;
-    wal_hdr.op = wal_op;
-    wal_hdr.rec_len = rec_hdr->rec_len.aligned_len + sizeof(wal_hdr);
+    th_data = pthread_getspecific(thread_key);
 
-    offset = a_db_wal_append(wal_fd, &wal_hdr, rec_hdr, key, data);
-    return offset;
+    if (!th_data || th_data->tx.state == A_DB_TX_NIL) {
+        if (!th_data) {
+            th_data = calloc(1, sizeof(*th_data));
+            if (!th_data)
+                return -1;
+            a_db_reset_th_data(th_data);
+        }
+
+        int flags = A_DB_TX_FL_SYNC;
+        a_db_init_tx(db, th_data, 0, A_DB_TO_INFINITY, flags);
+    } else {
+        /* Multi record tx */
+        A_BUG_ON_2(th_data->tx.state != A_DB_TX_IN_PROGRESS, true);
+    }
+
+    rv = _a_db_rec_insert(
+      db,
+      th_data,
+      namespace,
+      schema_id,
+      A_DB_FLAG_REC_TOMBSTONE,
+      A_DB_LOG_TYPE_UPDATE,
+      A_DB_DELETE_OP,
+      key,
+      NULL);
+    if (rv < 0) {
+        int r = a_db_transaction_abort(db, &th_data->tx);
+        a_db_release_active_tx(&db->tx_ctx, th_data->glob_tx_idx);
+        a_db_reset_th_data(th_data);
+    }
+
+    pthread_setspecific(thread_key, (void *)th_data);
+
+    return rv;
 }
 
-/* DB replay structure */
-struct aura_db_replay_tab {
-    struct {
-        uint32_t cnt;
-        uint32_t cap;
-        struct {
-            uint64_t job_id;
-            uint32_t state;
-        } *visited;
-    } jobs;
+static uint64_t a_db_get_next_tid(AURA_DB *db) {
+    uint64_t tx_id;
 
-    struct {
-        uint32_t cnt;
-        uint32_t cap;
-        struct {
-            off_t offset;
-            uint64_t job_id;
-            size_t rec_len;
-        } *visited;
-    } records;
-};
+    pthread_mutex_lock(&db->tx_ctx.lock);
+    tx_id = db->tx_ctx.next_id;
+    db->tx_ctx.next_id = (db->tx_ctx.next_id + 1) & db->tx_ctx.id_mask;
+    pthread_mutex_unlock(&db->tx_ctx.lock);
 
-int a_db_replay_tab_add(struct aura_db_replay_tab *tab, uint64_t job_id,
-                        uint32_t state, off_t rec_off, size_t rec_len) {
+    return tx_id;
+}
 
-    /* Insert into Job table */
-    if (rec_off == 0) {
-        /* Check if id is new or updated */
-        for (int i = 0; i < tab->jobs.cnt; ++i) {
-            if (tab->jobs.visited[i].job_id == job_id) {
-                /* Nothing to do */
-                if (tab->jobs.visited[i].state == state)
-                    return 0;
+static uint64_t a_db_get_oldest_active_tid(AURA_DB *db) {
+    uint64_t oldest_active_tx_id, tx_id;
 
-                /* Otherwise update state */
-                tab->jobs.visited[i].state = state;
-                return 0;
-            }
-        }
+    oldest_active_tx_id = atomic_load(&db->tx_ctx.next_id);
 
-        if (tab->jobs.cnt >= tab->jobs.cap) {
-            tab->jobs.cap = tab->jobs.cap >= 16 ? tab->jobs.cap * 2 : 16;
-            tab->jobs.visited = realloc(tab->jobs.visited, tab->jobs.cap * sizeof(*tab->jobs.visited));
-            if (!tab->jobs.visited)
-                return -1;
-        }
-
-        tab->jobs.visited[tab->jobs.cnt].job_id = job_id;
-        tab->jobs.visited[tab->jobs.cnt].state = state;
-        tab->jobs.cnt++;
-    } else {
-        /* Insert into Record table */
-        if (tab->records.cnt >= tab->records.cap) {
-            tab->records.cap = tab->records.cap >= 16 ? tab->records.cap * 2 : 16;
-            tab->records.visited = realloc(tab->records.visited, tab->records.cap * sizeof(*tab->records.visited));
-            if (!tab->records.visited)
-                return -1;
-        }
-
-        tab->records.visited[tab->records.cnt].job_id = job_id;
-        tab->records.visited[tab->records.cnt].offset = rec_off;
-        tab->records.visited[tab->records.cnt].rec_len = rec_len;
-        tab->records.cnt++;
+    for (int i = 0; i < A_DB_MAX_CONC_TX; ++i) {
+        tx_id = db->tx_ctx.tx_tab[i].id;
+        if (tx_id < oldest_active_tx_id)
+            oldest_active_tx_id = tx_id;
     }
+
+    return oldest_active_tx_id;
+}
+
+/**
+ * Flush active write cache to disk.
+ * We switch the active cache buffer to point
+ * to the "free" buffer.
+ */
+static int a_db_write_cache_flush(AURA_DB *db, int flags) {
+    struct aura_db_write_cache *cache;
+    struct aura_db_cache_buf *to_flush;
+    struct aura_db_rec_hdr *rec_hdr;
+    uint64_t off;
+
+    cache = &db->cache.wrt_cache;
+
+    pthread_mutex_lock(&cache->lock);
+    to_flush = &cache->bufs[cache->write_idx];
+
+    if (!a_db_write_cache_should_flush(to_flush, flags)) {
+        pthread_mutex_unlock(&cache->lock);
+        return 0;
+    }
+
+    /**
+     * If active index is not equal to write index,
+     * active buffer moved one step, as a result of the
+     * current inactive buffer being filled up. As such,
+     * write index should move to point to the current active
+     * buffer. So the next call to flush points to the correct
+     * to_flush buffer
+     */
+    if (cache->active_idx != cache->write_idx)
+        cache->write_idx = 1 - cache->write_idx;
+    pthread_mutex_unlock(&cache->lock);
+
+    /**
+     * Since we want to perform actual write without blocking reads.
+     * We snapshot the current db control version
+     * We use the control cond var to block any other thread. This prevents
+     * corrupting the control info incase a new write-cache flush
+     * happens to be invoked in another thread. We would not want this
+     * new cache flush to update a stale db control.
+     */
+    struct aura_db_control control;
+    while (true) {
+        pthread_mutex_lock(&db->ctrl_lock);
+        while (db->ctrl_busy)
+            pthread_cond_wait(&db->ctrl_cond, &db->ctrl_lock);
+
+        db->ctrl_busy = true;
+
+        memcpy(&control, &db->control, sizeof(control));
+        pthread_mutex_unlock(&db->ctrl_lock);
+        break;
+    }
+
+    /**
+     * Because of keeping records in thread private storage and
+     * because I haven't thought hard about how to cohesively
+     * update record chains and hash bucket. What we can do for now
+     * is loop over the records in the buffer here and update control and
+     * record chain.
+     * We can also allow cache reads using this same to_flush buffer,
+     * because cache reads use the record cache offset which remain
+     * unchanged during the duration of the entire buffer write.
+     * Also db reads can proceed as we only append, and the current
+     * control would not read any newly appended data yet.
+     */
+    off = 0;
+    while (off < to_flush->size) {
+        rec_hdr = (struct aura_db_rec_hdr *)(to_flush->data + off);
+        A_BUG_ON_2(rec_hdr->magic != 0xED5EC001, true);
+
+        rec_hdr->prev_off = control.buckets[rec_hdr->hash].head_off;
+        control.buckets[rec_hdr->hash].head_off = control.file_size;
+        control.file_size += rec_hdr->rec_len.aligned_len;
+        control.record_cnt++;
+
+        off += rec_hdr->rec_len.aligned_len;
+    }
+
+    if (lseek(db->main.fd, 0, SEEK_END) < 0)
+        return -1;
+
+    if (write(db->main.fd, to_flush->data, to_flush->size) != to_flush->size)
+        return -1;
+    fdatasync(db->main.fd);
+
+    /* update control */
+    if (lseek(db->ctrl_file_fd, 0, SEEK_SET) < 0)
+        return -1;
+
+    if (a_db_meta_write(db->ctrl_file_fd, (void *)&control, sizeof(control)) < 0)
+        return -1;
+    fdatasync(db->main.fd);
+
+    /* Let threads waiting know we are done with control update */
+    pthread_mutex_lock(&db->ctrl_lock);
+    db->ctrl_busy = false;
+    pthread_cond_signal(&db->ctrl_cond);
+    pthread_mutex_unlock(&db->ctrl_lock);
+
+    /* switch control to this new version */
+    pthread_mutex_lock(&db->ctrl_lock);
+    memcpy(&db->control, &control, sizeof(control));
+    pthread_mutex_unlock(&db->ctrl_lock);
+
+    /**
+     * Since we hold the cache lock when reading
+     * from it. Resetting the cache should work as
+     * we would already be done with the cache if we
+     * were reading it, or be blocked waiting if we
+     * hadn't yet acquired the lock to read from cache.
+     * Either way we run before or after this call which
+     * means we always have valid data in cache or no
+     * data at all.
+     */
+    pthread_mutex_lock(&cache->lock);
+    to_flush->flags &= ~A_DB_WRITE_CACHE_SYNCING;
+    pthread_mutex_unlock(&cache->lock);
+    /**
+     * Alert sync for this buffer is done
+     */
+    pthread_cond_signal(&cache->sync_cond);
 
     return 0;
 }
 
-static void inline a_db_update_hash_bucket(struct aura_db_rec_hdr *rec_hdr, struct aura_db_bucket_entry *bucket,
-                                           uint64_t bucket_cnt, void *key, off_t offset) {
-    uint32_t hash;
-    struct aura_iovec key_iov;
+static void a_db_checkpoint_th_cleanup(void *arg) {
+    AURA_DB *db = arg;
 
-    key_iov.base = key;
-    key_iov.len = rec_hdr->key_len;
-    hash = a_fnv1a_hash(bucket_cnt, rec_hdr->ns, &key_iov);
-    bucket[hash].head_off = offset;
+    db->th_pool[A_DB_THREAD_CHECKPOINTER].status = A_DB_BG_TH_STOPPED;
+    atomic_fetch_sub(&db->ref_cnt, 1);
+}
+
+static inline bool a_db_recovery_in_progress(AURA_DB *db) {
+    return (atomic_load(&db->state) == A_DB_STATE_RECOVERY);
 }
 
 /**
- * Replay operations from WAL file and restore db to
- * achieve consistent state.
+ * Snapshot the list of active transactions storing
+ * the tx ids in tx_ids and returning the active count.
  */
-static int a_db_wal_replay(AURA_DB *db) {
-    struct aura_db_rec_hdr *rec_hdr;
-    struct aura_db_hdr hdr;
-    struct aura_db_wal_hdr wal_db_hdr;
-    struct aura_db_bucket_entry *bucket_buf;
-    struct aura_db_replay_tab *replay_tab;
-    off_t write_offset;
-    ssize_t res;
-    struct stat statbuf;
-    char *record_buf;
-    struct iovec hdr_iov, bucket_iov;
-    int rv;
-    bool free_new_bucket;
+static inline int a_db_get_txs_delaying_chkpt(AURA_DB *db, struct aura_db_tx_tab_ent *txs) {
+    int active_cnt = 0;
 
-    if (fstat(db->wal_fd, &statbuf) < 0)
-        sys_exit(true, errno, "a_db_wal_replay: fstat error:");
+    pthread_mutex_lock(&db->tx_ctx.lock);
+    for (int i = 0; i < A_DB_MAX_CONC_TX; ++i) {
+        if (db->tx_ctx.tx_tab[i].state == A_DB_TX_IN_PROGRESS) {
+            ++active_cnt;
+            memcpy(&txs[i], &db->tx_ctx.tx_tab[i], sizeof(*txs));
+        }
+    }
+    pthread_mutex_unlock(&db->tx_ctx.lock);
 
-    /* wal empty */
-    if (statbuf.st_size == sizeof(wal_db_hdr)) {
+    return active_cnt;
+}
+
+/**
+ * Check active transactions, comparing snapshot against
+ * the active tx table
+ */
+static inline bool a_db_txs_delaying_chkpt(AURA_DB *db, struct aura_db_tx_tab_ent *txs) {
+    bool rv = false;
+
+    pthread_mutex_lock(&db->tx_ctx.lock);
+    for (int i = 0; i < A_DB_MAX_CONC_TX; ++i) {
+        for (int j = 0; j < A_DB_MAX_CONC_TX; ++j) {
+            if (db->tx_ctx.tx_tab[i].id == txs[j].id && db->tx_ctx.tx_tab[i].state == A_DB_TX_IN_PROGRESS) {
+                rv = true;
+                break;
+            } else
+                txs[j].id = A_DB_NIL_TX_ID;
+        }
+
+        if (rv)
+            break;
+    }
+    pthread_mutex_unlock(&db->tx_ctx.lock);
+
+    return rv;
+}
+
+static inline bool a_db_checkpoint_should_run(int flags) {
+    int flags_no_skip = A_DB_CHECKPOINT_SHUTDOWN | A_DB_CHECKPOINT_RECOVERY | A_DB_CHECKPOINT_FORCE;
+    /* No work has been done, abort all together */
+    if (last_important_lsn == last_checkpoint_lsn)
+        return false;
+
+    /**
+     * Checkpoint trigger is timed.
+     * If size is too small, ignore trigger.
+     */
+    if (((last_important_lsn - last_checkpoint_lsn) < A_DB_LOG_SZ_THRESHOLD >> 1) && (flags & flags) == 0)
+        return false;
+
+    /**
+     * Size large enough or trigger is forced.
+     */
+    return true;
+}
+
+static int a_db_create_checkpoint(AURA_DB *db, struct aura_db_th_data *th_data, int flags) {
+    struct aura_db_checkpoint chkpt = {0};
+    struct aura_db_rec_hdr rec_hdr;
+    struct aura_db_wal_rec_hdr wal_rec_hdr;
+    struct aura_db_tx *tx = &th_data->tx;
+    off_t rec_off = 0;
+    bool shutdown = false;
+    int rv, active_xids;
+
+    if (flags & A_DB_CHECKPOINT_SHUTDOWN)
+        shutdown = true;
+
+    if (a_db_recovery_in_progress(db) && (flags & A_DB_CHECKPOINT_RECOVERY) == 0) {
+        app_debug(true, 0, "Incorrect checkpoint flags at recovery end: flags=%d", flags);
+        return -1;
+    }
+
+    if (!a_db_checkpoint_should_run(flags)) {
+        /**
+         * Since shutdown checkpoint runs when all active txs
+         * have been finalized. We are guaranteed that no new
+         * WAL has been added at the point. See a_db_checkpoint_should_run(),
+         * We can simply update control file and shutdown.
+         */
+        if (shutdown) {
+            pthread_mutex_lock(&db->ctrl_lock);
+            db->control.shutdown_state = A_DB_STATE_SHUTDOWN;
+
+            if (a_db_meta_write(db->ctrl_file_fd, (void *)&db->control, sizeof(db->control)) < 0) {
+                return -1;
+            }
+
+            fdatasync(db->ctrl_file_fd);
+            pthread_mutex_unlock(&db->ctrl_lock);
+        }
         return 0;
     }
 
-    pthread_mutex_lock(&db->db_lock);
-    db->is_busy = true;
-    pthread_mutex_unlock(&db->db_lock);
+    /* Checkpoint taken at */
+    aura_now_ts(&chkpt.chkpt_time, CLOCK_MONOTONIC);
 
-    bucket_buf = NULL;
-    free_new_bucket = true;
+    if (shutdown) {
+        /**
+         * During shutdown, since we wait for all active tx to finalize,
+         * no new logs can be added at this point.
+         * so wal.write_lsn would point to the end
+         * of the file, as also no need to acquire
+         * the wal lock to use this
+         */
+        chkpt.redo_lsn = db->wal.write_lsn;
+    } else {
+        /**
+         * We do not yet know the lsn during
+         * online checkpointing, we insert
+         * the commit begin record to mark our
+         * starting point for next time we run replay
+         */
+        struct aura_db_checkpoint_begin redo_rec;
+        struct aura_iovec key, data;
+        char keybuf[64];
 
-    res = pread(db->db_fd, &hdr, sizeof(hdr), 0);
-    if (res != sizeof(hdr)) {
-        sys_debug(true, errno, "a_db_wal_replay: pread db_hdr error:");
-        rv = -1;
-        goto out;
-    }
+        redo_rec.format_version = 1;
+        memset(keybuf, 0, sizeof(keybuf));
+        snprintf(keybuf, sizeof(keybuf), "%s", A_DB_CHECKPOINT_KEY);
+        key.base = keybuf;
+        key.len = sizeof(A_DB_CHECKPOINT_KEY) - 1;
+        data.base = (char *)&redo_rec;
+        data.len = sizeof(redo_rec);
 
-    res = pread(db->wal_fd, &wal_db_hdr, sizeof(wal_db_hdr), 0);
-    if (res != sizeof(wal_db_hdr)) {
-        sys_debug(true, errno, "a_db_wal_replay: pread db_wal_hdr error:");
-        rv = -1;
-        goto out;
-    }
-
-    size_t bucket_size;
-
-    bucket_size = hdr.bucket_cnt * sizeof(struct aura_db_bucket_entry);
-    bucket_buf = calloc(1, bucket_size);
-    if (!bucket_buf) {
-        sys_debug(true, errno, "a_db_wal_replay: bucket buf memory error:");
-        rv = -1;
-        goto out;
-    }
-
-    res = pread(db->db_fd, bucket_buf, bucket_size, hdr.bucket_off);
-    if (res != bucket_size) {
-        sys_debug(true, errno, "a_db_wal_replay: pread bucket error:");
-        rv = -1;
-        goto out;
-    }
-
-    struct aura_db_wal_rec_hdr wal_rec_hdr;
-    size_t record_len, prev_len;
-    off_t read_off, prev_off;
-    void *key, *data;
-    struct aura_iovec c_key, c_data;
-    struct aura_db_checkpoint_rec *check_pnt_rec;
-
-    c_key.base = A_DB_CHECK_PNT_RECORD_KEY;
-    c_key.len = sizeof(A_DB_CHECK_PNT_RECORD_KEY);
-
-    replay_tab = NULL;
-    check_pnt_rec = NULL;
-    replay_tab = calloc(1, sizeof(*replay_tab));
-    if (!replay_tab) {
-        rv = -1;
-        goto out;
-    }
-
-    struct aura_db_wal_rec_hdr chk_pnt_wal_rec_hdr;
-    struct aura_db_rec_hdr *chk_pnt_rec_hdr;
-    ssize_t rc;
-    size_t chk_pnt_rec_data_len;
-    void *ch_pnt_data;
-
-    /* Read in checkpoint record stored at offset hdr.lsn */
-    ch_pnt_data = NULL;
-    if (hdr.lsn > 0) {
-        rc = pread(db->wal_fd, &chk_pnt_wal_rec_hdr, sizeof(chk_pnt_wal_rec_hdr), hdr.lsn);
-        if (rc != sizeof(chk_pnt_wal_rec_hdr)) {
-            rv = -1;
-            goto out;
+        /* construct wal record */
+        if (a_db_rec_hdr_init(
+              db,
+              &rec_hdr,
+              A_DB_TX_NS,
+              A_DB_CHECK_PNT_SCHEMA_ID,
+              A_DB_NIL_TX_ID,
+              A_DB_NIL_PREV_TX_REC_OFF,
+              &key,
+              &data,
+              flags) < 0) {
+            return -1;
         }
 
-        chk_pnt_rec_data_len = chk_pnt_wal_rec_hdr.rec_len - sizeof(chk_pnt_wal_rec_hdr);
-        ch_pnt_data = malloc(chk_pnt_rec_data_len);
-        if (!ch_pnt_data) {
-            rv = -1;
-            goto out;
-        }
+        a_db_wal_rec_hdr_init(&wal_rec_hdr, A_DB_LOG_TYPE_BEGIN_CKPT, &rec_hdr, A_DB_INSERT_OP);
 
-        rc = pread(db->wal_fd, ch_pnt_data, chk_pnt_rec_data_len, hdr.lsn + sizeof(chk_pnt_wal_rec_hdr));
-        if (rc != chk_pnt_rec_data_len) {
-            rv = -1;
-            goto out;
-        }
+        if (a_db_stage_rec(tx, &wal_rec_hdr, &rec_hdr, &key, &data) < 0)
+            return -1;
 
-        struct aura_db_rec_hdr *ch_pnt_data_hdr;
-        ch_pnt_data_hdr = (struct aura_db_rec_hdr *)ch_pnt_data;
+        tx->rec_len = wal_rec_hdr.rec_len;
+        rec_off = a_db_log_buf_append(db, tx);
+        if (rec_off < 0)
+            return -1;
 
-        check_pnt_rec = (struct aura_db_checkpoint_rec *)((char *)ch_pnt_data +
-                                                          sizeof(*ch_pnt_data_hdr) + ch_pnt_data_hdr->key_len);
-        check_pnt_rec->pending_jobs = (struct aura_db_pending_job *)((char *)check_pnt_rec + sizeof(*check_pnt_rec));
-        check_pnt_rec->pending_job_records = (struct aura_db_pending_job_rec *)((char *)check_pnt_rec->pending_jobs +
-                                                                                (sizeof(struct aura_db_pending_job) * check_pnt_rec->pending_job_rec_cnt));
+        if (a_db_log_flush(&db->wal, A_DB_LOG_WRITER_FORCE) < 0)
+            return -1;
 
-        for (int i = 0; i < check_pnt_rec->pending_job_cnt; ++i) {
-            if (a_db_replay_tab_add(replay_tab, check_pnt_rec->pending_jobs[i].job_id,
-                                    check_pnt_rec->pending_jobs[i].job_state, 0, 0) != 0) {
-                goto out;
-            }
-        }
-
-        for (int i = 0; i < check_pnt_rec->pending_job_rec_cnt; ++i) {
-            if (a_db_replay_tab_add(replay_tab, check_pnt_rec->pending_job_records[i].job_id, 0,
-                                    check_pnt_rec->pending_job_records[i].rec_off,
-                                    check_pnt_rec->pending_job_records[i].rec_len) != 0) {
-                goto out;
-            }
-        }
+        /**
+         * redo off becomes the tx begin
+         * record, since we can be sure everything
+         * before rec_off should be persisted to LOG
+         */
+        chkpt.redo_lsn = rec_off;
     }
 
-    prev_len = 4096;
-    record_buf = calloc(1, prev_len);
-    if (!record_buf)
+    chkpt.next_txid = a_db_get_next_tid(db);
+
+    /**
+     * Wait for sometime transactions delaying checkpoint
+     */
+    memset(chkpt.trans, 0, sizeof(chkpt.trans));
+    active_xids = a_db_get_txs_delaying_chkpt(db, chkpt.trans);
+    if (active_xids > 0) {
+        uint64_t tx_wait = aura_now_ms(CLOCK_MONOTONIC);
+        do {
+            sleep(0.01); /* 10ms wait */
+            if (aura_now_ms(CLOCK_MONOTONIC) - tx_wait > A_DB_TX_CHECKPOINT_WAIT)
+                break;
+        } while (a_db_txs_delaying_chkpt(db, chkpt.trans));
+    }
+
+    /* Flush cache */
+    if (a_db_write_cache_flush(db, A_DB_WRITE_CACHE_FLUSH_FORCE) < 0)
         return -1;
 
-    read_off = hdr.lsn == 0 ? sizeof(wal_db_hdr) : hdr.lsn + chk_pnt_wal_rec_hdr.rec_len;
-    /* No new records were added */
-    if (read_off == statbuf.st_size) {
-        rv = 0;
-        goto out;
+    /* Prepare checkpoint record */
+    struct aura_iovec key, data;
+    char keybuf[64];
+
+    memset(keybuf, 0, sizeof(keybuf));
+    snprintf(keybuf, sizeof(keybuf), "%s", A_DB_CHECKPOINT_KEY);
+    key.base = keybuf;
+    key.len = sizeof(A_DB_CHECKPOINT_KEY) - 1;
+    data.base = (char *)&chkpt;
+    data.len = sizeof(chkpt);
+
+    /* construct wal record */
+    if (a_db_rec_hdr_init(
+          db,
+          &rec_hdr,
+          A_DB_TX_NS,
+          A_DB_CHECK_PNT_SCHEMA_ID,
+          A_DB_NIL_TX_ID,
+          A_DB_PREV_JOB_REC_NONE,
+          &key,
+          &data,
+          flags) < 0) {
+        return -1;
     }
 
-    prev_off = db->db_file_hdr.last_rec_off;
+    a_db_wal_rec_hdr_init(&wal_rec_hdr, A_DB_LOG_TYPE_END_CKPT, &rec_hdr, A_DB_INSERT_OP);
 
-    while (true) {
-        res = pread(db->wal_fd, &wal_rec_hdr, sizeof(wal_rec_hdr), read_off);
-        /* EOF */
-        if (res == 0) {
-            uint32_t state, chk_pnt_data_len;
-            uint64_t job_id;
-            struct aura_db_checkpoint_rec *chk_pnt_rec;
-            struct aura_db_replay_tab *chk_pnt_tab;
-            struct aura_iovec chk_pnt_key, chk_pnt_data;
-            struct aura_db_wal_rec_hdr chk_pnt_wal_rec_hdr;
-            struct aura_db_rec_hdr chk_pnt_rec_hdr;
-            off_t chk_pnt_off;
-            size_t pending_job_cnt, pending_job_rec_cnt;
-            int res;
+    if (a_db_stage_rec(tx, &wal_rec_hdr, &rec_hdr, &key, &data) < 0)
+        return -1;
 
-            pending_job_cnt = 0;
-            pending_job_rec_cnt = 0;
-            for (int i = 0; i < replay_tab->jobs.cnt; ++i) {
-                state = replay_tab->jobs.visited[i].state;
-                if (state != A_DB_JOB_DONE && state != A_DB_JOB_FAILED) {
-                    pending_job_cnt++;
+    tx->rec_len = wal_rec_hdr.rec_len;
+    rec_off = a_db_log_buf_append(db, tx);
+    if (rec_off < 0)
+        return -1;
 
-                    for (int j = 0; j < replay_tab->records.cnt; ++j) {
-                        if (replay_tab->records.visited[j].job_id == replay_tab->jobs.visited[i].job_id) {
-                            pending_job_rec_cnt++;
-                        }
-                    }
-                }
-            }
+    /* Flush log */
+    pthread_mutex_lock(&db->wal.lock);
+    while (db->wal.holding_flush > 0)
+        pthread_cond_wait(&db->wal.cond, &db->wal.lock);
 
-            chk_pnt_data_len = sizeof(*chk_pnt_rec) +
-                               sizeof(struct aura_db_pending_job) * pending_job_cnt +
-                               sizeof(struct aura_db_pending_job_rec) * pending_job_rec_cnt;
+    if (a_db_log_flush(&db->wal, A_DB_LOG_WRITER_FORCE) < 0) {
+        pthread_mutex_unlock(&db->wal.lock);
+        return -1;
+    }
 
-            chk_pnt_key.base = A_DB_CHECK_PNT_RECORD_KEY;
-            chk_pnt_key.len = sizeof(A_DB_CHECK_PNT_RECORD_KEY) - 1;
-            chk_pnt_data.base = calloc(1, chk_pnt_data_len);
-            chk_pnt_data.len = chk_pnt_data_len;
+    pthread_mutex_unlock(&db->wal.lock);
 
-            chk_pnt_rec = (struct aura_db_checkpoint_rec *)chk_pnt_data.base;
-            chk_pnt_rec->version = A_DB_VERSION;
-            chk_pnt_rec->magic = A_DB_CHK_PNT_MAGIC;
-            chk_pnt_rec->lsn = hdr.lsn;
-            chk_pnt_rec->pending_job_cnt = pending_job_cnt;
-            chk_pnt_rec->pending_job_rec_cnt = pending_job_rec_cnt;
-            chk_pnt_rec->pending_jobs = (struct aura_db_pending_job *)(chk_pnt_data.base + sizeof(*chk_pnt_rec));
-            chk_pnt_rec->pending_job_records = (struct aura_db_pending_job_rec *)((char *)chk_pnt_rec->pending_jobs + (sizeof(struct aura_db_pending_job) * pending_job_cnt));
+    /* Update control file */
+    pthread_mutex_lock(&db->ctrl_lock);
+    if (shutdown)
+        db->control.shutdown_state = A_DB_STATE_SHUTDOWN;
+    db->control.chkpt_copy = chkpt;
 
-            /* Store pending jobs */
-            int rec_idx = 0;
-            for (int i = 0, job_idx = 0; i < replay_tab->jobs.cnt, job_idx < pending_job_cnt; ++i) {
-                state = replay_tab->jobs.visited[i].state;
-                job_id = replay_tab->jobs.visited[i].job_id;
-                if (state != A_DB_JOB_DONE && state != A_DB_JOB_FAILED) {
-                    chk_pnt_rec->pending_jobs[job_idx].job_id = job_id;
-                    chk_pnt_rec->pending_jobs[job_idx].job_state = state;
-                    // chk_pnt_rec->pending_jobs[job_idx].job_type = replay_tab->jobs.visited[i].type;
-                    // chk_pnt_rec->pending_jobs[job_idx].last_committed_lsn = replay_tab->jobs.visited[i].last_committed_lsn;
-                    job_idx++;
+    if (a_db_meta_write(db->ctrl_file_fd, (void *)&db->control, sizeof(db->control)) < 0) {
+        return -1;
+    }
 
-                    /**
-                     * For each job, check records table for associated records
-                     */
-                    for (int k = 0; k < replay_tab->records.cnt; ++k) {
-                        if (replay_tab->records.visited[k].job_id == job_id) {
-                            chk_pnt_rec->pending_job_records[rec_idx].job_id = job_id;
-                            chk_pnt_rec->pending_job_records[rec_idx].rec_len = replay_tab->records.visited[k].rec_len;
-                            chk_pnt_rec->pending_job_records[rec_idx].rec_off = replay_tab->records.visited[k].offset;
-                            rec_idx++;
-                        }
-                    }
-                }
-            }
+    fdatasync(db->ctrl_file_fd);
+    pthread_mutex_unlock(&db->ctrl_lock);
 
-            res = a_db_record_header_init(db, &chk_pnt_rec_hdr, A_DB_NS_CHECK_PNT,
-                                          A_DB_SCHEMA_CHECK_PNT, A_DB_JOB_ID_NONE, A_DB_PREV_JOB_REC_NONE,
-                                          &chk_pnt_key, &chk_pnt_data, 0);
-            if (res < 0) {
-                free(chk_pnt_data.base);
+    return rec_off;
+}
+
+static void *a_db_checkpointer(void *arg) {
+    AURA_DB *db = arg;
+    struct aura_db_checkpoint chkpt;
+    struct aura_db_th_data *th_data;
+    struct timespec ts;
+    int64_t now, elapsed;
+    bool do_checkpoint, shutdown, timedout = false;
+    int rv, flags = 0;
+    off_t off;
+
+    th_data = pthread_getspecific(thread_key);
+    if (!th_data) {
+        th_data = calloc(1, sizeof(*th_data));
+        if (!th_data)
+            return NULL;
+        a_db_reset_th_data(th_data);
+    }
+
+    /**
+     * Register thread using DB
+     */
+    db->th_pool[A_DB_THREAD_CHECKPOINTER].status = A_DB_BG_TH_RUNNING;
+    atomic_fetch_add(&db->ref_cnt, 1);
+    pthread_cleanup_push(a_db_checkpoint_th_cleanup, arg);
+
+    pthread_barrier_wait(&barrier);
+
+    shutdown = false;
+    pthread_mutex_lock(&db->checkpoint_ctx.lock);
+
+    for (;;) {
+        while (db->checkpoint_ctx.nr_of_reqs == 0) {
+            ts.tv_sec = time(NULL) + A_DB_CHECKPOINTER_INTERVAL;
+            ts.tv_nsec = 0;
+
+            rv = pthread_cond_timedwait(&db->checkpoint_ctx.cond, &db->checkpoint_ctx.lock, &ts);
+            if (rv != 0 && rv != ETIMEDOUT)
                 goto out;
-            }
 
-            chk_pnt_wal_rec_hdr.magic = A_DB_WAL_MAGIC;
-            chk_pnt_wal_rec_hdr.op = A_DB_OP_INSERT;
-            chk_pnt_wal_rec_hdr.rec_len = chk_pnt_rec_hdr.rec_len.aligned_len + sizeof(chk_pnt_wal_rec_hdr);
+            if (rv == ETIMEDOUT)
+                timedout = true;
 
-            chk_pnt_off = a_db_wal_append(db->wal_fd, &chk_pnt_wal_rec_hdr, &chk_pnt_rec_hdr, &chk_pnt_key, &chk_pnt_data);
-            if (chk_pnt_off < 0) {
-                free(chk_pnt_data.base);
-                rv = -1;
-                goto out;
-            }
-
-            hdr.lsn = chk_pnt_off;
-            hdr_iov.iov_base = &hdr;
-            hdr_iov.iov_len = sizeof(hdr);
-            bucket_iov.iov_base = bucket_buf;
-            bucket_iov.iov_len = bucket_size;
-
-            res = a_db_meta_write(db->db_fd, &hdr_iov, &bucket_iov);
-            if (res != (hdr_iov.iov_len + bucket_iov.iov_len)) {
-                sys_debug(true, errno, "a_db_wal_replay: a_db_meta_write error:");
-                free(chk_pnt_data.base);
-                rv = -1;
-                goto out;
-            }
-
-            wal_db_hdr.last_replay_ts = aura_now_ms(CLOCK_REALTIME);
-            wal_db_hdr.record_cnt++; /* +1 for check pnt record */
-
-            hdr_iov.iov_base = &wal_db_hdr;
-            hdr_iov.iov_len = sizeof(wal_db_hdr);
-            bucket_iov.iov_base = NULL;
-            bucket_iov.iov_len = 0;
-
-            res = a_db_meta_write(db->wal_fd, &hdr_iov, &bucket_iov);
-            if (res != (hdr_iov.iov_len)) {
-                sys_debug(true, errno, "a_db_wal_replay: a_db_meta_write error:");
-                free(chk_pnt_data.base);
-                rv = -1;
-                goto out;
-            }
-
-            fsync(db->db_fd);
-
-            /* Sync in memory hash */
-            struct aura_db_bucket_entry *old_bucket;
-            pthread_mutex_lock(&db->db_lock);
-            memcpy(&db->db_file_hdr, &hdr, sizeof(hdr));
-            memcpy(&db->wal_file_hdr, &wal_db_hdr, sizeof(wal_db_hdr));
-            old_bucket = db->buckets;
-            db->buckets = bucket_buf;
-            pthread_mutex_unlock(&db->db_lock);
-            free(old_bucket);
-            free_new_bucket = false;
-            rv = 0;
-            free(chk_pnt_data.base);
-            goto out;
+            break;
         }
 
-        if (res != sizeof(wal_rec_hdr)) {
-            rv = -1;
-            goto out;
-        }
+        if (db->checkpoint_ctx.flags & A_DB_CHECKPOINT_SHUTDOWN)
+            shutdown = true;
 
-        if (wal_rec_hdr.magic != A_DB_WAL_MAGIC) {
-            rv = -1;
-            goto out;
-        }
-
-        /* Skip already replayed */
-        if (wal_rec_hdr.lsn <= hdr.lsn) {
-            read_off += wal_rec_hdr.rec_len;
-            continue;
-        }
-
-        /* Replay this */
-        record_len = wal_rec_hdr.rec_len - sizeof(wal_rec_hdr);
         /**
-         * Allocate only if more memory is needed
+         * Store the set flags
+         * Reset count, if a requester is not
+         * satisfied in this round, they will just
+         * have to request again.
          */
-        if (prev_len < record_len) {
-            record_buf = realloc(record_buf, record_len);
-            prev_len = record_len;
-        } else {
-            memset(record_buf, 0, prev_len);
+        flags = db->checkpoint_ctx.flags;
+        db->checkpoint_ctx.nr_of_reqs = 0;
+        db->checkpoint_ctx.flags = A_DB_NIL_FLAGS;
+        db->checkpoint_ctx.active = true;
+
+        pthread_mutex_unlock(&db->checkpoint_ctx.lock);
+
+        if (shutdown)
+            break;
+
+        do_checkpoint = false;
+        if (rv == ETIMEDOUT) {
+            do_checkpoint = true;
+            flags |= A_DB_CHECKPOINT_TIMED;
+        } else if (flags) {
+            do_checkpoint = true;
         }
 
-        if (!record_buf) {
-            rv = -1;
-            goto out;
-        }
-
-        res = pread(db->wal_fd, record_buf, record_len, read_off + sizeof(wal_rec_hdr));
-        if (res != record_len) {
-            rv = -1;
-            goto out;
-        }
-
-        void *key, *data;
-
-        rec_hdr = (struct aura_db_rec_hdr *)record_buf;
-
-        /* Update record chain in bucket */
-        rec_hdr->prev_off = prev_off;
-        key = (void *)((char *)rec_hdr + sizeof(*rec_hdr));
-
-        switch (wal_rec_hdr.op) {
-        case A_DB_OP_INSERT:
-        case A_DB_OP_DELETE:
-        case A_DB_JOB_OP_EVENT:
-            if (rec_hdr->magic != A_DB_REC_MAGIC) {
-                rv = -1;
-                goto out;
-            }
-
-            data = (void *)((char *)key + rec_hdr->key_len);
-            /**
-             * Not part of any job scope atomic group
-             * Append immediately to db
-             */
-            if (rec_hdr->job_id == 0) {
-                rec_hdr->prev_off = prev_off;
-                write_offset = a_db_record_append(db->db_fd, rec_hdr, key, data, 0);
-                prev_off = write_offset;
-                hdr.lsn = wal_rec_hdr.lsn;
+        if (do_checkpoint) {
+            off = a_db_create_checkpoint(db, th_data, flags);
+            if (off < 0) {
                 break;
             }
 
-            /**
-             * part of job scope atomic group
-             * Append record to record table
-             */
-            if (rec_hdr->job_id > 0) {
-                /**
-                 * Check if job already submitted, this is required to write events correctly
-                 * as some event get appended after the job is committed
-                 */
-                bool job_committed;
+            /* Checkpoint did not happen */
+            if (off == 0)
+                continue;
 
-                job_committed = false;
-                for (int i = 0; i < replay_tab->jobs.cnt; ++i) {
-                    if (replay_tab->jobs.visited[i].job_id == rec_hdr->job_id && replay_tab->jobs.visited[i].state == A_DB_JOB_DONE) {
-                        job_committed = true;
-                        break;
-                    }
-                }
-                if (job_committed) {
-                    rec_hdr->prev_off = prev_off;
-                    write_offset = a_db_record_append(db->db_fd, rec_hdr, key, data, 0);
-                    prev_off = write_offset;
-                    hdr.lsn = wal_rec_hdr.lsn;
-                } else {
-                    if (a_db_replay_tab_add(replay_tab, rec_hdr->job_id, 0, read_off + sizeof(wal_rec_hdr), rec_hdr->rec_len.aligned_len) != 0) {
-                        rv = -1;
-                        goto out;
-                    }
-                }
+            last_checkpoint_lsn = off;
+            last_important_lsn = off;
+
+            /* Alert threads waiting on checkpoint */
+            pthread_mutex_lock(&db->checkpoint_ctx.lock);
+            db->checkpoint_ctx.ckpt_done = true;
+            db->checkpoint_ctx.active = false;
+            pthread_cond_signal(&db->checkpoint_ctx.done);
+            pthread_mutex_unlock(&db->checkpoint_ctx.lock);
+        }
+    }
+
+    if (shutdown) {
+        off = a_db_create_checkpoint(db, th_data, flags);
+
+        /* Alert shutdown thread waiting on checkpoint */
+        pthread_mutex_lock(&db->checkpoint_ctx.lock);
+        db->checkpoint_ctx.ckpt_done = true;
+        db->checkpoint_ctx.active = false;
+        pthread_cond_signal(&db->checkpoint_ctx.done);
+        pthread_mutex_unlock(&db->checkpoint_ctx.lock);
+    }
+
+out:
+    pthread_cleanup_pop(1);
+    return NULL;
+}
+
+static struct aura_db_rec_table {
+    struct {
+        int64_t tx_id;
+        uint64_t last_lsn;
+        uint8_t state;
+    } *ent;
+    uint32_t cnt;
+    uint32_t cap;
+} recovery_tab;
+
+static int a_db_insert_recovery_table(uint64_t tx_id, uint64_t last_lsn) {
+    if (recovery_tab.cnt >= recovery_tab.cap) {
+        recovery_tab.cap = recovery_tab.cap == 0 ? 16 : recovery_tab.cap * 2;
+        recovery_tab.ent = realloc(recovery_tab.ent, sizeof(*(recovery_tab.ent)) * recovery_tab.cap);
+        if (!recovery_tab.ent)
+            return -1;
+    }
+
+    recovery_tab.ent[recovery_tab.cnt].last_lsn = last_lsn;
+    recovery_tab.ent[recovery_tab.cnt].tx_id = tx_id;
+    recovery_tab.ent[recovery_tab.cnt].state = A_DB_TX_ABORTED;
+}
+
+static int a_db_tx_id_in_recovery_tab(uint64_t tx_id) {
+    for (int i = 0; i < recovery_tab.cnt; ++i) {
+        if (recovery_tab.ent[i].tx_id == tx_id)
+            return true;
+    }
+
+    return false;
+}
+
+static int a_db_replay_analysis_pass(AURA_DB *db, lsn_t redo_lsn, uint64_t wal_end) {
+    struct aura_db_checkpoint_begin *begin_ckpt;
+    struct aura_db_commit *commit;
+    struct aura_db_checkpoint *chkpt;
+    struct aura_db_wal_rec_hdr log_hdr;
+    struct aura_db_rec_hdr *rec_hdr;
+    ssize_t rv;
+    int tab_idx;
+    uint8_t *record = NULL;
+    uint64_t rec_size = 4096;
+
+    while (redo_lsn < wal_end) {
+        if (pread(db->wal.fd, &log_hdr, sizeof(log_hdr), redo_lsn) != sizeof(log_hdr))
+            return -1;
+
+        if (log_hdr.tx_id != A_DB_NIL_TX_ID && a_db_tx_id_in_recovery_tab(log_hdr.tx_id) == 0) {
+            tab_idx = a_db_insert_recovery_table(log_hdr.tx_id, log_hdr.lsn);
+            if (tab_idx < 0) {
+                goto err;
             }
+        }
 
+        switch (log_hdr.type) {
+        case A_DB_LOG_TYPE_UPDATE:
+            recovery_tab.ent[tab_idx].last_lsn = log_hdr.lsn;
             break;
 
-        case A_DB_JOB_OP_CREATE:
-        case A_DB_JOB_OP_STEP:
-            struct aura_db_job_rec *job_rec;
+        case A_DB_LOG_TYPE_BEGIN_CKPT:
+            /* Incomplete checkpoint, ignore */
+            break;
 
-            if (rec_hdr->magic != A_DB_REC_MAGIC) {
-                rv = -1;
-                goto out;
+        case A_DB_LOG_TYPE_END_CKPT:
+            /* Read checkpoint record */
+            if (!record || rec_size < log_hdr.rec_len) {
+                rec_size = a_max(rec_size, log_hdr.rec_len);
+                record = realloc(record, rec_size);
+                if (!record) {
+                    goto err;
+                }
+                memset(record, 0, rec_size);
             }
 
-            data = (void *)((char *)key + rec_hdr->key_len);
-            job_rec = (struct aura_db_job_rec *)data;
-            if (a_db_replay_tab_add(replay_tab, job_rec->job_id, job_rec->state, 0, 0) != 0) {
-                rv = -1;
-                goto out;
-            }
+            if (pread(db->wal.fd, record, log_hdr.rec_len, redo_lsn) != log_hdr.rec_len)
+                goto err;
 
-            if (job_rec->state == A_DB_JOB_DONE) {
-                uint64_t _record_len, _prev_len;
-                struct aura_db_rec_hdr *_rec_hdr;
-                void *key_ptr, *_data_ptr;
-                off_t _write_off;
+            rec_hdr = (struct aura_db_rec_hdr *)(record + sizeof(log_hdr));
+            chkpt = (struct aura_db_checkpoint *)((char *)rec_hdr + sizeof(*rec_hdr) + rec_hdr->key_len);
 
-                _prev_len = 4096;
-                _data_ptr = calloc(1, _prev_len);
-
-                /**
-                 * Loop and append all records for this job
-                 * in forward manner
-                 */
-                for (int i = 0; i < replay_tab->records.cnt; ++i) {
-                    if (replay_tab->records.visited[i].job_id == job_rec->job_id) {
-                        _record_len = replay_tab->records.visited[i].rec_len;
-
-                        if (_prev_len < _record_len) {
-                            _data_ptr = realloc(_data_ptr, _record_len);
-                            _prev_len = _record_len;
-                        } else {
-                            memset(_data_ptr, 0, _prev_len);
-                        }
-
-                        if (!_data_ptr) {
-                            rv = -1;
-                            goto out;
-                        }
-
-                        res = pread(db->wal_fd, _data_ptr, _record_len, replay_tab->records.visited[i].offset);
-                        if (res != _record_len) {
-                            free(_data_ptr);
-                            rv = -1;
-                            goto out;
-                        }
-
-                        /**
-                         * We can safely update the prev_off
-                         * as we are just appending!
-                         */
-                        _rec_hdr = (struct aura_db_rec_hdr *)_data_ptr;
-                        _rec_hdr->prev_off = prev_off;
-                        key_ptr = (char *)_rec_hdr + sizeof(*_rec_hdr);
-                        _write_off = a_db_record_append(db->db_fd, _rec_hdr, key_ptr, (char *)key_ptr + _rec_hdr->key_len, 0);
-                        if (_write_off < 0) {
-                            rv = -1;
-                            goto out;
-                        }
-                        prev_off = _write_off;
-
-                        a_db_update_hash_bucket(_rec_hdr, bucket_buf, hdr.bucket_cnt, key_ptr, _write_off);
+            for (int i = 0; i < A_DB_MAX_CONC_TX; ++i) {
+                if (chkpt->trans[i].id != A_DB_NIL_TX_ID && a_db_tx_id_in_recovery_tab(chkpt->trans[i].id) == 0) {
+                    tab_idx = a_db_insert_recovery_table(chkpt->trans[i].id, chkpt->trans[i].last_lsn);
+                    if (tab_idx < 0) {
+                        goto err;
                     }
                 }
-                if (_data_ptr)
-                    free(_data_ptr);
+            }
+            break;
+
+        case A_DB_LOG_TYPE_COMMIT:
+            /* Read the rest of the record */
+            if (!record || rec_size < log_hdr.rec_len) {
+                rec_size = a_max(rec_size, log_hdr.rec_len);
+                record = realloc(record, rec_size);
+                if (!record) {
+                    goto err;
+                }
+                memset(record, 0, rec_size);
             }
 
-            /* append job record */
-            write_offset = a_db_record_append(db->db_fd, rec_hdr, key, data, 0);
-            prev_off = write_offset;
-            hdr.lsn = wal_rec_hdr.lsn;
+            if (pread(db->wal.fd, record, log_hdr.rec_len, redo_lsn) != log_hdr.rec_len)
+                goto err;
+
+            rec_hdr = (struct aura_db_rec_hdr *)(record + sizeof(log_hdr));
+            commit = (struct aura_db_commit *)((char *)rec_hdr + sizeof(*rec_hdr) + rec_hdr->key_len);
+
+            recovery_tab.ent[tab_idx].state = commit->state;
+            recovery_tab.ent[tab_idx].last_lsn = log_hdr.lsn;
             break;
 
         default:
             break;
         }
 
-        if (write_offset == -1) {
-            sys_debug(true, errno, "a_db_wal_replay: a_db_record_append error:");
-            rv = -1;
-            goto out;
-        }
-
-        hdr.last_rec_off = write_offset;
-        hdr.file_size += rec_hdr->rec_len.aligned_len;
-        hdr.record_cnt++;
-        wal_db_hdr.file_size += wal_rec_hdr.rec_len;
-        wal_db_hdr.record_cnt++;
-
-        a_db_update_hash_bucket(rec_hdr, bucket_buf, hdr.bucket_cnt, key, write_offset);
-
-        read_off += wal_rec_hdr.rec_len;
+        redo_lsn += log_hdr.rec_len;
     }
 
-out:
-    __atomic_store_n(&db->is_busy, false, __ATOMIC_RELEASE);
-
-    if (free_new_bucket)
-        free(bucket_buf);
-
-    if (record_buf)
-        free(record_buf);
-
-    if (replay_tab) {
-        if (replay_tab->jobs.visited)
-            free(replay_tab->jobs.visited);
-
-        if (replay_tab->records.visited)
-            free(replay_tab->records.visited);
-
-        free(replay_tab);
-    }
-
-    if (ch_pnt_data)
-        free(ch_pnt_data);
-
-    return rv;
-}
-
-/* Compaction table structure */
-struct aura_db_compact_table {
-    char *key_buf;
-    void *record_buf;
-    size_t record_buf_size;
-    size_t key_off;
-    uint32_t cnt;
-    size_t cap;
-};
-
-static inline void a_db_compact_table_append(struct aura_db_compact_table *comp_tab,
-                                             struct aura_db_rec_hdr *hdr, const char *key) {
-    size_t comp_tab_entry_len;
-
-    if ((comp_tab->key_off + sizeof(size_t) + hdr->key_len) >= comp_tab->cap) {
-        comp_tab->cap *= 2;
-        comp_tab->key_buf = realloc(comp_tab->key_buf, comp_tab->cap);
-        if (!comp_tab->key_buf)
-            sys_exit(true, errno, "a_db_compact_table_append: realloc error:");
-    }
-
-    comp_tab_entry_len = sizeof(size_t) + hdr->key_len; /* key_len + key_string */
-    snprintf(comp_tab->key_buf + comp_tab->key_off, sizeof(size_t) + 1, "%u", hdr->key_len);
-    snprintf(comp_tab->key_buf + comp_tab->key_off + sizeof(size_t), hdr->key_len + 1, "%s", key);
-
-    comp_tab->key_off += comp_tab_entry_len;
-    comp_tab->cnt++;
-}
-
-/**
- * Compact database and prune deleted records
- */
-static int a_db_compact(AURA_DB *db) {
-    struct aura_db_rec_hdr rec_hdr;
-    struct aura_db_compact_table comp_tab;
-    struct aura_iovec key;
-    struct aura_db_bucket_entry *new_hash_table;
-    struct aura_db_hdr new_hdr;
-    size_t comp_tab_entry_len, key_len, new_file_size, bucket_arr_size;
-    char key_buf[4096], *data_buf;
-    off_t read_off, write_off, old_off;
-    bool record_deleted;
-    ssize_t res;
-    int new_fd;
-
-    comp_tab.key_buf = malloc(65536); /* 64KB */
-    comp_tab.cnt = comp_tab.key_off = 0;
-    comp_tab.cap = 65536;
-    read_off = db->db_file_hdr.record_off;
-
-    old_off = 0;
-    data_buf = NULL;
-    bucket_arr_size = sizeof(struct aura_db_bucket_entry) * A_DB_BUCKET_CNT;
-    new_file_size = sizeof(struct aura_db_hdr) + bucket_arr_size;
-
-    /* Construct compact_file_path */
-    char compact_file_path[256], *ptr;
-    size_t len;
-    ptr = strrchr(db->name, '/');
-    len = ptr - db->name + 2;
-    snprintf(compact_file_path, len, "%s", db->name);
-    strcat(compact_file_path, AURA_DB_COMPACT_FILE);
-    new_fd = open(compact_file_path, O_RDWR | O_CREAT | O_TRUNC, A_DB_FILE_MODE);
-    if (new_fd < 0) {
-        free(comp_tab.key_buf);
-        return -1;
-    }
-
-    /* Initialize new hash table */
-    new_hash_table = malloc(db->db_file_hdr.bucket_cnt * sizeof(struct aura_db_bucket_entry));
-    if (!new_hash_table) {
-        free(comp_tab.key_buf);
-        close(new_fd);
-        return -1;
-    }
-
-    uint64_t new_record_cnt;
-    new_record_cnt = 0;
-    write_off = 0;
-    /* Loop for each hash table bucket */
-    for (int i = 0; i < db->db_file_hdr.bucket_cnt; ++i) {
-        read_off = db->buckets[i].head_off;
-
-        while (read_off > 0) {
-            res = pread(db->db_fd, &rec_hdr, sizeof(rec_hdr), read_off);
-            if (res != sizeof(rec_hdr))
-                goto err_out_fd;
-
-            res = pread(db->db_fd, key_buf, rec_hdr.key_len, read_off + sizeof(rec_hdr));
-            if (res != rec_hdr.key_len)
-                goto err_out_fd;
-
-            if (rec_hdr.flags & A_DB_FLAG_REC_TOMBSTONE) {
-                /* Append deleted record in compaction table */
-                a_db_compact_table_append(&comp_tab, &rec_hdr, key_buf);
-                read_off = rec_hdr.prev_off;
-                continue;
-            }
-
-            /* Search compaction table if this record was deleted */
-            record_deleted = false;
-            for (int i = 0, key_off = 0; i < comp_tab.cnt; ++i) {
-                aura_scan_str(comp_tab.key_buf + key_off, "%lu", &key_len);
-                if (aura_mem_is_eq(key_buf, rec_hdr.key_len, comp_tab.key_buf + key_off + sizeof(size_t), key_len)) {
-                    record_deleted = true;
-                    break;
-                }
-                key_off += sizeof(size_t) + key_len;
-            }
-
-            if (record_deleted) {
-                /* Skip */
-                read_off = rec_hdr.prev_off;
-                continue;
-            } else {
-                /* Append to new db file */
-                data_buf = realloc(data_buf, rec_hdr.data_len);
-                if (!data_buf)
-                    goto err_out_fd;
-
-                res = pread(db->db_fd, data_buf, rec_hdr.data_len, read_off + sizeof(rec_hdr) + rec_hdr.key_len);
-                if (res != rec_hdr.data_len) {
-                    free(data_buf);
-                    goto err_out_fd;
-                }
-
-                uint32_t hash;
-                key.base = key_buf;
-                key.len = rec_hdr.key_len;
-                hash = a_fnv1a_hash(db->db_file_hdr.bucket_cnt, rec_hdr.ns, &key);
-
-                write_off = a_db_record_append(
-                  new_fd, &rec_hdr,
-                  (void *)key_buf,
-                  (void *)data_buf,
-                  write_off < db->db_file_hdr.record_off ? db->db_file_hdr.record_off : write_off);
-
-                if (write_off < 0) {
-                    free(data_buf);
-                    goto err_out_fd;
-                }
-
-                new_hash_table[hash].head_off = write_off;
-                read_off = rec_hdr.prev_off;
-                /* update records offsets for this new db file */
-                rec_hdr.prev_off = old_off;
-                old_off = write_off;
-                new_file_size += rec_hdr.rec_len.aligned_len;
-                new_record_cnt++;
-            }
-        }
-    }
-
-    // memcpy(&new_hdr, &db->db_hdr, sizeof(new_hdr));
-    pthread_mutex_lock(&db->db_lock);
-    db->db_file_hdr.file_size = new_file_size;
-    db->db_file_hdr.last_compact_ts = aura_now_ms(CLOCK_REALTIME);
-    db->db_file_hdr.record_cnt = new_record_cnt;
-    memcpy(&new_hdr, &db->db_file_hdr, sizeof(new_hdr));
-    pthread_mutex_unlock(&db->db_lock);
-
-    struct iovec hdr_iov, bucket_iov;
-    struct aura_db_bucket_entry *old_hash_table;
-    int old_fd;
-
-    /* Write new db meta */
-    if (lseek(new_fd, 0, SEEK_SET) < 0)
-        sys_exit(true, errno, "a_db_compact: lseek");
-
-    hdr_iov.iov_base = &new_hdr;
-    hdr_iov.iov_len = sizeof(struct aura_db_hdr);
-    bucket_iov.iov_base = new_hash_table;
-    bucket_iov.iov_len = db->db_file_hdr.bucket_cnt * sizeof(struct aura_db_bucket_entry);
-
-    if (a_db_meta_write(new_fd, &hdr_iov, &bucket_iov) < 0)
-        goto err_out_fd;
-    fsync(new_fd);
-
-    pthread_mutex_lock(&db->db_lock);
-    old_fd = db->db_fd;
-    old_hash_table = db->buckets;
-    db->db_fd = new_fd;
-    db->buckets = new_hash_table;
-    /* Reset the cache for now */
-    memset(db->record_buf, 0, db->record_buf_size);
-    pthread_mutex_unlock(&db->db_lock);
-
-    /* Remove new file and rename old file */
-    free(old_hash_table);
-    close(old_fd);
-    unlink(db->name);
-    res = rename(compact_file_path, db->name);
-
-    free(comp_tab.key_buf);
-    free(data_buf);
     return 0;
 
-err_out_fd:
-    free(comp_tab.key_buf);
-    free(new_hash_table);
-    close(new_fd);
+err:
+    if (record)
+        free(record);
+    free(recovery_tab.ent);
     return -1;
 }
 
-static void *a_db_writer_routine(void *arg) {
-    AURA_DB *db;
-    struct aura_db_write_req *req;
-    struct timespec ts;
-    bool timed_out;
-    uint64_t time_waited;
-    int res;
-    ssize_t rv;
+static int a_db_replay_redo_pass(AURA_DB *db, uint64_t redo_lsn, uint64_t wal_end) {
+    struct aura_db_wal_rec_hdr log_hdr;
+    struct aura_db_rec_hdr *rec_hdr;
+    uint8_t *record = NULL;
+    uint64_t rec_sz = 4096;
+    int fd = db->main.fd;
+    lsn_t prev_lsn;
+    uint64_t buf_sz = 8192;
+    char buf[buf_sz];
+    uint64_t buf_off = 0;
 
-    db = arg;
+    if (lseek(fd, 0, SEEK_END) < 0)
+        return -1;
 
-    for (;;) {
-        pthread_mutex_lock(&db->writer_queue.mutex);
-        aura_now_ts(&ts, CLOCK_REALTIME);
-        ts.tv_sec += 30 * 60;
-        timed_out = false;
-        time_waited = 0;
+    while (redo_lsn < wal_end) {
+        if (pread(db->wal.fd, &log_hdr, sizeof(log_hdr), redo_lsn) != sizeof(log_hdr))
+            return -1;
 
-        while (aura_list_is_empty(&db->writer_queue.db_list)) {
-            res = pthread_cond_timedwait(&db->writer_queue.cond, &db->writer_queue.mutex, &ts);
-
-            if (res == 0) {
-                /* Normal break out, accumulate the time waited */
-                time_waited += (ts.tv_sec * 1000) - ((ts.tv_sec * 1000) - aura_now_ms(CLOCK_REALTIME));
-                break;
-            } else if (res == ETIMEDOUT) {
-                timed_out = true;
-                break;
-            } else {
-                /* Error */
-                pthread_mutex_unlock(&db->writer_queue.mutex);
-                return NULL;
-            }
-        }
-
-        /**
-         * Stop the process from queing anything else for now
-         * @todo: may not need this afterall
-         */
-        if (timed_out) {
-            db->is_busy = true;
-        }
-
-        a_list_dequeue(req, &db->writer_queue.db_list, w_list);
-        pthread_mutex_unlock(&db->writer_queue.mutex);
-
-        if (req) {
-            switch (req->op) {
-            case A_DB_OP_INSERT:
-            case A_DB_JOB_OP_CREATE:
-            case A_DB_JOB_OP_EVENT:
-            case A_DB_JOB_OP_STEP:
-                rv = a_db_record_insert_core((void *)db, req->namespace, req->schema_id, req->job_id, req->prev_job_rec, req->flags, req->op, req->key, req->data);
-                aura_iovec_destroy(req->key);
-                aura_iovec_destroy(req->data);
-                break;
-
-            case A_DB_OP_DELETE:
-                rv = a_db_record_insert_core((void *)db, req->namespace, req->schema_id, req->job_id, req->prev_job_rec, req->flags, req->op, req->key, req->data);
-                aura_iovec_destroy(req->key);
-                break;
-            default:
-                break;
-            }
-
-            if (req->completion) {
-                if (req->completion->on_complete) {
-                    req->completion->on_complete(req->completion, rv, (AURA_DBHANDLE)db);
+        switch (log_hdr.type) {
+        case A_DB_LOG_TYPE_UPDATE:
+            /* Read the rest of the record */
+            if (!record || rec_sz < log_hdr.rec_len) {
+                rec_sz = a_max(rec_sz, log_hdr.rec_len);
+                record = realloc(record, rec_sz);
+                if (!record) {
+                    goto err;
                 }
+                memset(record, 0, rec_sz);
             }
-        }
 
-        if (timed_out) {
-            res = a_db_wal_replay(db);
-        }
+            if (pread(db->wal.fd, record, log_hdr.rec_len, log_hdr.rec_len) != log_hdr.rec_len)
+                goto err;
 
-        if (db->shutdown)
+            /* Update record chain and hash bucket */
+            rec_hdr = (struct aura_db_rec_hdr *)(record + sizeof(log_hdr));
+            rec_hdr->prev_off = db->control.buckets[rec_hdr->hash].head_off;
+            rec_hdr->rec_off = db->control.file_size;
+            db->control.buckets[rec_hdr->hash].head_off = rec_hdr->rec_off;
+            db->control.file_size += rec_hdr->rec_len.aligned_len;
+            db->control.record_cnt++;
+            db->control.last_rec_lsn = rec_hdr->rec_off;
+
+            /**
+             * This already exists in the main db
+             */
+            if (rec_hdr->rec_off <= db->control.last_rec_lsn) {
+                break;
+            }
+
+            /* Too big or equal to buffer */
+            if (rec_hdr->rec_len.aligned_len >= buf_sz) {
+                if (write(fd, (void *)rec_hdr, rec_hdr->rec_len.aligned_len) != rec_hdr->rec_len.aligned_len)
+                    goto err;
+            } else if ((buf_sz - buf_off) >= rec_hdr->rec_len.aligned_len) {
+                /* Flush buffer */
+                if (write(fd, buf, buf_off) != buf_off)
+                    goto err;
+                buf_off = 0;
+            }
+
+            /* copy to buffer */
+            memcpy(buf + buf_off, (void *)rec_hdr, rec_hdr->rec_len.aligned_len);
+            buf_off += rec_hdr->rec_len.aligned_len;
+
             break;
-    }
-}
 
-/* Create the timer and thread handles compaction */
-int aura_db_start_bg_tasks(AURA_DBHANDLE _db) {
-    AURA_DB *db;
-    pthread_t compact_thread_id;
-    pthread_attr_t thread_attr;
-    int err;
-
-    db = (AURA_DB *)_db;
-    err = pthread_attr_init(&thread_attr);
-    if (err != 0)
-        sys_exit(true, 0, "aura_db_start_bg_tasks: pthread_attr_init error: %d", err);
-
-    err = pthread_attr_setdetachstate(&thread_attr, PTHREAD_CREATE_DETACHED);
-    if (err != 0)
-        sys_exit(true, 0, "aura_db_start_bg_tasks: pthread_attr_setdetachstate error: %d", err);
-
-    err = pthread_create(&compact_thread_id, &thread_attr, a_db_writer_routine, (void *)db);
-    if (err != 0)
-        sys_exit(true, 0, "aura_db_start_bg_tasks: pthread_create error: %d", err);
-
-    return 0;
-}
-
-int aura_db_record_for_each(AURA_DBHANDLE _db, uint64_t record_cnt, uint16_t namespace,
-                            uint16_t schema_id, int (*fn)(struct iovec)) {
-    AURA_DB *db;
-    struct aura_db_rec_hdr rec_hdr;
-    uint64_t cnt, curr_record_cnt, file_size;
-    off_t offset;
-    ssize_t res;
-    int rv;
-
-    db = (AURA_DB *)_db;
-    a_db_dump_header(&db->db_file_hdr);
-    pthread_mutex_lock(&db->db_lock);
-    curr_record_cnt = db->db_file_hdr.record_cnt;
-    file_size = db->curr_file_size;
-    offset = db->db_file_hdr.record_off;
-    pthread_mutex_unlock(&db->db_lock);
-    cnt = a_min(record_cnt, curr_record_cnt);
-
-    while (offset < file_size && cnt-- > 0) {
-        res = pread(db->db_fd, &rec_hdr, sizeof(rec_hdr), offset);
-        if (res != sizeof(rec_hdr))
-            sys_exit(true, errno, "aura_db_loop_record: pread error:");
-
-        if (rec_hdr.ns == namespace && rec_hdr.schema_id == schema_id) {
-            if (rec_hdr.data_len == 0)
-                rv = fn((struct iovec){.iov_base = NULL, .iov_len = 0});
-            else {
-                void *data;
-                data = calloc(1, rec_hdr.data_len);
-                if (!data)
-                    sys_exit(true, errno, "aura_db_loop_record: memory error:");
-
-                res = pread(db->db_fd, data, rec_hdr.data_len, offset + sizeof(rec_hdr) + rec_hdr.key_len);
-                if (res != rec_hdr.data_len)
-                    sys_exit(true, errno, "aura_db_loop_record: pread error:");
-
-                rv = fn((struct iovec){.iov_base = data, .iov_len = rec_hdr.data_len});
-            }
-
-            if (rv != 0)
-                return rv;
+        case A_DB_LOG_TYPE_BEGIN_CKPT:
+        case A_DB_LOG_TYPE_END_CKPT:
+        case A_DB_LOG_TYPE_COMMIT:
+        default:
+            break;
         }
-        offset += rec_hdr.rec_len.aligned_len;
+
+        redo_lsn += log_hdr.rec_len;
     }
 
+    /* Flush anything remaining */
+    if (buf_off > 0)
+        if (write(fd, buf, buf_off) != buf_off)
+            goto err;
+    fdatasync(db->main.fd);
+
+    /* Update control */
+    if (a_db_meta_write(db->ctrl_file_fd, (void *)&db->control, sizeof(db->control)) < 0)
+        return -1;
+    fdatasync(db->ctrl_file_fd);
+
+    free(record);
     return 0;
-}
 
-/* used in testing to manually trigger replay */
-int aura_db_force_wal_replay(AURA_DBHANDLE _db) {
-    AURA_DB *db;
-
-    db = (AURA_DB *)_db;
-    a_db_wal_replay(db);
-    return 0;
-}
-/* used in testing to manually trigger compaction */
-int aura_db_force_compact(AURA_DBHANDLE db) {
-    a_db_compact(db);
-    return 0;
-}
-
-/* Clear in memory cache */
-int aura_db_clear_record_cache(AURA_DBHANDLE _db) {
-    AURA_DB *db;
-
-    db = (AURA_DB *)_db;
-    pthread_mutex_lock(&db->db_lock);
-    memset(db->record_buf, 0, db->record_buf_size);
-    pthread_mutex_unlock(&db->db_lock);
-
-    return 0;
-}
-
-/**/
-size_t aura_db_get_size(AURA_DBHANDLE _db) {
-    AURA_DB *db;
-
-    db = (AURA_DB *)_db;
-    return __atomic_load_n(&db->db_file_hdr.file_size, __ATOMIC_ACQUIRE);
-}
-
-uint64_t aura_db_get_record_cnt(AURA_DBHANDLE _db) {
-    AURA_DB *db;
-
-    db = (AURA_DB *)_db;
-    uint64_t record_cnt;
-    record_cnt = __atomic_load_n(&db->db_file_hdr.record_cnt, __ATOMIC_ACQUIRE);
-    return record_cnt;
+err:
+    if (record)
+        free(record);
+    return -1;
 }
 
 /**
- * Print database header
+ * Replay log file during recovery
  */
-static void a_db_dump_header(struct aura_db_hdr *hdr) {
-    app_debug(true, 0, "AURA DB HEADER");
-    app_debug(true, 0, "    Magic: %x", hdr->magic);
-    app_debug(true, 0, "    Version: %u", hdr->version);
-    app_debug(true, 0, "    Flags: %u", hdr->flags);
-    app_debug(true, 0, "    Created at: %u", hdr->created_ts);
-    app_debug(true, 0, "    Hash algorithm: %u", hdr->hash_algo);
-    app_debug(true, 0, "    Bucket off: %u", hdr->bucket_off);
-    app_debug(true, 0, "    Bucket count: %u", hdr->bucket_cnt);
-    app_debug(true, 0, "    File size: %u", hdr->file_size);
-    app_debug(true, 0, "    Record count: %u", hdr->record_cnt);
-    app_debug(true, 0, "    Last compaction at: %u", hdr->last_compact_ts);
-}
+static int a_db_replay(AURA_DB *db) {
+    struct aura_db_checkpoint *chkpt;
+    struct aura_db_wal_rec_hdr log_hdr;
+    struct aura_db_th_data *th_data;
+    lsn_t chkpt_lsn, redo_lsn;
 
-/* Map namepace Id to string rep */
-char *a_db_get_namespace_str(uint16_t ns) {
-    switch (ns) {
-    case A_DB_NS_FN:
-        return "Function NS";
-    case A_DB_NS_JOB:
-        return "Job NS";
-    case A_DB_NS_CHECK_PNT:
-        return "Check point NS";
-    default:
-        return "Unknown namespace";
+    a_db_update_state(db, A_DB_STATE_RECOVERY);
+    th_data = pthread_getspecific(thread_key);
+    if (!th_data) {
+        th_data = calloc(1, sizeof(*th_data));
+        if (!th_data)
+            return -1;
     }
+    a_db_reset_th_data(th_data);
+
+    chkpt = &db->control.chkpt_copy;
+    /**
+     * No check was saved.
+     * Scan starts from the beginning
+     */
+    if (!chkpt) {
+        redo_lsn = 0;
+    } else {
+        /* Read begin checkpoint record */
+        chkpt_lsn = chkpt->redo_lsn;
+        if (pread(db->wal.fd, &log_hdr, sizeof(log_hdr), chkpt_lsn) != sizeof(log_hdr))
+            return -1;
+
+        /* Start from the next record after begin ckpt */
+        redo_lsn += log_hdr.rec_len;
+    }
+
+    if (a_db_replay_analysis_pass(db, redo_lsn, db->wal.file_sz) < 0) {
+        app_debug(true, 0, "Failed to recover DB");
+        return -1;
+    }
+
+    if (a_db_replay_redo_pass(db, redo_lsn, db->wal.file_sz) < 0) {
+        app_debug(true, 0, "Failed to recover DB");
+        return -1;
+    }
+
+    if (a_db_create_checkpoint(db, th_data, A_DB_CHECKPOINT_RECOVERY) < 0) {
+        app_debug(true, 0, "Failed to replay WAL recovery checkpoint error");
+        return -1;
+    }
+
+    return 0;
 }
 
-/* Map schema Id to string rep */
-char *a_db_get_schema_str(uint16_t schema_id) {
-    switch (schema_id) {
-    case A_DB_SCHEMA_FN_CODE_V1:
-        return "Schema Code Bytes";
-    case A_DB_SCHEMA_FN_CONFIG_V1:
-        return "Schema Function Config";
-    case A_DB_SCHEMA_FN_META_V1:
-        return "Schema Function Meta";
-    case A_DB_SCHEMA_FN_STAT_DELTA:
-        return "Schema Stat Delta";
-    case A_DB_SCHEMA_JOB_V1:
-        return "Schema Job";
-    case A_DB_SCHEMA_JOB_STEP_V1:
-        return "Schema Job step";
-    case A_DB_SCHEMA_FN_PETITE_V1:
-        return "Schema Fn Petite";
-    case A_DB_SCHEMA_FN_STATE_V1:
-        return "Schema Fn State";
-    case A_DB_SCHEMA_FNS:
-        return "Schema Function List";
-    default:
-        return "Schema Unknown";
+/* ============================================ */
+static void a_db_write_cache_scan(struct aura_db_write_cache *cache) {
+    struct aura_db_cache_buf *active_buf;
+    struct aura_db_rec_hdr *rec_hdr;
+    uint64_t off = 0;
+
+    active_buf = &cache->bufs[cache->active_idx];
+    app_debug(true, 0, "AURA_DB WRITE CACHE DUMP");
+    app_debug(true, 0, "--------------------------");
+    app_debug(true, 0, "ACTIVE IDX=%u", cache->active_idx);
+    app_debug(true, 0, "NEXT OFF=%lu", cache->next_off);
+    app_debug(true, 0, "------------------------");
+    app_debug(true, 0, "ACTIVE BUF_SZ=%u", active_buf->size);
+    app_debug(true, 0, "ACTIVE BUF FLAGS=%u", active_buf->flags);
+
+    while (off < active_buf->size) {
+        rec_hdr = (struct aura_db_rec_hdr *)(active_buf->data + off);
+        a_db_rec_hdr_dump(rec_hdr);
+        off += rec_hdr->rec_len.aligned_len;
     }
 }
 
 /* Print single db record header */
-static void a_db_dump_rec_header(struct aura_db_rec_hdr *hdr) {
+static void a_db_rec_hdr_dump(struct aura_db_rec_hdr *hdr) {
     app_debug(true, 0, "AURA DB RECORD HEADER");
     app_debug(true, 0, "    Magic: %x", hdr->magic);
-    app_debug(true, 0, "    Version: %u", hdr->version);
-    app_debug(true, 0, "    Namespace: %u: %s", hdr->ns, a_db_get_namespace_str(hdr->ns));
-    app_debug(true, 0, "    Schema Id: %u: %s", hdr->schema_id, a_db_get_schema_str(hdr->schema_id));
-    app_debug(true, 0, "    Job Id: %lu", hdr->job_id);
-    app_debug(true, 0, "    Prev Job Rec off: %ld", hdr->prev_job_rec);
+    app_debug(true, 0, "    Namespace: %u", hdr->ns);
+    app_debug(true, 0, "    Schema Id: %u", hdr->schema_id);
+    app_debug(true, 0, "    Job Id: %lu", hdr->tx_id);
+    app_debug(true, 0, "    Prev TX Rec off: %ld", hdr->prev_tx_rec_off);
     app_debug(true, 0, "    Flags: %u", hdr->flags);
     app_debug(true, 0, "    Key len: %u", hdr->key_len);
     app_debug(true, 0, "    Data len: %u", hdr->data_len);
     app_debug(true, 0, "    Record len: %u", hdr->rec_len.aligned_len);
     app_debug(true, 0, "    Previous offset: %u", hdr->prev_off);
-    app_debug(true, 0, "    Timestamp: %u", hdr->timestamp);
+    app_debug(true, 0, "    Timestamp: %u", hdr->timestamp_ms);
 }
 
 static char *a_db_get_op(uint16_t op) {
     switch (op) {
-    case A_DB_OP_INSERT:
+    case A_DB_INSERT_OP:
         return "OP Insert";
-    case A_DB_OP_DELETE:
+    case A_DB_DELETE_OP:
         return "OP Delete";
-    case A_DB_JOB_OP_CREATE:
+    case A_DB_JOB_CREATE_OP:
         return "OP Job create";
-    case A_DB_JOB_OP_EVENT:
+    case A_DB_JOB_EVENT_OP:
         return "OP Job event";
-    case A_DB_JOB_OP_STEP:
+    case A_DB_JOB_STEP_OP:
         return "OP Job Step";
     default:
         return "Unknown OP";
@@ -2361,67 +3692,11 @@ static char *a_db_get_op(uint16_t op) {
 }
 
 /* Print single WAL record header */
-static void a_db_dump_wal_header(struct aura_db_wal_rec_hdr *hdr) {
+static void a_db_wal_hhdr_dump(struct aura_db_wal_rec_hdr *hdr) {
     app_debug(true, 0, "AURA DB WAL RECORD HEADER");
     app_debug(true, 0, "    Magic: %x", hdr->magic);
     app_debug(true, 0, "    Op: %u: %s", hdr->op, a_db_get_op(hdr->op));
     app_debug(true, 0, "    Record len: %lu", hdr->rec_len);
-}
-
-static char *a_db_job_get_state_str(uint16_t state) {
-    switch (state) {
-    case A_DB_JOB_START:
-        return "START";
-    case A_DB_JOB_DONE:
-        return "DONE";
-    case A_DB_JOB_RUNNING:
-        return "RUNNING";
-    case A_DB_JOB_FAILED:
-        return "FAILED";
-    default:
-        return "Unknown";
-    }
-}
-
-/* Print job structure */
-static void a_db_job_dump(struct aura_db_job_rec *job) {
-    app_debug(true, 0, "AURA DB JOB");
-    app_debug(true, 0, "    Magic: %x", job->magic);
-    app_debug(true, 0, "    Version: %u", job->version);
-    app_debug(true, 0, "    ID: %lu", job->job_id);
-    app_debug(true, 0, "    Type: %u", job->job_type);
-    app_debug(true, 0, "    State: %s", a_db_job_get_state_str(job->state));
-    // app_debug(true, 0, "    Target: %s", job->target);
-    app_debug(true, 0, "    Error code: %u", job->error_code);
-    // app_debug(true, 0, "    Progress: %u", job->progress);
-    app_debug(true, 0, "    Created at: %lu", job->created_at);
-    // app_debug(true, 0, "    Updated at: %lu", job->updated_at);
-    app_debug(true, 0, "    Expires at: %lu", job->ttl_epoch);
-}
-
-/* Print A check record */
-static void a_db_check_pnt_rec_dump(struct aura_db_checkpoint_rec *rec) {
-    app_debug(true, 0, "AURA DB CHECK RECORD");
-    app_debug(true, 0, "    Version: %u", rec->version);
-    app_debug(true, 0, "    Magic: %u", rec->magic);
-    app_debug(true, 0, "    LSN: %lu", rec->lsn);
-    app_debug(true, 0, "    Pending jobs: %lu", rec->pending_job_cnt);
-    app_debug(true, 0, "    Pending job recs: %lu", rec->pending_job_rec_cnt);
-
-    for (int i = 0; i < rec->pending_job_cnt; ++i) {
-        app_debug(true, 0, "    Job");
-        app_debug(true, 0, "        Job Id: %lu", rec->pending_jobs[i].job_id);
-        app_debug(true, 0, "        Job state: %u: %s", rec->pending_jobs[i].job_state, a_db_job_get_state_str(rec->pending_jobs[i].job_state));
-        app_debug(true, 0, "        Job Type: %u", rec->pending_jobs[i].job_type);
-        // app_debug(true, 0, "        Job Id", rec->pending_jobs[i].last_committed_lsn);
-        for (int j = 0; j < rec->pending_job_rec_cnt; ++j) {
-            app_debug(true, 0, "    Job_Rec: %lu, %lu", rec->pending_jobs[i].job_id, rec->pending_job_records[j].job_id);
-            if (rec->pending_job_records[j].job_id == rec->pending_jobs[i].job_id) {
-                app_debug(true, 0, "        Rec_off: %u", rec->pending_job_records[j].rec_off);
-                app_debug(true, 0, "        Rec_len: %u", rec->pending_job_records[j].rec_len);
-            }
-        }
-    }
 }
 
 void aura_db_wal_scan(AURA_DBHANDLE _db) {
@@ -2432,28 +3707,26 @@ void aura_db_wal_scan(AURA_DBHANDLE _db) {
     ssize_t res;
 
     db = (AURA_DB *)_db;
-    offset = sizeof(struct aura_db_wal_hdr);
+    // offset = sizeof(struct aura_db_wal_hdr);
 
-    app_debug(true, 0, "WAL FILE HEADER");
-    app_debug(true, 0, "    Version: %u", db->wal_file_hdr.version);
-    app_debug(true, 0, "    Magic: %u", db->wal_file_hdr.magic);
-    app_debug(true, 0, "    Flags: %u", db->wal_file_hdr.flags);
-    app_debug(true, 0, "    Created: %lu", db->wal_file_hdr.created_ts);
-    app_debug(true, 0, "    Last replay: %lu", db->wal_file_hdr.last_replay_ts);
-    app_debug(true, 0, "    Record cnt: %lu", db->wal_file_hdr.record_cnt);
-    app_debug(true, 0, "    File size: %lu", db->wal_file_hdr.file_size);
+    // app_debug(true, 0, "WAL FILE HEADER");
+    // app_debug(true, 0, "    Magic: %u", db->wal_file_hdr.magic);
+    // app_debug(true, 0, "    Flags: %u", db->wal_file_hdr.flags);
+    // app_debug(true, 0, "    Created: %lu", db->wal_file_hdr.created_ms);
+    // app_debug(true, 0, "    Last replay: %lu", db->wal_file_hdr.last_replay_ms);
+    // app_debug(true, 0, "    Record cnt: %lu", db->wal_file_hdr.record_cnt);
 
-    while (true) {
-        app_debug(true, 0, "wal DB read offset: %u", offset);
-        res = pread(db->wal_fd, &wal_hdr, sizeof(wal_hdr), offset);
-        if (res == 0)
-            break;
-        res = pread(db->wal_fd, &rec_hdr, sizeof(rec_hdr), offset + sizeof(wal_hdr));
+    // while (true) {
+    //     app_debug(true, 0, "wal DB read offset: %u", offset);
+    //     res = pread(db->wal_fd, &wal_hdr, sizeof(wal_hdr), offset);
+    //     if (res == 0)
+    //         break;
+    //     res = pread(db->wal_fd, &rec_hdr, sizeof(rec_hdr), offset + sizeof(wal_hdr));
 
-        a_db_dump_wal_header(&wal_hdr);
-        a_db_dump_rec_header(&rec_hdr);
-        offset += wal_hdr.rec_len;
-    }
+    //     a_db_wal_hhdr_dump(&wal_hdr);
+    //     a_db_rec_hdr_dump(&rec_hdr);
+    //     offset += wal_hdr.rec_len;
+    // }
 }
 
 void aura_db_scan(AURA_DBHANDLE _db) {
@@ -2463,14 +3736,103 @@ void aura_db_scan(AURA_DBHANDLE _db) {
     ssize_t res;
 
     db = (AURA_DB *)_db;
-    offset = db->db_file_hdr.record_off;
+    // offset = db->db_file_hdr.record_off;
 
-    app_debug(true, 0, "DB file size: %u", db->db_file_hdr.file_size);
-    while (offset < db->db_file_hdr.file_size) {
-        app_debug(true, 0, "DB read offset: %u", offset);
-        res = pread(db->db_fd, &rec_hdr, sizeof(rec_hdr), offset);
+    // app_debug(true, 0, "DB file size: %u", db->db_file_hdr.file_size);
+    // while (offset < db->db_file_hdr.file_size) {
+    //     app_debug(true, 0, "DB read offset: %u", offset);
+    //     res = pread(db->db_fd, &rec_hdr, sizeof(rec_hdr), offset);
 
-        a_db_dump_rec_header(&rec_hdr);
-        offset += rec_hdr.rec_len.aligned_len;
+    //     a_db_rec_hdr_dump(&rec_hdr);
+    //     offset += rec_hdr.rec_len.aligned_len;
+    // }
+}
+
+/**/
+AURA_DBHANDLE aura_db_test_open_with_log_writer(struct aura_mem_ctx *mc, const char *db_path, int oflag,
+                                                uint32_t wrt_cache_sz, uint32_t read_cache_sz, ...) {
+    AURA_DB *db;
+    int mode;
+
+    va_list va;
+    va_start(va, read_cache_sz);
+    mode = va_arg(va, int);
+    va_end(va);
+
+    db = a_db_open(mc, db_path, oflag, mode, wrt_cache_sz, read_cache_sz);
+    a_db_update_state(db, A_DB_STATE_RUNNING);
+
+    /* log writer and main threads */
+    pthread_barrier_init(&barrier, NULL, 2);
+
+    a_db_start_bg_thread(db, A_DB_THREAD_WAL_WRITER);
+
+    pthread_barrier_wait(&barrier);
+
+    return db;
+}
+
+void aura_db_test_fields_with_bg_writer(AURA_DBHANDLE _db) {
+    AURA_DB *db = _db;
+    assert(db->th_pool[A_DB_THREAD_WAL_WRITER].status == A_DB_BG_TH_RUNNING);
+    assert(db->ref_cnt == 1);
+}
+
+void aura_db_test_close_with_bg_writer(AURA_DBHANDLE _db) {
+    AURA_DB *db = _db;
+
+    pthread_cancel(db->th_pool[A_DB_THREAD_WAL_WRITER].handle);
+
+    pthread_join(db->th_pool[A_DB_THREAD_WAL_WRITER].handle, NULL);
+
+    _a_db_close(db);
+    free((void *)db->file_name);
+    free(db);
+}
+
+int aura_db_test_force_write_cache_flush(AURA_DBHANDLE _db) {
+    AURA_DB *db = _db;
+    return a_db_write_cache_flush(db, A_DB_WRITE_CACHE_FLUSH_FORCE);
+}
+
+void aura_db_test_write_cache_reset(AURA_DBHANDLE _db) {
+    AURA_DB *db = _db;
+    struct aura_db_write_cache *cache = &db->cache.wrt_cache;
+    struct aura_db_cache_buf *buf;
+
+    pthread_mutex_lock(&cache->lock);
+    buf = &cache->bufs[cache->active_idx];
+    a_db_reset_cache_buf(buf);
+
+    buf = &cache->bufs[1 - cache->active_idx];
+    a_db_reset_cache_buf(buf);
+    pthread_mutex_unlock(&cache->lock);
+}
+
+int aura_db_test_fetch_from_write_cache(AURA_DBHANDLE _db, ns_t namespace, schema_id_t schema_id,
+                                        struct aura_iovec *key, struct aura_db_rec *data_out) {
+    AURA_DB *db = _db;
+    uint32_t hash;
+
+    hash = a_fnv1a_hash(A_DB_HASH_BUCKET_CNT, namespace, key);
+
+    if (data_out) {
+        memset(data_out, 0, sizeof(*data_out));
     }
+
+    return a_db_write_cache_fetch(db, namespace, schema_id, key, hash, data_out);
+}
+
+int aura_db_test_fetch_db(AURA_DBHANDLE _db, ns_t namespace, schema_id_t schema_id,
+                          struct aura_iovec *key, struct aura_db_rec *data_out) {
+    AURA_DB *db = _db;
+    uint32_t hash;
+
+    hash = a_fnv1a_hash(A_DB_HASH_BUCKET_CNT, namespace, key);
+
+    if (data_out) {
+        memset(data_out, 0, sizeof(*data_out));
+    }
+
+    return a_db_fetch(db, namespace, schema_id, key, data_out);
 }

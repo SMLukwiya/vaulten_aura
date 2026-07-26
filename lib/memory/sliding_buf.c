@@ -3,7 +3,7 @@
 #include "slab.h"
 #include <unistd.h>
 
-#define A_MIN_SLIDING_BUF_SIZE 1024
+#define A_MIN_SLIDING_BUF_SIZE 4096
 #define A_MAX_SLIDING_BUF_SIZE (1024 * 1024 * 16)
 #define A_SLIDING_BUF_ALIGNMENT 64
 
@@ -28,7 +28,7 @@ int aura_sliding_buf_init(struct aura_sliding_buf *buf, struct aura_mem_ctx *mc,
     buf->mc = mc;
     buf->cap = initial_cap;
     buf->start = buf->end = 0;
-    buf->flags = A_SLIDING_BUF_FL_INLINED | flags;
+    buf->flags = A_SLIDING_BUF_FL_INITIALIZED | A_SLIDING_BUF_FL_INLINED | flags;
 
     return 0;
 }
@@ -60,7 +60,7 @@ struct aura_sliding_buf *aura_sliding_buf_create(struct aura_mem_ctx *mc, uint32
     buf->mc = mc;
     buf->cap = init_cap;
     buf->start = buf->end = 0;
-    buf->flags = A_SLIDING_BUG_FL_SHARED | flags;
+    buf->flags = A_SLIDING_BUF_FL_INITIALIZED | A_SLIDING_BUG_FL_SHARED | flags;
     buf->allocated.ref_cnt = 1;
     aura_list_head_init(&buf->allocated.link);
 
@@ -80,6 +80,8 @@ void aura_sliding_buf_destroy(struct aura_sliding_buf *buf) {
 
     if (!(buf->flags & A_SLIDING_BUF_FL_INLINED))
         aura_free(buf);
+
+    buf->flags = A_SLIDING_BUF_FL_NONE;
 }
 
 /**
@@ -137,7 +139,8 @@ bool aura_sliding_buf_ensure_cap(struct aura_sliding_buf *buf, uint32_t needed) 
     if (buf->flags & A_SLIDING_BUF_FL_FIXED)
         return false;
 
-    /* Resize */
+    /* Resize, make minimum increment 4KB  */
+    needed = a_max(needed, A_MIN_SLIDING_BUF_SIZE);
     required_cap = aura_sliding_buf_cap(buf) + needed - write_len;
     return a_sliding_buf_resize(buf, required_cap);
 }

@@ -1,8 +1,7 @@
 #include "broker.h"
-#include "db.h"
 
-static struct aura_db_broker_request *a_db_broker_construct_request(struct aura_mem_ctx *mc, uint16_t ns,
-                                                                    uint16_t schema_id, struct aura_iovec *key,
+static struct aura_db_broker_request *a_db_broker_construct_request(struct aura_mem_ctx *mc, ns_t ns,
+                                                                    schema_id_t schema_id, struct aura_iovec *key,
                                                                     struct aura_iovec *data, size_t *olen) {
     struct aura_db_broker_request *request;
     size_t len;
@@ -35,7 +34,7 @@ static struct aura_db_broker_request *a_db_broker_construct_request(struct aura_
     return request;
 }
 
-int aura_db_broker_fetch(struct aura_mem_ctx *mc, uint16_t ns, uint16_t schema_id,
+int aura_db_broker_fetch(struct aura_mem_ctx *mc, ns_t ns, schema_id_t schema_id,
                          struct aura_iovec *key, struct aura_iovec *out_data,
                          int dmn_fd) {
     struct aura_db_broker_request *request;
@@ -66,9 +65,9 @@ int aura_db_broker_fetch(struct aura_mem_ctx *mc, uint16_t ns, uint16_t schema_i
     return 0;
 }
 
-int aura_db_broker_insert(struct aura_mem_ctx *mc, uint16_t ns, uint16_t schema_id, uint64_t job_id,
-                          struct aura_iovec *key, struct aura_iovec *data, aura_db_exec_mode mode,
-                          struct aura_db_completion *cb, int dmn_fd) {
+int aura_db_broker_insert(struct aura_mem_ctx *mc, ns_t ns, schema_id_t schema_id,
+                          struct aura_iovec *key, struct aura_iovec *data,
+                          aura_db_exec_mode mode, int dmn_fd) {
     struct aura_db_broker_request *request;
     struct aura_msg_hdr msg_hdr;
     struct aura_msg msg;
@@ -86,7 +85,7 @@ int aura_db_broker_insert(struct aura_mem_ctx *mc, uint16_t ns, uint16_t schema_
         return res;
 
     /* Perform synchronous action */
-    if (mode == A_DB_EXEC_DIRECT) {
+    if (mode == A_DB_EXEC_SYNC) {
         res = aura_msg_recv(dmn_fd, &msg);
         if (res <= 0)
             return res;
@@ -98,7 +97,5 @@ void aura_db_request_dump(struct aura_db_broker_request *req) {
     app_debug(true, 0, "AURA DB REQUEST");
     app_debug(true, 0, "    Namespace: %u", req->namespace);
     app_debug(true, 0, "    Schema_id: %u", req->schema_id);
-    app_debug(true, 0, "    Job id: %lu", req->job_id);
-    app_debug(true, 0, "    Exec mode: %d", req->mode);
     app_debug(true, 0, "    Key: %s", req->key.base);
 }

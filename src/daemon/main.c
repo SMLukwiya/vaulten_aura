@@ -53,7 +53,8 @@ static int a_ensure_db_path(const char *path, int mode) {
     return 0;
 }
 
-int aura_path_get_db_file_path(char *path, size_t len, const char *db_file_name) {
+// int aura_path_get_db_file_path(char *path, size_t len, const char *db_file_name) {
+int aura_path_get_db_file_path(char *path, size_t len) {
     bool dev_mode;
     char *base;
 
@@ -75,17 +76,16 @@ int aura_path_get_db_file_path(char *path, size_t len, const char *db_file_name)
             snprintf(path, len, "%s/.local/share/", home);
         }
         strncat(path, "v_aura/", len - strlen(path));
+
+        if (a_ensure_db_path(path, S_IRWXU | S_IRGRP | S_IROTH) < 0)
+            return -1;
     } else {
         /* Created by systemd.exec */
         base = getenv("STATE_DIRECTORY");
         snprintf(path, len, "%s/", base);
     }
 
-    if (dev_mode)
-        if (a_ensure_db_path(path, S_IRWXU | S_IRGRP | S_IROTH) < 0)
-            return -1;
-
-    strncat(path, db_file_name, len - strlen(path));
+    // strncat(path, db_file_name, len - strlen(path));
     return 0;
 }
 
@@ -151,7 +151,7 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
             return 0;
 
         case A_CMD_FN_LIST:
-            aura_dmn_list_fns(&msg->data, cli_fd, arg);
+            aura_dmn_fn_list(&msg->data, cli_fd, arg);
             return 0;
 
         case A_CMD_DB_FETCH_REQUEST:
@@ -189,26 +189,37 @@ static void a_sig_ch_handler(int signo) {
 
 static int a_setup_database(struct aura_dmn_glob_conf *gc) {
     int res;
-    char db_file[1024], wal_file[1024];
+    char db_path[A_DB_MAX_FILE_PATH_LEN];
+    // char ctrl_file[A_DB_MAX_FILE_PATH_LEN];
+    // char data_file[A_DB_MAX_FILE_PATH_LEN];
+    // char wal_file[A_DB_MAX_FILE_PATH_LEN];
 
-    if (aura_path_get_db_file_path(db_file, sizeof(db_file), AURA_DB_FILE) < 0)
+    if (aura_path_get_db_file_path(db_path, A_DB_MAX_FILE_PATH_LEN) < 0)
         return -1;
 
-    if (aura_path_get_db_file_path(wal_file, sizeof(wal_file), AURA_DB_WAL_FILE) < 0)
-        return -1;
+    // if (aura_path_get_db_file_path(data_file, sizeof(ctrl_file), AURA_DB_CONTROL_FILE) < 0)
+    //     return -1;
 
-    gc->db_file.len = strlen(db_file);
-    gc->db_file.base = strndup(db_file, gc->db_file.len);
+    // if (aura_path_get_db_file_path(data_file, sizeof(data_file), AURA_DB_DATA_FILE) < 0)
+    //     return -1;
 
-    gc->db_handle = aura_db_open(&gc->mc, db_file, wal_file, O_RDWR | O_CREAT | O_EXCL | O_TRUNC, A_DB_FILE_MODE);
+    // if (aura_path_get_db_file_path(wal_file, sizeof(wal_file), AURA_DB_WAL_FILE) < 0)
+    //     return -1;
+
+    // gc->db_file.len = strlen(data_file);
+    // gc->db_file.base = strndup(data_file, gc->db_file.len);
+
+    // gc->db_handle = aura_db_open(
+    //   &gc->mc,
+    //   db_path,
+    //   ctrl_file,
+    //   data_file,
+    //   wal_file,
+    //   O_RDWR | O_CREAT | O_EXCL | O_TRUNC,
+    //   A_DB_FILE_MODE);
+    gc->db_handle = aura_db_open(&gc->mc, db_path);
     if (!gc->db_handle) {
         sys_debug(true, errno, "a_setup_database: aura_db_open error");
-        return -1;
-    }
-
-    res = aura_db_start_bg_tasks(gc->db_handle);
-    if (res != 0) {
-        sys_debug(true, errno, "a_setup_database: aura_db_start_bg_tasks");
         return -1;
     }
 

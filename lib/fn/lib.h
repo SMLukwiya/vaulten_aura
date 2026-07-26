@@ -17,6 +17,34 @@
 
 #define A_FN_NAME_MAX_LEN 1024
 
+/* Namespace prefixes */
+#define A_DB_FN_KEY_PREFIX "fn"
+
+/* Resource type suffixes */
+#define A_DB_FN_META_SUFFIX "meta"
+#define A_DB_FN_CODE_SUFFIX "code"
+#define A_DB_FN_CONF_SUFFIX "config"
+#define A_DB_FN_STAT_SUFFIX "stat"
+#define A_DB_FN_STATE_SUFFIX "state"
+
+#define A_FN_LIST_KEY "system:functions"
+
+/* Namespaces */
+typedef enum {
+    A_DB_NS_FN = A_DB_FN_BASE + 1, /* Function namespace */
+} aura_fn_db_namespace;
+
+/* Schemas */
+typedef enum {
+    A_DB_FN_CODE_SCHEMA_ID = A_DB_FN_BASE + 1,
+    A_DB_FN_META_SCHEMA_ID,
+    A_DB_FN_CONF_SCHEMA_ID,
+    A_DB_FN_STAT_DELTA_SCHEMA_ID,
+    A_DB_FN_TAG_SCHEMA_ID,
+    A_DB_FN_STATE_SCHEMA_ID,
+    A_DB_FN_LIST_SCHEMA_ID,
+} aura_fn_db_schema_id;
+
 /* Fn list key (base, len) */
 static struct aura_iovec a_function_list_key = {
   .base = "system:functions",
@@ -38,7 +66,7 @@ struct aura_fn_cb_data {
 typedef enum {
     A_FN_DEPLOY = 1U < 1,
     A_FN_DELETE = 1U < 2,
-} aura_fn_job_type;
+} aura_fn_tx_type;
 
 enum a_fn_node_idx {
     A_IDX_FN_NONE,
@@ -74,9 +102,11 @@ struct aura_yml_fn_data_ctx {
     uint32_t trigger_type;
     aura_rax_tree_t *parse_tree;
     st_aura_b_builder builder;
-    struct aura_yml_node *node_arr;
-    uint32_t node_cap;
-    uint32_t node_cnt;
+    struct {
+        struct aura_yml_node *entries;
+        uint32_t cnt;
+        uint32_t cap;
+    } node_vec;
     uint32_t node_len;
 };
 
@@ -505,16 +535,16 @@ struct aura_fn {
  * like this would help since the key is simply the fn name
  * This is very tiny as compared to the real function meta
  */
-struct aura_fn_petite {
+struct aura_fn_tag {
     char fn_name[A_FN_NAME_MAX_LEN];
     uint32_t fn_version;
-    uint64_t job_id; /* Job on which this function was created */
+    uint64_t tx_id; /* Transaction ID associated with tag */
 };
 
 /** System functions structure */
-struct aura_functions {
+struct aura_fn_list {
     size_t func_cnt;
-    struct aura_fn_petite *funcs;
+    struct aura_fn_tag *func_tags;
 };
 
 struct aura_fn_tls_version {
@@ -531,26 +561,13 @@ struct aura_fn_evt {
     char *_msg;
 };
 
-/* Function rep structure */
-struct aura_fn_rep {
-    char fn_name[A_FN_NAME_MAX_LEN];
-    uint32_t fn_version;
-    char checksum[64];
-    uint64_t deployed_at;
-};
-
-/* List function structure */
-struct aura_fn_list {
-    size_t cnt;
-    struct aura_fn_rep *fns;
-};
-
 /* Fn OP states */
 typedef enum {
     A_FN_OP_STATE_START = 1,
     A_FN_OP_STATE_RUNNING,
     A_FN_OP_STATE_CONFIG_VALIDATE,
     A_FN_OP_STATE_PETITE, /* A small representation for a fn containing only name and version */
+    A_FN_OP_STATE_TAG,    /* A small representation for a fn containing only name and version */
     A_FN_OP_STATE_META,
     A_FN_OP_STATE_CONFIG,
     A_FN_OP_STATE_CODE,
@@ -610,7 +627,7 @@ struct aura_rollback_detector {
 static inline const struct aura_fn_http_method *aura_fn_http_method_get(const char *str) {
     int val;
 
-    if (aura_scan_str(str, "%u" SCNu32, &val) == 0)
+    if (aura_scan_str(str, "%u" SCNu32, &val) < 0)
         return NULL;
 
     switch (val) {
@@ -635,7 +652,7 @@ static inline const struct aura_fn_http_method *aura_fn_http_method_get(const ch
 static inline const struct aura_fn_cron_misfire_policy *aura_fn_cron_misfire_policy_get(const char *str) {
     int val;
 
-    if (aura_scan_str(str, "%u" SCNu32, &val) == 0)
+    if (aura_scan_str(str, "%u" SCNu32, &val) < 0)
         return NULL;
 
     switch (val) {
@@ -653,7 +670,7 @@ static inline const struct aura_fn_cron_misfire_policy *aura_fn_cron_misfire_pol
 static inline const struct aura_fn_oom_policy *aura_fn_oom_policy_get(const char *str) {
     int val;
 
-    if (aura_scan_str(str, "%u" SCNu32, &val) == 0)
+    if (aura_scan_str(str, "%u" SCNu32, &val) < 0)
         return NULL;
 
     switch (val) {
@@ -717,22 +734,22 @@ static void aura_fn_evt_response_dump(struct aura_fn_evt *evt, bool daemon) {
  * Get 'tiny' function meta data from
  * list of functions
  */
-struct aura_fn_petite *aura_fn_petite_fetch(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
-                                            const char *fn_name, uint32_t fn_version, int *error);
+struct aura_fn_tag *aura_fn_tag_fetch(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
+                                      const char *fn_name, uint32_t fn_version, int *error);
 
 /** Get the list of functions deployed in the system */
-struct aura_functions *aura_fn_list_fetch(AURA_DBHANDLE db, int *error);
+struct aura_fn_list *aura_fn_list_fetch(AURA_DBHANDLE db, int *error);
 
 /** Add a new function to the list of deployed functions */
-int aura_fn_list_add(AURA_DBHANDLE db, struct aura_mem_ctx *mc, const char *fn_name,
-                     uint32_t fn_version, uint64_t job_id, struct aura_db_completion *comp);
+int aura_fn_list_add_fn(AURA_DBHANDLE db, struct aura_mem_ctx *mc, const char *fn_name,
+                        uint32_t fn_version, uint64_t job_id);
 
 /** Brokered fetch for the list of deployed functions */
-struct aura_functions *aura_fn_list_fetch_broker(struct aura_mem_ctx *mc, int dmn_sock_fd, int *error);
+struct aura_fn_list *aura_fn_list_fetch_broker(struct aura_mem_ctx *mc, int dmn_sock_fd, int *error);
 
 /** Remove a function from the list of deployed functions */
-int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_mem_ctx *mc, uint64_t job_id,
-                        const char *fn_name, uint32_t fn_version, struct aura_db_completion *comp);
+int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
+                        const char *fn_name, uint32_t fn_version);
 
 /** */
 struct aura_fn_stat *aura_fn_stat_fetch_broker(struct aura_mem_ctx *mc, const char *fn_name, uint32_t fn_version, int dmn_fd);
@@ -765,11 +782,5 @@ int aura_fn_stat_compare(struct aura_heap_ent *s1, struct aura_heap_ent *s2);
 
 /**/
 void aura_fn_stat_dump(struct aura_fn_stat *stats);
-
-/* ROLLBACK */
-struct aura_rollback_detector *rollback_detector_create(aura_rollback_cb cb);
-void rollback_detector_add_deployment(struct aura_rollback_detector *rbd, uint64_t fn_id, const char *version);
-void rollback_detector_record_metrics();
-void rollback_detector_evaluate();
 
 #endif

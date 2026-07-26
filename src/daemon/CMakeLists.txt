@@ -20,6 +20,7 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/fn/lib_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/memory/mem_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/memory/slab_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory/sliding_buf.c
     ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/user/user.c
     ${vaulten_aura_SOURCE_DIR}/lib/ipc/ipc.c

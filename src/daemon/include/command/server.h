@@ -59,26 +59,27 @@ struct aura_yml_srv_hosts {
  * like tls identites and hosts relationships...
  */
 struct aura_yml_usr_data_ctx {
-    bool seen_aura_version;                  /* yaml version */
-    bool seen_svr_env;                       /* server environment set */
-    bool seen_listeners;                     /* server listeners */
     struct aura_yml_srv_listeners listeners; /* store listeners */
-    bool seen_tls_identities;                /* any defined tls identities*/
-    bool seen_any_key_file;                  /* key file for a tls identity */
-    bool expect_key;                         /* expect to parse a key as next token */
-    bool seen_ciphers;                       /* tls ciphers */
-    bool is_aes128gcmsha256_set;             /* RFC 8446 Mandatory cipher suite! */
     struct aura_yml_tls_tags tls_tags;       /* tls tags */
-    bool seen_hosts;                         /* server hosts */
     struct aura_yml_srv_hosts hosts;
-    bool extract; /* extract the parsed values for use later */
     aura_rax_tree_t *parse_tree;
     st_aura_b_builder builder;
-    struct aura_yml_node *node_arr;
-    uint32_t node_cap;
-    uint32_t node_cnt;
-    uint32_t node_len;
-    SSL_CTX *ssl_ctx; /* fake SSL context to validate key and cert files */
+    struct {
+        struct aura_yml_node *entries;
+        uint32_t cap;
+        uint32_t cnt;
+    } node_vec;
+    SSL_CTX *ssl_ctx;            /* fake SSL context to validate key and cert files */
+    bool seen_aura_version;      /* yaml version */
+    bool seen_svr_env;           /* server environment set */
+    bool seen_listeners;         /* server listeners */
+    bool seen_tls_identities;    /* any defined tls identities*/
+    bool seen_any_key_file;      /* key file for a tls identity */
+    bool expect_key;             /* expect to parse a key as next token */
+    bool seen_ciphers;           /* tls ciphers */
+    bool is_aes128gcmsha256_set; /* RFC 8446 Mandatory cipher suite! */
+    bool seen_hosts;             /* server hosts */
+    bool extract;                /* extract the parsed values for use later */
 };
 
 /**

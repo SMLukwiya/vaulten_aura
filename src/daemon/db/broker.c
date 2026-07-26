@@ -16,7 +16,7 @@ static inline struct name_version a_extract_fn_name_version(const char *str) {
     *end = '\0';
     memcpy(nv.name, str, end - str);
     res = aura_scan_str(end + 1, "%u", &nv.version);
-    if (res == 0)
+    if (res < 0)
         nv.version = UINT32_MAX;
 
     return nv;
@@ -37,92 +37,94 @@ int aura_dmn_db_req(struct iovec *data, int cli_fd, AURA_DBHANDLE db) {
     if (request->data.len > 0)
         request->data.base = (char *)request + sizeof(*request) + request->key.len;
 
-    if (request->schema_id != A_DB_SCHEMA_FNS) {
+    if (request->schema_id != A_DB_FN_LIST_SCHEMA_ID) {
         end = strchr(request->key.base, ':');
         *end = '\0';
         fn_name = request->key.base;
         version_len = request->key.len - (end - fn_name);
         snprintf(fn_version_str, version_len, "%s", end + 1);
         res = aura_scan_str(fn_version_str, "%u", &fn_version);
-        if (!fn_name || res == 0) {
+        if (!fn_name || res < 0) {
             res = aura_resp_send(cli_fd, NULL, 0);
             return res;
         }
     }
 
-    switch (request->schema_id) {
-    case A_DB_SCHEMA_FN_CODE_V1:
-        struct aura_iovec code = aura_fn_code_fetch(db, fn_name, fn_version);
-        if (!code.base) {
-            res = aura_resp_send(cli_fd, NULL, 0);
-            return res;
+    if (request->namespace == A_DB_NS_FN) {
+        switch (request->schema_id) {
+        case A_DB_FN_CODE_SCHEMA_ID:
+            struct aura_iovec code = aura_fn_code_fetch(db, fn_name, fn_version);
+            if (!code.base) {
+                res = aura_resp_send(cli_fd, NULL, 0);
+                return res;
+            }
+
+            res = aura_resp_send(cli_fd, code.base, code.len);
+            aura_free(code.base);
+            break;
+
+        case A_DB_FN_META_SCHEMA_ID:
+            struct aura_iovec meta = aura_fn_meta_fetch(db, fn_name, fn_version);
+            if (!meta.base) {
+                res = aura_resp_send(cli_fd, NULL, 0);
+                return res;
+            }
+
+            res = aura_resp_send(cli_fd, meta.base, meta.len);
+            aura_free(meta.base);
+            break;
+
+        case A_DB_FN_CONF_SCHEMA_ID:
+            struct aura_iovec config = aura_fn_config_fetch(db, fn_name, fn_version);
+            if (!config.base) {
+                res = aura_resp_send(cli_fd, NULL, 0);
+                return res;
+            }
+
+            res = aura_resp_send(cli_fd, config.base, config.len);
+            aura_free(config.base);
+            break;
+
+        case A_DB_FN_STAT_DELTA_SCHEMA_ID:
+            struct aura_fn_stat *stat = aura_fn_stat_fetch(db, fn_name, fn_version);
+            if (!stat) {
+                res = aura_resp_send(cli_fd, NULL, 0);
+                return res;
+            }
+
+            res = aura_resp_send(cli_fd, stat, sizeof(*stat));
+            aura_free(stat);
+            break;
+
+        case A_DB_FN_TAG_SCHEMA_ID:
+            struct aura_iovec state = aura_fn_state_fetch(db, fn_name, fn_version);
+            if (!state.base) {
+                res = aura_resp_send(cli_fd, NULL, 0);
+                return res;
+            }
+
+            res = aura_resp_send(cli_fd, state.base, sizeof(state.len));
+            aura_free(state.base);
+            break;
+
+        case A_DB_FN_LIST_SCHEMA_ID:
+            struct aura_fn_list *fns;
+
+            error = 0;
+            fns = aura_fn_list_fetch(db, &error);
+            if (error < 0 || error == A_DB_REC_NOT_FOUND) {
+                res = aura_resp_send(cli_fd, NULL, 0);
+                return res;
+            }
+
+            len = sizeof(*fns) + (fns->func_cnt * sizeof(struct aura_fn_tag));
+            res = aura_resp_send(cli_fd, fns, len);
+            aura_free(fns);
+            break;
+
+        default:
+            break;
         }
-
-        res = aura_resp_send(cli_fd, code.base, code.len);
-        aura_free(code.base);
-        break;
-
-    case A_DB_SCHEMA_FN_META_V1:
-        struct aura_iovec meta = aura_fn_meta_fetch(db, fn_name, fn_version);
-        if (!meta.base) {
-            res = aura_resp_send(cli_fd, NULL, 0);
-            return res;
-        }
-
-        res = aura_resp_send(cli_fd, meta.base, meta.len);
-        aura_free(meta.base);
-        break;
-
-    case A_DB_SCHEMA_FN_CONFIG_V1:
-        struct aura_iovec config = aura_fn_config_fetch(db, fn_name, fn_version);
-        if (!config.base) {
-            res = aura_resp_send(cli_fd, NULL, 0);
-            return res;
-        }
-
-        res = aura_resp_send(cli_fd, config.base, config.len);
-        aura_free(config.base);
-        break;
-
-    case A_DB_SCHEMA_FN_STAT_DELTA:
-        struct aura_fn_stat *stat = aura_fn_stat_fetch(db, fn_name, fn_version);
-        if (!stat) {
-            res = aura_resp_send(cli_fd, NULL, 0);
-            return res;
-        }
-
-        res = aura_resp_send(cli_fd, stat, sizeof(*stat));
-        aura_free(stat);
-        break;
-
-    case A_DB_SCHEMA_FN_STATE_V1:
-        struct aura_iovec state = aura_fn_state_fetch(db, fn_name, fn_version);
-        if (!state.base) {
-            res = aura_resp_send(cli_fd, NULL, 0);
-            return res;
-        }
-
-        res = aura_resp_send(cli_fd, state.base, sizeof(state.len));
-        aura_free(state.base);
-        break;
-
-    case A_DB_SCHEMA_FNS:
-        struct aura_functions *fns;
-
-        error = 0;
-        fns = aura_fn_list_fetch(db, &error);
-        if (error < 0 || error == A_DB_REC_NOT_FOUND) {
-            res = aura_resp_send(cli_fd, NULL, 0);
-            return res;
-        }
-
-        len = sizeof(*fns) + (fns->func_cnt * sizeof(fns->funcs[0]));
-        res = aura_resp_send(cli_fd, fns, len);
-        aura_free(fns);
-        break;
-
-    default:
-        break;
     }
 
     return 0;

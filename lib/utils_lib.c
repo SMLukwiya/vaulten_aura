@@ -87,7 +87,7 @@ int aura_scan_str(const char *value, const char *fmt, ...) {
     va_end(vp);
 
     if (errno != 0)
-        return 0;
+        return -1;
     errno = err;
     return res;
 }
