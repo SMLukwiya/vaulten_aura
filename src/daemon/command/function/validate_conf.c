@@ -163,15 +163,11 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
         int version;
         a_ensure_node_is_scalar(p, evt, yn);
 
-        res = aura_scan_str(yn->str_val, "%" SCNu32, &version);
-        if (res < 0 || version > UINT32_MAX)
-            YAML_ADD_ERROR(p, evt, "Invalid %s, Expected a valid version number", yn->full_path);
-
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
             yml_node = &usr_data->node_vec.entries[node_off];
-            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NUM, A_IDX_FN_VERSION);
-            yml_node->int_val = version;
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_STRING, A_IDX_FN_VERSION);
+            yml_node->str_val = strdup(yn->str_val);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
         return;

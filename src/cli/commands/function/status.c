@@ -76,8 +76,8 @@ int aura_cli_fn_status(void *opts_ptr, void *glob_opts) {
             return -1;
         }
 
-        if (aura_scan_str(sep + 1, "%d" SCNu32, &fn_verion) < 0) {
-            app_info(false, 0, "Invalid function version: %s, Expected a valid integer", sep + 1);
+        if (fn_name + strlen(fn_name) - (sep + 1) > A_FN_VERSION_MAX_LEN) {
+            app_info(false, 0, "Invalid function version: %s, Version exceed MAX VERSION LENGTH", sep + 1);
             return -1;
         }
     }

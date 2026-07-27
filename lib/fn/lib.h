@@ -15,7 +15,9 @@
 #include <sys/time.h>
 #include <sys/types.h>
 
-#define A_FN_NAME_MAX_LEN 1024
+#define A_FN_NAME_MAX_LEN 256
+#define A_FN_VERSION_MAX_LEN 32
+#define A_FN_DEFAULT_VERSION "1.0.0"
 
 /* Namespace prefixes */
 #define A_DB_FN_KEY_PREFIX "fn"
@@ -505,9 +507,9 @@ struct aura_fn_stat {
  */
 struct aura_fn_stat_wrapper {
     struct aura_fn_stat *fn_stat;
-    const char *fn_name;
+    char *fn_name;
+    char *fn_version;
     struct aura_heap_ent hp_ent;
-    uint32_t fn_version;
 };
 
 /** Function state */
@@ -536,9 +538,9 @@ struct aura_fn {
  * This is very tiny as compared to the real function meta
  */
 struct aura_fn_tag {
-    char fn_name[A_FN_NAME_MAX_LEN];
-    uint32_t fn_version;
-    uint64_t tx_id; /* Transaction ID associated with tag */
+    char fn_name[A_FN_NAME_MAX_LEN];          /* Function name */
+    uint8_t fn_version[A_FN_VERSION_MAX_LEN]; /* Function version */
+    uint64_t timestamp_ms;                    /* Deployment date */
 };
 
 /** System functions structure */
@@ -685,6 +687,43 @@ static inline const struct aura_fn_oom_policy *aura_fn_oom_policy_get(const char
     }
 }
 
+/**/
+static inline void aura_fn_evt_response_dump(struct aura_fn_evt *evt, bool daemon) {
+    app_debug(daemon, 0, "AURA FN EVT RESPONSE");
+    app_debug(daemon, 0, "    State: %u", evt->state);
+    app_debug(daemon, 0, "    Error: %d", evt->error_code);
+    app_debug(daemon, 0, "    Msg Len: %u", evt->msg_len);
+    if (evt->msg_len > 0)
+        app_debug(daemon, 0, "    Message: %p", evt->_msg);
+}
+
+static inline void aura_fn_get_name_and_version(struct iovec *fn, char *fn_name,
+                                                uint64_t func_len, char *fn_version,
+                                                uint64_t func_vlen) {
+    memset(fn_name, 0, func_len);
+    memset(fn_version, 0, func_vlen);
+
+    /* assume no version was provided */
+    func_len = fn->iov_len;
+
+    char *sep = strchr(fn->iov_base, ':');
+    if (sep) {
+        /**
+         * Function key provided as <fn_name>:<fn_version>
+         * We therefore copy the function version
+         * found after the sep(:).
+         */
+        *sep = '\0';
+        func_vlen = ((char *)fn->iov_base + fn->iov_len) - sep;
+        memcpy(fn_version, sep + 1, func_vlen);
+
+        /* account for version and separator */
+        func_len -= func_vlen - 1;
+    }
+
+    memcpy(fn_name, fn->iov_base, func_len);
+}
+
 /** Parse function meta data */
 int aura_fn_meta_parse(void *meta, struct aura_fn_meta *fn_meta);
 
@@ -720,62 +759,53 @@ void aura_fn_meta_dump(struct aura_fn_meta *fn_meta);
 /**/
 void aura_fn_config_dump(struct aura_fn_config *fn_conf);
 
-/**/
-static void aura_fn_evt_response_dump(struct aura_fn_evt *evt, bool daemon) {
-    app_debug(daemon, 0, "AURA FN EVT RESPONSE");
-    app_debug(daemon, 0, "    State: %u", evt->state);
-    app_debug(daemon, 0, "    Error: %d", evt->error_code);
-    app_debug(daemon, 0, "    Msg Len: %u", evt->msg_len);
-    if (evt->msg_len > 0)
-        app_debug(daemon, 0, "    Message: %p", evt->_msg);
-}
-
 /**
  * Get 'tiny' function meta data from
  * list of functions
  */
 struct aura_fn_tag *aura_fn_tag_fetch(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
-                                      const char *fn_name, uint32_t fn_version, int *error);
+                                      const char *fn_name, const char *fn_version,
+                                      int *error);
 
 /** Get the list of functions deployed in the system */
 struct aura_fn_list *aura_fn_list_fetch(AURA_DBHANDLE db, int *error);
 
 /** Add a new function to the list of deployed functions */
-int aura_fn_list_add_fn(AURA_DBHANDLE db, struct aura_mem_ctx *mc, const char *fn_name,
-                        uint32_t fn_version, uint64_t job_id);
+int aura_fn_list_add_fn(AURA_DBHANDLE db, struct aura_mem_ctx *mc, char *fn_name,
+                        char *fn_version);
 
 /** Brokered fetch for the list of deployed functions */
-struct aura_fn_list *aura_fn_list_fetch_broker(struct aura_mem_ctx *mc, int dmn_sock_fd, int *error);
+struct aura_fn_list *aura_fn_list_fetch_brokered(struct aura_mem_ctx *mc, int dmn_sock_fd, int *error);
 
 /** Remove a function from the list of deployed functions */
 int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
-                        const char *fn_name, uint32_t fn_version);
+                        char *fn_name, char *fn_version);
 
 /** */
-struct aura_fn_stat *aura_fn_stat_fetch_broker(struct aura_mem_ctx *mc, const char *fn_name, uint32_t fn_version, int dmn_fd);
+struct aura_fn_stat *aura_fn_stat_fetch_broker(struct aura_mem_ctx *mc, char *fn_name, char *fn_version, int dmn_fd);
 
 /**/
-struct aura_iovec aura_fn_meta_fetch(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version);
+struct aura_iovec aura_fn_meta_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_version);
 
 /**/
-struct aura_iovec aura_fn_config_fetch(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version);
+struct aura_iovec aura_fn_config_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_version);
 
 /**/
-struct aura_iovec aura_fn_code_fetch(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version);
+struct aura_iovec aura_fn_code_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_version);
 
 /**/
-struct aura_iovec aura_fn_state_fetch(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version);
+struct aura_iovec aura_fn_state_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_version);
 
 /**
  * Load a function to memory
  */
-struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_mem_ctx *mc, const char *fn_name, uint32_t fn_version);
+struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_mem_ctx *mc, char *fn_name, char *fn_version);
 
 /** */
-struct aura_fn *aura_fn_load_broker(struct aura_mem_ctx *mc, const char *fn_name, uint32_t fn_version, int sock_fd);
+struct aura_fn *aura_fn_load_broker(struct aura_mem_ctx *mc, char *fn_name, char *fn_version, int sock_fd);
 
 /** Fetch function stats */
-struct aura_fn_stat *aura_fn_stat_fetch(AURA_DBHANDLE db, const char *fn_name, uint32_t fn_version);
+struct aura_fn_stat *aura_fn_stat_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_version);
 
 /* Compare function stats */
 int aura_fn_stat_compare(struct aura_heap_ent *s1, struct aura_heap_ent *s2);

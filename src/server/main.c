@@ -1370,7 +1370,7 @@ static void a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd)
     if (aura_heap_init(hp, &gc->mem_ctx, A_MAX_PRELOAD_FN_CNT, aura_fn_stat_compare, A_HP_TYPE_MAX_HEAP) < 0)
         sys_exit(true, errno, "a_preload_functions error : aura_heap_init");
 
-    fns = aura_fn_list_fetch_broker(mc, dmn_sock_fd, &error);
+    fns = aura_fn_list_fetch_brokered(mc, dmn_sock_fd, &error);
     /* No functions deployed yet! */
     if (!fns) {
         /* Fatal error */
@@ -1415,7 +1415,7 @@ static void a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd)
 
         aux_stat->fn_stat = fn_stat;
         aux_stat->fn_name = aura_strdup(mc, fns_copy.func_tags[i].fn_name);
-        aux_stat->fn_version = fns_copy.func_tags[i].fn_version;
+        aux_stat->fn_version = aura_strdup(mc, fns_copy.func_tags[i].fn_version);
 
         if (!aura_heap_is_full(hp)) {
             aura_heap_push(hp, &aux_stat->hp_ent);
@@ -1449,7 +1449,6 @@ static void a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd)
     /**
      * Add the loaded functions to their respective routes
      */
-    // aura_heap_for_each(hp, aux_stat) {
     aura_heap_for_each(hp, hp_ent) {
         aux_stat = aura_container_of(hp_ent, struct aura_fn_stat_wrapper, hp_ent);
         fn = aura_fn_load_broker(mc, aux_stat->fn_name, aux_stat->fn_version, dmn_sock_fd);

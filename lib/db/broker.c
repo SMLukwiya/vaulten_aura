@@ -1,8 +1,8 @@
 #include "broker.h"
 
-static struct aura_db_broker_request *a_db_broker_construct_request(struct aura_mem_ctx *mc, ns_t ns,
-                                                                    schema_id_t schema_id, struct aura_iovec *key,
-                                                                    struct aura_iovec *data, size_t *olen) {
+static struct aura_db_broker_request *a_db_brokered_req_create(struct aura_mem_ctx *mc, ns_t ns,
+                                                               schema_id_t schema_id, struct aura_iovec *key,
+                                                               struct aura_iovec *data, size_t *olen) {
     struct aura_db_broker_request *request;
     size_t len;
 
@@ -34,9 +34,14 @@ static struct aura_db_broker_request *a_db_broker_construct_request(struct aura_
     return request;
 }
 
-int aura_db_broker_fetch(struct aura_mem_ctx *mc, ns_t ns, schema_id_t schema_id,
-                         struct aura_iovec *key, struct aura_iovec *out_data,
-                         int dmn_fd) {
+static inline void a_db_brokered_req_destroy(struct aura_db_broker_request *req) {
+    if (req)
+        aura_free(req);
+}
+
+int aura_db_brokered_fetch(struct aura_mem_ctx *mc, ns_t ns, schema_id_t schema_id,
+                           struct aura_iovec *key, struct aura_iovec *out_data,
+                           int dmn_fd) {
     struct aura_db_broker_request *request;
     struct aura_msg_hdr msg_hdr;
     struct aura_msg msg;
@@ -45,13 +50,13 @@ int aura_db_broker_fetch(struct aura_mem_ctx *mc, ns_t ns, schema_id_t schema_id
     void *resp_data;
     int res;
 
-    request = a_db_broker_construct_request(mc, ns, schema_id, key, NULL, &len);
+    request = a_db_brokered_req_create(mc, ns, schema_id, key, NULL, &len);
     if (!request)
         return -1;
 
     a_init_msg_hdr(msg_hdr, len, A_MSG_CMD_EXECUTE, A_CMD_DB_FETCH_REQUEST);
     res = aura_msg_send(dmn_fd, &msg_hdr, (void *)request, len, -1);
-    aura_free(request);
+    a_db_brokered_req_destroy(request);
     if (res < 0)
         return -1;
 
@@ -65,22 +70,22 @@ int aura_db_broker_fetch(struct aura_mem_ctx *mc, ns_t ns, schema_id_t schema_id
     return 0;
 }
 
-int aura_db_broker_insert(struct aura_mem_ctx *mc, ns_t ns, schema_id_t schema_id,
-                          struct aura_iovec *key, struct aura_iovec *data,
-                          aura_db_exec_mode mode, int dmn_fd) {
+int aura_db_brokered_insert(struct aura_mem_ctx *mc, ns_t ns, schema_id_t schema_id,
+                            struct aura_iovec *key, struct aura_iovec *data,
+                            aura_db_exec_mode mode, int dmn_fd) {
     struct aura_db_broker_request *request;
     struct aura_msg_hdr msg_hdr;
     struct aura_msg msg;
     size_t len;
     int res;
 
-    request = a_db_broker_construct_request(mc, ns, schema_id, key, data, &len);
+    request = a_db_brokered_req_create(mc, ns, schema_id, key, data, &len);
     if (!request)
         return -1;
 
     a_init_msg_hdr(msg_hdr, len, A_MSG_CMD_EXECUTE, A_CMD_DB_INSERT_REQUEST);
     res = aura_msg_send(dmn_fd, &msg_hdr, (void *)request, len, -1);
-    aura_free(request);
+    a_db_brokered_req_destroy(request);
     if (res < 0)
         return res;
 

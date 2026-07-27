@@ -128,7 +128,7 @@ int aura_cli_fn_list(void *opts_ptr, void *glob_opts) {
                 app_info(false, 0, "No functions deployed!");
             } else {
                 for (int i = 0; i < fn_list->func_cnt; ++i) {
-                    app_info(false, 0, "%s: %u", fn_list->func_tags[i].fn_name, fn_list->func_tags[i].fn_version);
+                    app_info(false, 0, "Name: %s: Version: %s", fn_list->func_tags[i].fn_name, fn_list->func_tags[i].fn_version);
                 }
             }
         } else {

@@ -9,15 +9,15 @@
 
 /* db request */
 struct aura_db_broker_request {
-    ns_t namespace;        /* Record namespace */
-    schema_id_t schema_id; /* Record schema */
     struct aura_iovec key;
     struct aura_iovec data;
+    ns_t namespace;        /* Record namespace */
+    schema_id_t schema_id; /* Record schema */
 };
 
-int aura_db_broker_fetch(struct aura_mem_ctx *mc, ns_t ns, schema_id_t schema_id,
-                         struct aura_iovec *key, struct aura_iovec *out_data,
-                         int dmn_fd);
+int aura_db_brokered_fetch(struct aura_mem_ctx *mc, ns_t ns, schema_id_t schema_id,
+                           struct aura_iovec *key, struct aura_iovec *out_data,
+                           int dmn_fd);
 
 void aura_db_request_dump(struct aura_db_broker_request *req);
 

@@ -1,36 +1,20 @@
 #include "db/broker.h"
 #include "fn/lib.h"
 
-struct name_version {
-    char name[1024];
-    uint32_t version;
-};
-
-/** @todo: unused */
-static inline struct name_version a_extract_fn_name_version(const char *str) {
-    struct name_version nv;
-    char *end;
-    int res;
-
-    end = strchr(str, ':');
-    *end = '\0';
-    memcpy(nv.name, str, end - str);
-    res = aura_scan_str(end + 1, "%u", &nv.version);
-    if (res < 0)
-        nv.version = UINT32_MAX;
-
-    return nv;
-}
-
 int aura_dmn_db_req(struct iovec *data, int cli_fd, AURA_DBHANDLE db) {
     struct aura_db_broker_request *request;
     struct aura_msg_hdr msg_hdr;
     size_t len;
     int error, res;
-    char *fn_name, *end;
-    uint32_t fn_version, version_len;
+    char *end;
+    char fn_name[A_FN_NAME_MAX_LEN];
+    char fn_version[A_FN_VERSION_MAX_LEN];
+    uint32_t version_len;
     char fn_version_str[64];
+    struct iovec fn;
 
+    memset(fn_name, 0, sizeof(fn_name));
+    memset(fn_version, 0, sizeof(fn_version));
     request = data->iov_base;
     request->key.base = (char *)request + sizeof(*request);
     request->data.base = NULL;
@@ -38,16 +22,9 @@ int aura_dmn_db_req(struct iovec *data, int cli_fd, AURA_DBHANDLE db) {
         request->data.base = (char *)request + sizeof(*request) + request->key.len;
 
     if (request->schema_id != A_DB_FN_LIST_SCHEMA_ID) {
-        end = strchr(request->key.base, ':');
-        *end = '\0';
-        fn_name = request->key.base;
-        version_len = request->key.len - (end - fn_name);
-        snprintf(fn_version_str, version_len, "%s", end + 1);
-        res = aura_scan_str(fn_version_str, "%u", &fn_version);
-        if (!fn_name || res < 0) {
-            res = aura_resp_send(cli_fd, NULL, 0);
-            return res;
-        }
+        fn.iov_base = request->key.base;
+        fn.iov_len = request->key.len;
+        aura_fn_get_name_and_version(&fn, fn_name, sizeof(fn_name), fn_version, sizeof(fn_version));
     }
 
     if (request->namespace == A_DB_NS_FN) {

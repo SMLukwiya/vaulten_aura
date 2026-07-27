@@ -22,6 +22,7 @@ JSValue aura_js_std_await(JSContext *ctx, JSValue obj) {
         if (state == JS_PROMISE_FULFILLED) {
             rv = JS_PromiseResult(ctx, obj);
             JS_FreeValue(ctx, obj);
+            result = "PROMISE DONE";
             break;
         } else if (state == JS_PROMISE_REJECTED) {
             result = "PROMISE REJECTED";
@@ -164,7 +165,7 @@ static const char *a_get_entry_file(void *fn_meta) {
     return NULL;
 }
 
-static const char *a_fn_name_get(void *fn_meta) {
+static void a_fn_name_get(void *fn_meta, char *fn_name) {
     const st_aura_blob_node *nodes, *node;
     const char *strtab, *name;
     const int *fn_tab;
@@ -175,28 +176,23 @@ static const char *a_fn_name_get(void *fn_meta) {
 
     if (fn_tab[A_IDX_FN_NAME] != 0) {
         node = &nodes[fn_tab[A_IDX_FN_NAME]];
-        name = strdup(strtab + node->str_offset);
-        return name;
+        memcpy(fn_name, strtab + node->str_offset, strlen(strtab + node->str_offset));
     }
-    return NULL;
 }
 
-static int64_t a_fn_version_get(void *fn_meta) {
+static void a_fn_version_get(void *fn_meta, char *fn_version) {
     const st_aura_blob_node *nodes, *node;
     const char *strtab;
-    uint32_t version;
     const int *fn_tab;
 
     nodes = aura_blob_get_nodes(fn_meta);
     strtab = aura_blob_get_strtab(fn_meta);
     fn_tab = aura_blob_get_tab(fn_meta);
-    /* Entry */
+
     if (fn_tab[A_IDX_FN_VERSION] != 0) {
         node = &nodes[fn_tab[A_IDX_FN_VERSION]];
-        aura_scan_str(strtab + node->str_offset, "%d" SCNu32, &version);
-        return version;
+        memcpy(fn_version, strtab + node->str_offset, strlen(strtab + node->str_offset));
     }
-    return -1;
 }
 
 /** */
@@ -213,7 +209,6 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
     uint32_t root_off, func_root, triggers_root;
     struct aura_msg_hdr hdr;
     struct aura_fn_evt evt;
-    int64_t job_id;
     char buf[2000];
     int res, srv_fd = gc->server_fd;
     int state;
@@ -222,8 +217,7 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
     uint64_t bytecode_len, fn_meta_size, fn_config_size;
     struct aura_iovec key, data;
 
-    const char *fn_name;
-    uint32_t fn_version;
+    char fn_name[A_FN_NAME_MAX_LEN], fn_version[A_FN_VERSION_MAX_LEN];
 
     rt = NULL;  /* Runtime */
     ctx = NULL; /* Runtime context */
@@ -231,6 +225,8 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
     fn_meta = NULL;
     fn_config = NULL;
     entry_script = NULL;
+    memset(fn_name, 0, sizeof(fn_name));
+    memset(fn_version, 0, sizeof(fn_version));
 
     state = A_FN_OP_STATE_RUNNING;
     switch (state) {
@@ -442,11 +438,10 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
         /* Fall through */
 
     case A_FN_OP_STATE_TAG:
-
         struct aura_fn_tag *fn_tag;
 
-        fn_name = a_fn_name_get(fn_meta);
-        fn_version = a_fn_version_get(fn_meta);
+        a_fn_name_get(fn_meta, fn_name);
+        a_fn_version_get(fn_meta, fn_version);
 
         /* Check if we have duplicate */
         fn_tag = aura_fn_tag_fetch(gc->db_handle, &gc->mc, fn_name, fn_version, &error);
@@ -498,7 +493,7 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
         /* format: fn:<name>:<version>:<schema_suffix> */
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_META_SUFFIX);
+        snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_META_SUFFIX);
         struct aura_iovec meta_key, meta_data;
 
         meta_key.base = buf;
@@ -521,7 +516,7 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
     case A_FN_OP_STATE_CONFIG:
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_CONF_SUFFIX);
+        snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_CONF_SUFFIX);
 
         struct aura_iovec conf_key, conf_data;
         conf_key.base = buf;
@@ -544,7 +539,7 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
     case A_FN_OP_STATE_CODE:
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_CODE_SUFFIX);
+        snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_CODE_SUFFIX);
 
         struct aura_iovec code_key, code_data;
         code_key.base = buf;
@@ -570,7 +565,7 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
         /* stats */
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_STAT_SUFFIX);
+        snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_STAT_SUFFIX);
 
         struct aura_iovec stat_key, stat_data;
 
@@ -598,7 +593,7 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
         /* state */
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_STATE_SUFFIX);
+        snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_STATE_SUFFIX);
 
         struct aura_iovec fn_state_key, fn_state_data;
 
@@ -623,7 +618,7 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
     case A_FN_OP_STATE_FN_LIST_UPDATE:
         /* Insert function into function list */
-        if (aura_fn_list_add_fn(gc->db_handle, &gc->mc, fn_name, fn_version, job_id) < 0) {
+        if (aura_fn_list_add_fn(gc->db_handle, &gc->mc, fn_name, fn_version) < 0) {
             evt.state = A_FN_OP_STATE_FAILED;
             evt.error_code = A_FN_ERROR_GENERIC;
             evt.msg_len = 0;

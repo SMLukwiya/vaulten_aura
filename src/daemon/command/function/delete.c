@@ -8,11 +8,38 @@
 
 const char fn_deleted_msg[] = "\x1B[1;32mFunction successfully deleted\x1B[0m";
 
-void aura_dmn_delete_fn(struct iovec *key, int cli_fd, void *arg) {
+static void a_fn_get_name_and_version(struct iovec *fn, char *fn_name,
+                                      uint64_t func_len, char *fn_version,
+                                      uint64_t func_vlen) {
+    memset(fn_name, 0, func_len);
+    memset(fn_version, 0, func_vlen);
+
+    /* assume no version was provided */
+    func_len = fn->iov_len;
+
+    char *sep = strchr(fn->iov_base, ':');
+    if (sep) {
+        /**
+         * Function key provided as <fn_name>:<fn_version>
+         * We therefore copy the function version
+         * found after the sep(:).
+         */
+        *sep = '\0';
+        func_vlen = ((char *)fn->iov_base + fn->iov_len) - sep;
+        memcpy(fn_version, sep + 1, func_vlen);
+
+        /* account for version and separator */
+        func_len -= func_vlen - 1;
+    }
+
+    memcpy(fn_name, fn->iov_base, func_len);
+}
+
+void aura_dmn_delete_fn(struct iovec *fn, int cli_fd, void *arg) {
     struct aura_dmn_glob_conf *gc = arg;
     AURA_DBHANDLE db = gc->db_handle;
-    char *fn_name;
-    uint32_t fn_version;
+    char fn_name[A_FN_NAME_MAX_LEN];
+    char fn_version[A_FN_VERSION_MAX_LEN];
     struct aura_fn_evt evt;
     char buf[2000];
     int state;
@@ -21,7 +48,8 @@ void aura_dmn_delete_fn(struct iovec *key, int cli_fd, void *arg) {
     /* Delete from cache */
     /* Gradually move all new function invocations to new ones */
 
-    fn_name = NULL;
+    memset(fn_name, 0, A_FN_NAME_MAX_LEN);
+    memset(fn_version, 0, A_FN_VERSION_MAX_LEN);
     state = A_FN_OP_STATE_RUNNING;
 
     switch (state) {
@@ -33,20 +61,7 @@ void aura_dmn_delete_fn(struct iovec *key, int cli_fd, void *arg) {
          * Extract fn name and version
          * format: fn_name:fn_version or just fn_name
          */
-        fn_name = key->iov_base;
-        fn_version = UINT32_MAX;
-        char *sep = strchr(key->iov_base, ':');
-        if (sep) {
-            if (aura_scan_str(sep + 1, "%d" SCNu32, &fn_version) < 0) {
-                evt.state = A_FN_OP_STATE_FAILED;
-                evt.msg_len = 0;
-                evt.error_code = A_FN_ERROR_GENERIC;
-                aura_resp_send(cli_fd, &evt, sizeof(evt));
-                goto out;
-            }
-            *sep = '\0';
-        }
-
+        a_fn_get_name_and_version(fn, fn_name, sizeof(fn_name), fn_version, sizeof(fn_version));
         fn_tag = aura_fn_tag_fetch(db, &gc->mc, fn_name, fn_version, &error);
         if (!fn_tag) {
             evt.state = A_FN_OP_STATE_FAILED;
@@ -62,7 +77,7 @@ void aura_dmn_delete_fn(struct iovec *key, int cli_fd, void *arg) {
             goto out;
         }
 
-        fn_version = fn_tag->fn_version;
+        memcpy(fn_version, fn_tag->fn_version, A_FN_VERSION_MAX_LEN);
         aura_free(fn_tag);
 
         if (aura_db_transaction_begin(gc->db_handle, A_FN_DEPLOY, 0) < 0) {
@@ -90,7 +105,7 @@ void aura_dmn_delete_fn(struct iovec *key, int cli_fd, void *arg) {
         struct aura_iovec meta_key;
 
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_META_SUFFIX);
+        snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_META_SUFFIX);
 
         meta_key.base = buf;
         meta_key.len = strlen(buf);
@@ -105,7 +120,7 @@ void aura_dmn_delete_fn(struct iovec *key, int cli_fd, void *arg) {
         struct aura_iovec config_key;
 
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_CONF_SUFFIX);
+        snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_CONF_SUFFIX);
 
         config_key.base = buf;
         config_key.len = strlen(buf);
@@ -120,7 +135,7 @@ void aura_dmn_delete_fn(struct iovec *key, int cli_fd, void *arg) {
         struct aura_iovec code_key;
 
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_CODE_SUFFIX);
+        snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_CODE_SUFFIX);
 
         code_key.base = buf;
         code_key.len = strlen(buf);
@@ -135,7 +150,7 @@ void aura_dmn_delete_fn(struct iovec *key, int cli_fd, void *arg) {
         struct aura_iovec stat_key;
 
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_STAT_SUFFIX);
+        snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_STAT_SUFFIX);
 
         stat_key.base = buf;
         stat_key.len = strlen(buf);
@@ -150,7 +165,7 @@ void aura_dmn_delete_fn(struct iovec *key, int cli_fd, void *arg) {
         struct aura_iovec state_key;
 
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:v%u:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_STATE_SUFFIX);
+        snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_STATE_SUFFIX);
 
         state_key.base = buf;
         state_key.len = strlen(buf);
@@ -195,7 +210,7 @@ void aura_dmn_delete_fn(struct iovec *key, int cli_fd, void *arg) {
     }
 
 out:
-    if (fn_name)
-        free(fn_name);
+    if (fn->iov_base)
+        free(fn->iov_base);
     close(cli_fd);
 }

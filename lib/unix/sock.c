@@ -151,7 +151,7 @@ int aura_msg_recv(int sock_fd, struct aura_msg *aura_msg) {
 
     /* body was sent, process body */
     if (aura_msg->hdr.len > 0) {
-        payload = malloc(aura_msg->hdr.len);
+        payload = calloc(1, aura_msg->hdr.len);
         if (payload == NULL)
             return -3;
 
