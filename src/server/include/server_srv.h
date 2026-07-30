@@ -115,6 +115,14 @@ static inline void aura_set_internal_request_active(struct aura_srv_ctx *ctx) {
     ctx->dmn_peer->active = true;
 }
 
+static inline void aura_set_server_shutdown(struct aura_srv_ctx *ctx) {
+    ctx->shutdown_requested = true;
+}
+
+static inline bool aura_server_shutting(struct aura_srv_ctx *ctx) {
+    return ctx->shutdown_requested == true;
+}
+
 /**
  * Mark server internal request inactive
  */

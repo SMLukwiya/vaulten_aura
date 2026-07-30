@@ -69,7 +69,7 @@ void aura_dmn_fn_status(struct iovec *fn, int cli_fd, void *arg) {
     state_key.base = buf;
     state_key.len = strlen(buf);
 
-    rv = aura_db_fetch(db, A_DB_NS_FN, A_DB_FN_STATE_SCHEMA_ID, &state_key, &rec);
+    rv = aura_db_fetch(db, A_NS_FN, A_FN_STATE_SCHEMA_ID, &state_key, &rec);
     if (rv < 0 || rv == A_DB_REC_NOT_FOUND) {
         evt.error_code = rv < 0 ? A_FN_ERROR_GENERIC : A_FN_ERROR_NOT_EXIST;
         evt.state = A_FN_OP_STATE_FAILED;
@@ -141,8 +141,8 @@ void aura_dmn_start_fn(struct iovec *fn, int cli_fd, void *arg) {
 
     if (aura_db_insert(
           db,
-          A_DB_NS_FN,
-          A_DB_FN_STATE_SCHEMA_ID,
+          A_NS_FN,
+          A_FN_STATE_SCHEMA_ID,
           0,
           A_DB_INSERT_OP,
           &state_key,
@@ -207,8 +207,8 @@ void aura_dmn_stop_fn(struct iovec *fn, int cli_fd, void *arg) {
 
     if (aura_db_insert(
           db,
-          A_DB_NS_FN,
-          A_DB_FN_STATE_SCHEMA_ID,
+          A_NS_FN,
+          A_FN_STATE_SCHEMA_ID,
           0,
           A_DB_INSERT_OP,
           &state_key,

@@ -52,7 +52,7 @@
     }                                                                                                                      \
                                                                                                                            \
     /**                                                                                                                    \
-     * Acquire next available pool slot                                                                                    \
+     * Get slot at the particular index provided                                                                           \
      */                                                                                                                    \
     static inline struct_type *aura_##name##_dense_pool_get_slot(struct aura_##name##_dense_pool *pool, uint32_t idx) {    \
         return &pool->slots[idx];                                                                                          \

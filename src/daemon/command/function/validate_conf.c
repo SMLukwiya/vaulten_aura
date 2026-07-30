@@ -134,6 +134,11 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
     if (strcmp(yn->key, "name") == 0) {
         a_ensure_node_is_scalar(p, evt, yn);
 
+        if (strlen(yn->str_val) > A_FN_NAME_MAX_LEN) {
+            YAML_ADD_ERROR(p, evt, "Function name length exceeds max allowed");
+            return;
+        }
+
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
             yml_node = &usr_data->node_vec.entries[node_off];

@@ -8,7 +8,7 @@
 #include "unix/sock.h"
 
 /* db request */
-struct aura_db_broker_request {
+struct aura_db_brokered_request {
     struct aura_iovec key;
     struct aura_iovec data;
     ns_t namespace;        /* Record namespace */
@@ -19,6 +19,6 @@ int aura_db_brokered_fetch(struct aura_mem_ctx *mc, ns_t ns, schema_id_t schema_
                            struct aura_iovec *key, struct aura_iovec *out_data,
                            int dmn_fd);
 
-void aura_db_request_dump(struct aura_db_broker_request *req);
+void aura_db_request_dump(struct aura_db_brokered_request *req);
 
 #endif

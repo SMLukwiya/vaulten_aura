@@ -24,6 +24,7 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/user/user.c
     ${vaulten_aura_SOURCE_DIR}/lib/ipc/ipc.c
+    ${vaulten_aura_SOURCE_DIR}/lib/ipc/wait.c
 )
 
 add_executable(aura_daemon

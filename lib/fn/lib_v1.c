@@ -102,7 +102,7 @@ struct aura_fn_list *aura_fn_list_fetch(AURA_DBHANDLE db, int *error) {
     int res;
 
     key = a_function_list_key;
-    res = aura_db_fetch(db, A_DB_NS_FN, A_DB_FN_LIST_SCHEMA_ID, &key, &rec);
+    res = aura_db_fetch(db, A_NS_FN, A_FN_LIST_SCHEMA_ID, &key, &rec);
     if (res < 0 || res == A_DB_REC_NOT_FOUND) {
         *error = res;
         return NULL;
@@ -123,11 +123,14 @@ struct aura_fn_list *aura_fn_list_fetch_brokered(struct aura_mem_ctx *mc, int dm
     int res;
 
     key = a_function_list_key;
-    res = aura_db_brokered_fetch(mc, A_DB_NS_FN, A_DB_FN_LIST_SCHEMA_ID, &key, &data_out, dmn_sock_fd);
+    res = aura_db_brokered_fetch(mc, A_NS_FN, A_FN_LIST_SCHEMA_ID, &key, &data_out, dmn_sock_fd);
     if (res < 0) {
         *error = res;
         return NULL;
     }
+
+    if (!data_out.base)
+        return NULL;
 
     fn_list = (struct aura_fn_list *)data_out.base;
     fn_list->func_tags = (struct aura_fn_tag *)((char *)fn_list + sizeof(*fn_list));
@@ -175,8 +178,8 @@ int aura_fn_list_add_fn(AURA_DBHANDLE db, struct aura_mem_ctx *mc, char *fn_name
 
         if (aura_db_insert(
               db,
-              A_DB_NS_FN,
-              A_DB_FN_LIST_SCHEMA_ID,
+              A_NS_FN,
+              A_FN_LIST_SCHEMA_ID,
               0,
               A_DB_INSERT_OP,
               &fn_list_key,
@@ -219,8 +222,8 @@ int aura_fn_list_add_fn(AURA_DBHANDLE db, struct aura_mem_ctx *mc, char *fn_name
 
     if (aura_db_insert(
           db,
-          A_DB_NS_FN,
-          A_DB_FN_LIST_SCHEMA_ID,
+          A_NS_FN,
+          A_FN_LIST_SCHEMA_ID,
           0,
           A_DB_INSERT_OP,
           &fn_list_key,
@@ -282,8 +285,8 @@ int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
     rv = 0;
     if (aura_db_insert(
           db,
-          A_DB_NS_FN,
-          A_DB_FN_LIST_SCHEMA_ID,
+          A_NS_FN,
+          A_FN_LIST_SCHEMA_ID,
           0,
           A_DB_INSERT_OP,
           &key,
@@ -696,7 +699,7 @@ struct aura_fn_tag *aura_fn_tag_fetch_broker(struct aura_mem_ctx *mc, char *fn_n
     snprintf(buf, sizeof(buf) - 1, "%s:%s", fn_name, fn_version);
     key.base = buf;
     key.len = strlen(buf);
-    res = aura_db_brokered_fetch(mc, A_DB_NS_FN, A_DB_FN_TAG_SCHEMA_ID, &key, &data_out, sock_fd);
+    res = aura_db_brokered_fetch(mc, A_NS_FN, A_FN_TAG_SCHEMA_ID, &key, &data_out, sock_fd);
     if (res < 0) {
         return NULL;
     }
@@ -717,7 +720,7 @@ struct aura_iovec aura_fn_meta_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_v
     key.base = buf;
     key.len = strlen(buf);
 
-    res = aura_db_fetch(db, A_DB_NS_FN, A_DB_FN_META_SCHEMA_ID, &key, &rec);
+    res = aura_db_fetch(db, A_NS_FN, A_FN_META_SCHEMA_ID, &key, &rec);
     if (res < 0 || res == A_DB_REC_NOT_FOUND) {
         meta.base = NULL;
         meta.len = 0;
@@ -741,7 +744,7 @@ struct aura_iovec aura_fn_config_fetch(AURA_DBHANDLE db, char *fn_name, char *fn
     key.base = buf;
     key.len = strlen(buf);
 
-    res = aura_db_fetch(db, A_DB_NS_FN, A_DB_FN_CONF_SCHEMA_ID, &key, &rec);
+    res = aura_db_fetch(db, A_NS_FN, A_FN_CONF_SCHEMA_ID, &key, &rec);
     if (res < 0 || res == A_DB_REC_NOT_FOUND) {
         config.base = NULL;
         config.len = 0;
@@ -765,7 +768,7 @@ struct aura_iovec aura_fn_code_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_v
     key.base = buf;
     key.len = strlen(buf);
 
-    res = aura_db_fetch(db, A_DB_NS_FN, A_DB_FN_CODE_SCHEMA_ID, &key, &rec);
+    res = aura_db_fetch(db, A_NS_FN, A_FN_CODE_SCHEMA_ID, &key, &rec);
     if (res < 0 || res == A_DB_REC_NOT_FOUND) {
         code.base = NULL;
         code.len = 0;
@@ -789,7 +792,7 @@ struct aura_iovec aura_fn_state_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_
     key.base = buf;
     key.len = strlen(buf);
 
-    res = aura_db_fetch(db, A_DB_NS_FN, A_DB_FN_STATE_SCHEMA_ID, &key, &rec);
+    res = aura_db_fetch(db, A_NS_FN, A_FN_STATE_SCHEMA_ID, &key, &rec);
     if (res < 0 || res == A_DB_REC_NOT_FOUND) {
         state.base = NULL;
         state.len = 0;
@@ -824,7 +827,7 @@ struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
     snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_META_SUFFIX);
     key.base = buf;
     key.len = strlen(buf);
-    res = aura_db_fetch(db, A_DB_NS_FN, A_DB_FN_META_SCHEMA_ID, &key, &rec);
+    res = aura_db_fetch(db, A_NS_FN, A_FN_META_SCHEMA_ID, &key, &rec);
     if (res < 0 || res == A_DB_REC_NOT_FOUND) {
         return NULL;
     }
@@ -840,7 +843,7 @@ struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
     snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_CONF_SUFFIX);
     key.base = buf;
     key.len = strlen(buf);
-    res = aura_db_fetch(db, A_DB_NS_FN, A_DB_FN_CONF_SCHEMA_ID, &key, &rec);
+    res = aura_db_fetch(db, A_NS_FN, A_FN_CONF_SCHEMA_ID, &key, &rec);
     if (res < 0 || res == A_DB_REC_NOT_FOUND) {
         return NULL;
     }
@@ -863,7 +866,7 @@ struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
     snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_STATE_SUFFIX);
     key.base = buf;
     key.len = strlen(buf);
-    res = aura_db_fetch(db, A_DB_NS_FN, A_DB_FN_STATE_SCHEMA_ID, &key, &rec);
+    res = aura_db_fetch(db, A_NS_FN, A_FN_STATE_SCHEMA_ID, &key, &rec);
     if (res < 0 || res == A_DB_REC_NOT_FOUND) {
         return NULL;
     }
@@ -876,7 +879,7 @@ struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
     snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_CODE_SUFFIX);
     key.base = buf;
     key.len = strlen(buf);
-    res = aura_db_fetch(db, A_DB_NS_FN, A_DB_FN_CODE_SCHEMA_ID, &key, &rec);
+    res = aura_db_fetch(db, A_NS_FN, A_FN_CODE_SCHEMA_ID, &key, &rec);
     if (res < 0 || res == A_DB_REC_NOT_FOUND) {
         return NULL;
     }
@@ -888,8 +891,8 @@ struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
     return fn;
 }
 
-struct aura_fn *aura_fn_load_broker(struct aura_mem_ctx *mc, char *fn_name,
-                                    char *fn_version, int sock_fd) {
+struct aura_fn *aura_fn_load_brokered(struct aura_mem_ctx *mc, char *fn_name,
+                                      char *fn_version, int sock_fd) {
     struct aura_fn *fn;
     struct aura_iovec key, data_out;
     char buf[2000];
@@ -907,7 +910,7 @@ struct aura_fn *aura_fn_load_broker(struct aura_mem_ctx *mc, char *fn_name,
     snprintf(buf, sizeof(buf), "%s:%s", fn_name, fn_version);
     key.base = buf;
     key.len = strlen(buf);
-    res = aura_db_brokered_fetch(mc, A_DB_NS_FN, A_DB_FN_META_SCHEMA_ID, &key, &data_out, sock_fd);
+    res = aura_db_brokered_fetch(mc, A_NS_FN, A_FN_META_SCHEMA_ID, &key, &data_out, sock_fd);
     if (res < 0) {
         return NULL;
     }
@@ -922,7 +925,7 @@ struct aura_fn *aura_fn_load_broker(struct aura_mem_ctx *mc, char *fn_name,
     snprintf(buf, sizeof(buf), "%s:%s", fn_name, fn_version);
     key.base = buf;
     key.len = strlen(buf);
-    res = aura_db_brokered_fetch(mc, A_DB_NS_FN, A_DB_FN_CONF_SCHEMA_ID, &key, &data_out, sock_fd);
+    res = aura_db_brokered_fetch(mc, A_NS_FN, A_FN_CONF_SCHEMA_ID, &key, &data_out, sock_fd);
     if (res < 0) {
         return NULL;
     }
@@ -933,7 +936,7 @@ struct aura_fn *aura_fn_load_broker(struct aura_mem_ctx *mc, char *fn_name,
     aura_free(data_out.base);
 
     /* Stats */
-    struct aura_fn_stat *s = aura_fn_stat_fetch_broker(mc, fn_name, fn_version, sock_fd);
+    struct aura_fn_stat *s = aura_fn_stat_fetch_brokered(mc, fn_name, fn_version, sock_fd);
     if (!s)
         return NULL;
 
@@ -945,7 +948,7 @@ struct aura_fn *aura_fn_load_broker(struct aura_mem_ctx *mc, char *fn_name,
     snprintf(buf, sizeof(buf), "%s:%s", fn_name, fn_version);
     key.base = buf;
     key.len = strlen(buf);
-    res = aura_db_brokered_fetch(mc, A_DB_NS_FN, A_DB_FN_STATE_SCHEMA_ID, &key, &data_out, sock_fd);
+    res = aura_db_brokered_fetch(mc, A_NS_FN, A_FN_STATE_SCHEMA_ID, &key, &data_out, sock_fd);
     if (res < 0) {
         return NULL;
     }
@@ -958,7 +961,7 @@ struct aura_fn *aura_fn_load_broker(struct aura_mem_ctx *mc, char *fn_name,
     snprintf(buf, sizeof(buf), "%s:%s", fn_name, fn_version);
     key.base = buf;
     key.len = strlen(buf);
-    res = aura_db_brokered_fetch(mc, A_DB_NS_FN, A_DB_FN_CODE_SCHEMA_ID, &key, &data_out, sock_fd);
+    res = aura_db_brokered_fetch(mc, A_NS_FN, A_FN_CODE_SCHEMA_ID, &key, &data_out, sock_fd);
     if (res < 0) {
         return NULL;
     }
@@ -982,15 +985,15 @@ struct aura_fn_stat *aura_fn_stat_fetch(AURA_DBHANDLE db, char *fn_name, char *f
     key.base = buf;
     key.len = strlen(buf);
 
-    res = aura_db_fetch(db, A_DB_NS_FN, A_DB_FN_STAT_DELTA_SCHEMA_ID, &key, &rec);
+    res = aura_db_fetch(db, A_NS_FN, A_FN_STAT_DELTA_SCHEMA_ID, &key, &rec);
     if (res != 0)
         return NULL;
 
     return (struct aura_fn_stat *)rec.data.base;
 }
 
-struct aura_fn_stat *aura_fn_stat_fetch_broker(struct aura_mem_ctx *mc, char *fn_name,
-                                               char *fn_version, int dmn_fd) {
+struct aura_fn_stat *aura_fn_stat_fetch_brokered(struct aura_mem_ctx *mc, char *fn_name,
+                                                 char *fn_version, int dmn_fd) {
     struct aura_fn_stat *fn_stat;
     struct aura_iovec key, data_out;
     char buf[2000];
@@ -1001,7 +1004,7 @@ struct aura_fn_stat *aura_fn_stat_fetch_broker(struct aura_mem_ctx *mc, char *fn
     key.base = buf;
     key.len = strlen(buf);
 
-    res = aura_db_brokered_fetch(mc, A_DB_NS_FN, A_DB_FN_STAT_DELTA_SCHEMA_ID, &key, &data_out, dmn_fd);
+    res = aura_db_brokered_fetch(mc, A_NS_FN, A_FN_STAT_DELTA_SCHEMA_ID, &key, &data_out, dmn_fd);
     if (res < 0)
         return NULL;
 

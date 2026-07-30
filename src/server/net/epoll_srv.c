@@ -1,3 +1,5 @@
+#include <sys/epoll.h>
+
 #include "connection.h"
 #include "core.h"
 #include "error_lib.h"
@@ -5,7 +7,6 @@
 #include "picotls.h"
 #include "server_srv.h"
 #include "socket_srv.h"
-#include <sys/epoll.h>
 
 struct aura_epoll_data {
     int epoll_fd;
@@ -26,7 +27,7 @@ static void aura_epoll_init(struct aura_evt_loop *evt_loop) {
     if (epoll->epoll_fd < 0)
         sys_exit(true, errno, "aura_epoll_init: epoll_create1() error:");
 
-    epoll->ep_events = calloc(1, evt_loop->max_fds * sizeof(struct epoll_event));
+    epoll->ep_events = calloc(evt_loop->max_fds, sizeof(struct epoll_event));
     if (!epoll->ep_events)
         sys_exit(true, errno, "aura_epoll_init: ep_events error:");
 
@@ -58,12 +59,13 @@ int aura_epoll_add(struct aura_evt_loop *evt_loop, int fd, void *data, int event
         return -1;
     }
     memset(&ep_ev, 0, sizeof(ep_ev));
-    ep_ev.data.ptr = data;
 
     if (events & AURA_EVENT_READ)
-        ep_ev.events |= EPOLLIN;
+        ep_ev.events = EPOLLIN;
     if (events & AURA_EVENT_WRITE)
         ep_ev.events |= EPOLLOUT;
+
+    ep_ev.data.ptr = data;
 
     do {
         res = epoll_ctl(epoll->epoll_fd, EPOLL_CTL_ADD, fd, &ep_ev);
@@ -119,18 +121,18 @@ int aura_epoll_remove(struct aura_evt_loop *evt_loop, int fd) {
 
 /**/
 int aura_epoll_poll(struct aura_evt_loop *evt_loop, int64_t timeout_ms, uint32_t max_accept) {
-    int num_of_events, fd, rv;
-    struct aura_conn *conn;
     struct aura_epoll_data *epoll = evt_loop->backend;
     struct epoll_event ev;
     struct aura_evt_source *ev_src;
+    struct aura_conn *conn;
     struct aura_srv_listener *listener;
+    int nr_evts, fd, rv;
 
-    num_of_events = epoll_wait(epoll->epoll_fd, epoll->ep_events, evt_loop->max_fds, timeout_ms);
-    if (num_of_events < 0 && errno != EINTR)
+    nr_evts = epoll_wait(epoll->epoll_fd, epoll->ep_events, evt_loop->max_fds, timeout_ms);
+    if (nr_evts < 0 && errno != EINTR)
         sys_exit(true, errno, "aura_epoll_poll: epoll_wait error:");
 
-    for (int i = 0; i < num_of_events; ++i) {
+    for (int i = 0; i < nr_evts; ++i) {
         ev = epoll->ep_events[i];
         /**
          * cast to evt_source structure as
@@ -143,6 +145,10 @@ int aura_epoll_poll(struct aura_evt_loop *evt_loop, int64_t timeout_ms, uint32_t
         case A_EV_TYPE_IPC:
             if (ev.events & EPOLLIN)
                 aura_set_internal_request_active(evt_loop->srv_ctx);
+
+            if (ev.events & (EPOLLERR | EPOLLHUP)) {
+                aura_set_server_shutdown(evt_loop->srv_ctx);
+            }
             break;
 
         case A_EV_TYPE_LISTENER:

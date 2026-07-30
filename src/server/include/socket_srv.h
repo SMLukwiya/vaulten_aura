@@ -40,12 +40,12 @@ struct aura_srv_listener {
     const char *name;
     char *port;
     char *address;
+    listener_event_handler on_event; /* event handler for this listener type */
     struct sockaddr addr;
     socklen_t addr_len;
     uint8_t protocol;
     bool tls;
     bool quic;
-    listener_event_handler on_event; /* event handler for this listener type */
 };
 
 /* Listener pool structure */

@@ -37,8 +37,8 @@ struct aura_evt_loop {
     aura_evt_loop_backend_t backend_type;
     const st_aura_evt_loop_ops *ops;
     void *backend;
-    bool running;
     int max_fds;
+    bool running;
 };
 
 /**/

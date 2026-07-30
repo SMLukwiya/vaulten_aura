@@ -32,37 +32,49 @@ static struct aura_dmn_conf def_dmn_conf = {
 /* Define pollfd pool */
 A_DEFINE_DENSE_POOL(pollfd, A_DMN_POLLFD_POOL_SZ, struct pollfd);
 
-/* Daemon Global Config structure */
-struct aura_dmn_glob_conf {
-    struct aura_iovec db_file;
-    AURA_DBHANDLE db_handle;
-    struct aura_mem_ctx mc;
-    struct timespec boot_time;
-    struct aura_pollfd_dense_pool pollfd_pool;
-    int unix_sock_fd;
-    int server_pid;
-    int server_fd; /* server socket fd from socket_pair */
-    struct aura_user_rec user;
-    struct aura_dmn_conf admin_conf;
+enum {
+    A_DMN_SERVER_SHUTDOWN_NORMAL
 };
 
-/* Add fd for polling */
+/* Daemon Global Config structure */
+struct aura_dmn_glob_conf {
+    AURA_DBHANDLE db_handle;                   /* Database handle */
+    struct aura_mem_ctx mc;                    /* memory context */
+    struct timespec boot_time;                 /* Start time */
+    struct aura_pollfd_dense_pool pollfd_pool; /* Daemon polling structure */
+    struct aura_user_rec user;                 /* Daemon user */
+    struct aura_dmn_conf admin_conf;
+    int unix_sock_fd;
+    int server_pid;               /* server process id */
+    int server_fd;                /* server socket fd from socket_pair */
+    int server_fd_idx;            /* server pollfd entry index */
+    uint8_t server_shutdown_flag; /* shutdown flag*/
+    bool server_running;          /* server running and added to pollfd */
+};
+
+/**
+ * Add fd for polling
+ * Returns -1 for error or the entry
+ * index in the pool
+ */
 static inline int aura_add_pollfd_entry(struct aura_pollfd_dense_pool *pool, int fd) {
     uint32_t idx = aura_pollfd_dense_pool_lease(pool);
     if (idx == A_DENSE_POOL_INVALID_IDX)
         return -1;
 
+    app_debug(true, 0, "ADDING FOR POLLING=%d at idx=%d", fd, idx);
     struct pollfd *slot = aura_pollfd_dense_pool_get_slot(pool, idx);
     slot->fd = fd;
     slot->events = POLLIN;
     slot->revents = 0;
 
-    return 0;
+    return idx;
 }
 
 static inline void aura_release_pollfd_entry(struct aura_pollfd_dense_pool *pool, uint32_t idx) {
     struct pollfd *pfd = aura_pollfd_dense_pool_get_slot(pool, idx);
-    pfd->events = 0;
+    app_debug(true, 0, "RELEASING FD=%d", pfd->fd);
+    close(pfd->fd);
     pfd->fd = -1;
 
     aura_pollfd_dense_pool_release(pool, idx);

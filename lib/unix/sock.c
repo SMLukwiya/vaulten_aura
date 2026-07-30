@@ -40,7 +40,7 @@ int aura_msg_send(int sock_fd, struct aura_msg_hdr *aura_hdr, void *data, size_t
     memset(&msg, 0, sizeof(struct msghdr));
     memset(iov_data, 0, (2 * sizeof(struct iovec)));
 
-    cmsg = malloc(buf_len);
+    cmsg = calloc(1, buf_len);
     if (!cmsg)
         return -1;
 
@@ -195,7 +195,7 @@ int aura_msg_recv(int sock_fd, struct aura_msg *aura_msg) {
         aura_msg->fd = *(int *)CMSG_DATA(cmsg_ptr);
     }
 
-    return 1;
+    return n_received;
 }
 
 int aura_recv_resp(struct aura_iovec *data_out, int sock_fd, struct aura_mem_ctx *mc) {
@@ -224,10 +224,11 @@ int aura_recv_resp(struct aura_iovec *data_out, int sock_fd, struct aura_mem_ctx
 
     /* body was sent, process body */
     if (hdr.len > 0) {
-        if (mc)
+        if (mc) {
             data_out->base = aura_alloc(mc, hdr.len);
-        else
-            data_out->base = malloc(hdr.len);
+            memset(data_out->base, 0, hdr.len);
+        } else
+            data_out->base = calloc(1, hdr.len);
 
         if (!data_out->base)
             return -1;

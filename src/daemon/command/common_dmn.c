@@ -87,7 +87,7 @@ uint32_t aura_build_blob_from_rax(aura_rax_tree_t *t, st_aura_b_builder *b, stru
     memset(stack, 0, sizeof(*stack));
     start_off = aura_rax_prefix_find_offset(t, prefix, len);
     if (start_off == A_RAX_NIL_OFFSET)
-        return 0;
+        return A_RAX_NIL_OFFSET;
 
     root_off = a_rax_to_stack_builder(t, b, node_arr, start_off, UINT32_MAX, stack, conf_tab);
 

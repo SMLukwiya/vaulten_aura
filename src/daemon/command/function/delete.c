@@ -110,7 +110,7 @@ void aura_dmn_delete_fn(struct iovec *fn, int cli_fd, void *arg) {
         meta_key.base = buf;
         meta_key.len = strlen(buf);
 
-        if (aura_db_delete(db, A_DB_NS_FN, A_DB_FN_META_SCHEMA_ID, &meta_key) < 0)
+        if (aura_db_delete(db, A_NS_FN, A_FN_META_SCHEMA_ID, &meta_key) < 0)
             goto out;
 
         state = A_FN_OP_STATE_CONFIG;
@@ -125,7 +125,7 @@ void aura_dmn_delete_fn(struct iovec *fn, int cli_fd, void *arg) {
         config_key.base = buf;
         config_key.len = strlen(buf);
 
-        if (aura_db_delete(db, A_DB_NS_FN, A_DB_FN_CONF_SCHEMA_ID, &config_key) < 0)
+        if (aura_db_delete(db, A_NS_FN, A_FN_CONF_SCHEMA_ID, &config_key) < 0)
             goto out;
 
         state = A_FN_OP_STATE_CODE;
@@ -140,7 +140,7 @@ void aura_dmn_delete_fn(struct iovec *fn, int cli_fd, void *arg) {
         code_key.base = buf;
         code_key.len = strlen(buf);
 
-        if (aura_db_delete(db, A_DB_NS_FN, A_DB_FN_CODE_SCHEMA_ID, &code_key) < 0)
+        if (aura_db_delete(db, A_NS_FN, A_FN_CODE_SCHEMA_ID, &code_key) < 0)
             goto out;
 
         state = A_FN_OP_STATE_STAT;
@@ -155,7 +155,7 @@ void aura_dmn_delete_fn(struct iovec *fn, int cli_fd, void *arg) {
         stat_key.base = buf;
         stat_key.len = strlen(buf);
 
-        if (aura_db_delete(db, A_DB_NS_FN, A_DB_FN_STAT_DELTA_SCHEMA_ID, &stat_key) < 0)
+        if (aura_db_delete(db, A_NS_FN, A_FN_STAT_DELTA_SCHEMA_ID, &stat_key) < 0)
             goto out;
 
         state = A_FN_OP_STATE_FN_STATE;
@@ -170,7 +170,7 @@ void aura_dmn_delete_fn(struct iovec *fn, int cli_fd, void *arg) {
         state_key.base = buf;
         state_key.len = strlen(buf);
 
-        if (aura_db_delete(db, A_DB_NS_FN, A_DB_FN_STATE_SCHEMA_ID, &state_key) < 0)
+        if (aura_db_delete(db, A_NS_FN, A_FN_STATE_SCHEMA_ID, &state_key) < 0)
             goto out;
 
         state = A_FN_OP_STATE_FN_LIST_UPDATE;

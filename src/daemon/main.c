@@ -171,18 +171,44 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
     return 1;
 }
 
+static struct aura_dmn_glob_conf *conf;
+
 /**
- * Clean up server connection
+ * Run when server dies
+ */
+static void aura_dmn_server_killed() {
+    if (conf->server_pid != 0) {
+        if (waitpid(conf->server_pid, NULL, 0) != conf->server_pid) {
+            sys_debug(true, errno, "a_sig_ch_handler: waitpid error: %d", conf->server_pid);
+        }
+    }
+
+    if (conf->server_fd != A_DMN_DEFAULT_SERVER_FD)
+        close(conf->server_fd);
+
+    conf->server_pid = 0;
+    conf->server_fd = A_DMN_DEFAULT_SERVER_FD;
+    conf->server_running = false;
+    conf->server_fd_idx = -1;
+}
+
+/**
+ * The path the server takes when it dies is unclear.
+ * Sometimes the sig child is delivered, other times
+ * the poll fd entry hungs (see the main polling loop).
+ * Either way, which ever path executes the server died
+ * function.
  */
 static void a_sig_ch_handler(int signo) {
-    // if (waitpid(glob_conf.server_pid, NULL, 0) != glob_conf.server_pid) {
-    //     sys_debug(true, errno, "a_sig_ch_handler: waitpid error: %d", glob_conf.server_pid);
-    // }
-    // glob_conf.server_pid = 0;
-    // if (glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd == -1)
-    //     return;
-    // close(glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd);
-    // glob_conf.poll_fds[A_SOCKET_PAIR_FD_INDEX].fd = -1;
+    app_debug(true, 0, "aura server dead");
+    aura_dmn_server_killed();
+}
+
+static int a_dmn_initialize_pollfd_slot(struct pollfd *p) {
+    p->fd = -1;
+    p->events = POLLIN;
+    p->revents = 0;
+    return 0;
 }
 
 static int a_setup_database(struct aura_dmn_glob_conf *gc) {
@@ -244,12 +270,7 @@ int main(int argc, char *argv[]) {
         sys_exit(false, errno, "aura_daemon: aura_unix_server_listen error: %s", sock_path);
 
     aura_pollfd_dense_pool_init(&glob_conf.pollfd_pool);
-    for (int i = 0; i < A_DMN_POLLFD_POOL_SZ; ++i) {
-        struct pollfd *pfd = aura_pollfd_dense_pool_get_slot(&glob_conf.pollfd_pool, i);
-        pfd->fd = -1;
-        pfd->events = POLLIN;
-        pfd->revents = 0;
-    }
+    aura_pollfd_dense_pool_for_each(&glob_conf.pollfd_pool, a_dmn_initialize_pollfd_slot);
 
     /* Add unix IPC socket to poll */
     aura_add_pollfd_entry(&glob_conf.pollfd_pool, d_sock.fd);
@@ -266,6 +287,9 @@ int main(int argc, char *argv[]) {
     if (a_setup_database(&glob_conf) < 0)
         sys_exit(true, errno, "DB error");
 
+    /* Make visible to signal handler */
+    conf = &glob_conf;
+
     for (;;) {
         if (poll(aura_pollfd_dense_pool_get_entries(&glob_conf.pollfd_pool), A_DMN_POLLFD_POOL_SZ, -1) < 0 && errno != EINTR) {
             sys_debug(true, errno, "aura_daemon: poll error:");
@@ -274,7 +298,11 @@ int main(int argc, char *argv[]) {
 
         for (int i = 0; i < A_DMN_POLLFD_POOL_SZ; ++i) {
             struct pollfd *pfd = aura_pollfd_dense_pool_get_slot(&glob_conf.pollfd_pool, i);
-            if (pfd->revents & POLLIN) {
+            if (pfd->revents & (POLLHUP | POLLERR | POLLNVAL | POLLOUT)) {
+            err:
+                aura_release_pollfd_entry(&glob_conf.pollfd_pool, i);
+
+            } else if (pfd->revents & POLLIN) {
                 if (pfd->fd == d_sock.fd) {
                     cli_fd = aura_unix_server_accept(d_sock.fd);
                     if (cli_fd < 0) {
@@ -290,23 +318,20 @@ int main(int argc, char *argv[]) {
 
                 rv = aura_msg_recv(pfd->fd, &aura_msg);
                 if (rv <= 0)
-                    goto err_out;
+                    goto err;
 
                 if (pfd->fd == glob_conf.server_fd) {
                     /* server request */
-                    a_handle_client_request(&aura_msg, pfd->fd, NULL);
+                    a_handle_client_request(&aura_msg, pfd->fd, (void *)&glob_conf);
+
                 } else {
                     /* cli request */
                     if (a_authenticate_cli(&glob_conf, pfd->fd, &aura_msg) == false)
-                        goto err_out;
+                        goto err;
 
                     a_handle_client_request(&aura_msg, pfd->fd, (void *)&glob_conf);
                 }
 
-                aura_release_pollfd_entry(&glob_conf.pollfd_pool, i);
-            } else if (pfd->revents & (POLLHUP | POLLERR | POLLNVAL | POLLOUT)) {
-            err_out:
-                close(pfd->fd);
                 aura_release_pollfd_entry(&glob_conf.pollfd_pool, i);
             }
         }

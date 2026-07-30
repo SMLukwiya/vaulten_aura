@@ -33,18 +33,18 @@
 
 /* Namespaces */
 typedef enum {
-    A_DB_NS_FN = A_DB_FN_BASE + 1, /* Function namespace */
+    A_NS_FN = A_DB_FN_BASE + 1, /* Function namespace */
 } aura_fn_db_namespace;
 
 /* Schemas */
 typedef enum {
-    A_DB_FN_CODE_SCHEMA_ID = A_DB_FN_BASE + 1,
-    A_DB_FN_META_SCHEMA_ID,
-    A_DB_FN_CONF_SCHEMA_ID,
-    A_DB_FN_STAT_DELTA_SCHEMA_ID,
-    A_DB_FN_TAG_SCHEMA_ID,
-    A_DB_FN_STATE_SCHEMA_ID,
-    A_DB_FN_LIST_SCHEMA_ID,
+    A_FN_CODE_SCHEMA_ID = A_DB_FN_BASE + 1,
+    A_FN_META_SCHEMA_ID,
+    A_FN_CONF_SCHEMA_ID,
+    A_FN_STAT_DELTA_SCHEMA_ID,
+    A_FN_TAG_SCHEMA_ID,
+    A_FN_STATE_SCHEMA_ID,
+    A_FN_LIST_SCHEMA_ID,
 } aura_fn_db_schema_id;
 
 /* Fn list key (base, len) */
@@ -782,7 +782,7 @@ int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
                         char *fn_name, char *fn_version);
 
 /** */
-struct aura_fn_stat *aura_fn_stat_fetch_broker(struct aura_mem_ctx *mc, char *fn_name, char *fn_version, int dmn_fd);
+struct aura_fn_stat *aura_fn_stat_fetch_brokered(struct aura_mem_ctx *mc, char *fn_name, char *fn_version, int dmn_fd);
 
 /**/
 struct aura_iovec aura_fn_meta_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_version);
@@ -802,7 +802,7 @@ struct aura_iovec aura_fn_state_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_
 struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_mem_ctx *mc, char *fn_name, char *fn_version);
 
 /** */
-struct aura_fn *aura_fn_load_broker(struct aura_mem_ctx *mc, char *fn_name, char *fn_version, int sock_fd);
+struct aura_fn *aura_fn_load_brokered(struct aura_mem_ctx *mc, char *fn_name, char *fn_version, int sock_fd);
 
 /** Fetch function stats */
 struct aura_fn_stat *aura_fn_stat_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_version);

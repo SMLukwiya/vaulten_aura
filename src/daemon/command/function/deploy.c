@@ -503,8 +503,8 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
         if (aura_db_insert(
               gc->db_handle,
-              A_DB_NS_FN,
-              A_DB_FN_META_SCHEMA_ID,
+              A_NS_FN,
+              A_FN_META_SCHEMA_ID,
               0,
               A_DB_INSERT_OP,
               &meta_key,
@@ -526,8 +526,8 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
         if (aura_db_insert(
               gc->db_handle,
-              A_DB_NS_FN,
-              A_DB_FN_CONF_SCHEMA_ID,
+              A_NS_FN,
+              A_FN_CONF_SCHEMA_ID,
               0,
               A_DB_INSERT_OP,
               &conf_key,
@@ -549,8 +549,8 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
         if (aura_db_insert(
               gc->db_handle,
-              A_DB_NS_FN,
-              A_DB_FN_CODE_SCHEMA_ID,
+              A_NS_FN,
+              A_FN_CODE_SCHEMA_ID,
               0,
               A_DB_INSERT_OP,
               &code_key,
@@ -577,8 +577,8 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
         if (aura_db_insert(
               gc->db_handle,
-              A_DB_NS_FN,
-              A_DB_FN_STAT_DELTA_SCHEMA_ID,
+              A_NS_FN,
+              A_FN_STAT_DELTA_SCHEMA_ID,
               0,
               A_DB_INSERT_OP,
               &stat_key,
@@ -605,8 +605,8 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
         if (aura_db_insert(
               gc->db_handle,
-              A_DB_NS_FN,
-              A_DB_FN_STATE_SCHEMA_ID,
+              A_NS_FN,
+              A_FN_STATE_SCHEMA_ID,
               0,
               A_DB_INSERT_OP,
               &fn_state_key,
