@@ -120,21 +120,20 @@ char *aura_strdup(struct aura_mem_ctx *mc, const char *str) {
 }
 
 char *aura_strndup(struct aura_mem_ctx *mc, const char *str, size_t len) {
-    char *copy;
-    size_t _len;
+    char *copy, *_str = (char *)str;
+    uint64_t _len;
 
     if (len == 0)
         return NULL;
 
-    _len = 0;
-    for (int i = 0; i < len && *str; ++i)
-        ++_len;
+    for (int i = 0, _len = 0; i < len && *_str++; ++i)
+        _len++;
 
     _len = _len < len ? _len : len;
-    _len += 1; /* +1 null-terminated */
-    copy = aura_alloc(mc, len);
+    _len += 1; /* null-terminate */
+    copy = aura_alloc(mc, _len);
     memcpy(copy, str, _len - 1);
-    copy[_len] = '\0';
+    copy[_len - 1] = '\0';
     return copy;
 }
 

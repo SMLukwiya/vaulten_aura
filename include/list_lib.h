@@ -28,10 +28,16 @@ static inline void _a_list_add(struct aura_list_head *prev, struct aura_list_hea
     prev->next = _new;
 }
 
-static inline void a_list_add(struct aura_list_head *head, struct aura_list_head *_new) {
+/**
+ * Add to the front of the list
+ */
+static inline void aura_list_add(struct aura_list_head *head, struct aura_list_head *_new) {
     _a_list_add(head, head->next, _new);
 }
 
+/**
+ * Add to the back of the list
+ */
 static inline void aura_list_add_tail(struct aura_list_head *head, struct aura_list_head *_new) {
     _a_list_add(head->prev, head, _new);
 }
@@ -51,7 +57,7 @@ static inline void aura_list_replace(struct aura_list_head *new_, struct aura_li
 
 static inline void aura_list_move(struct aura_list_head *head, struct aura_list_head *entry) {
     aura_list_delete(entry);
-    a_list_add(head, entry);
+    aura_list_add(head, entry);
 }
 
 static inline void aura_list_move_tail(struct aura_list_head *head, struct aura_list_head *entry) {

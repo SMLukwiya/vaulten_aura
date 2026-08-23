@@ -20,7 +20,7 @@ typedef enum {
 } a_task_protocol_t;
 
 /* Generic Task structure */
-struct aura_task {
+struct _aura_task {
     uint64_t id;
     a_task_state_t state;
     a_task_protocol_t protocol;
@@ -35,25 +35,25 @@ struct aura_task {
 };
 
 /* init task */
-struct aura_task *aura_task_create(struct aura_h2_stream *stream, struct aura_mem_ctx *mc,
-                                   uint8_t *url, uint64_t next_id, uint32_t conn_id,
-                                   uint32_t conn_idx, a_task_protocol_t prot);
+struct _aura_task *aura_task_create(struct aura_h2_stream *stream, struct aura_mem_ctx *mc,
+                                    uint8_t *url, uint64_t next_id, uint32_t conn_id,
+                                    uint32_t conn_idx, a_task_protocol_t prot);
 
 /* destroy task */
-void aura_task_destroy(struct aura_task *task);
+void aura_task_destroy(struct _aura_task *task);
 
-void aura_task_dump(struct aura_task *task);
+void aura_task_dump(struct _aura_task *task);
 
-static inline void aura_task_start(struct aura_task *task) {
+static inline void aura_task_start(struct _aura_task *task) {
     task->started_at = aura_now_ms(CLOCK_MONOTONIC);
 }
 
-static inline void aura_task_complete(struct aura_task *task) {
+static inline void aura_task_complete(struct _aura_task *task) {
     task->completed_at = aura_now_ms(CLOCK_MONOTONIC);
 }
 
-static inline void aura_task_transition_state(struct aura_task *task, a_task_state_t new_state) {
-    if (task->state = new_state)
+static inline void aura_task_transition_state(struct _aura_task *task, a_task_state_t new_state) {
+    if (task->state != new_state)
         task->state = new_state;
 }
 

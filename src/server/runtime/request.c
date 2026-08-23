@@ -2,8 +2,8 @@
 #include "error_lib.h"
 #include "url/lib.h"
 
-Request *aura_rt_create_req(struct aura_mem_ctx *mc) {
-    Request *req;
+_Request *aura_rt_create_req(struct aura_mem_ctx *mc) {
+    _Request *req;
 
     req = aura_alloc(mc, sizeof(*req));
     if (!req)
@@ -13,8 +13,8 @@ Request *aura_rt_create_req(struct aura_mem_ctx *mc) {
     return req;
 }
 
-Response *aura_rt_create_res(struct aura_mem_ctx *mc) {
-    Response *resp;
+_Response *aura_rt_create_res(struct aura_mem_ctx *mc) {
+    _Response *resp;
     /** @todo: should native buffer be attached to res, (res->body) = pointer(stream->data) */
 
     resp = aura_alloc(mc, sizeof(*resp));
@@ -37,15 +37,15 @@ static inline struct aura_basic_header *a_rt_req_get_header_slot(struct aura_mem
     return &headers->entries[headers->cnt++];
 }
 
-struct aura_basic_header *aura_rt_req_get_header_slot(struct aura_mem_ctx *mc, Request *req) {
+struct aura_basic_header *aura_rt_req_get_header_slot(struct aura_mem_ctx *mc, _Request *req) {
     return a_rt_req_get_header_slot(mc, &req->headers);
 }
 
-struct aura_basic_header *aura_rt_res_get_header_slot(struct aura_mem_ctx *mc, Response *resp) {
+struct aura_basic_header *aura_rt_res_get_header_slot(struct aura_mem_ctx *mc, _Response *resp) {
     return a_rt_req_get_header_slot(mc, &resp->headers);
 }
 
-void aura_rt_req_destroy(Request *req) {
+void aura_rt_req_destroy(_Request *req) {
     if (!req)
         return;
 
@@ -63,7 +63,7 @@ void aura_rt_req_destroy(Request *req) {
     aura_free(req);
 }
 
-void aura_rt_res_destroy(Response *res) {
+void aura_rt_res_destroy(_Response *res) {
     if (!res)
         return;
 
@@ -79,7 +79,7 @@ void aura_rt_res_destroy(Response *res) {
     aura_free(res);
 }
 
-void aura_rt_resp_dump(Response *resp) {
+void aura_rt_resp_dump(_Response *resp) {
     app_debug(true, 0, "AURA_RT_RESPONSE");
     app_debug(true, 0, "    Status: %d", resp->status);
     app_debug(true, 0, "    Body: %p", resp->body);

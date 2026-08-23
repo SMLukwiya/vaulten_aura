@@ -9,9 +9,9 @@
 #include <sys/uio.h>
 #include <sys/un.h>
 
+#include "executors/js/quickjs/rt.h"
 #include "http_lib.h"
 #include "mem.h"
-#include "runtime/js.h"
 #include "runtime/request.h"
 #include "session.h"
 #include "slab.h"
@@ -55,6 +55,6 @@ int aura_h2_client_conn_init(struct aura_h2_client_conn *c, struct aura_mem_ctx 
 /* Destroy h2 client connection */
 void aura_h2_cli_conn_destroy(struct aura_h2_client_conn *h2_c);
 
-int aura_h2_client_req_create(struct aura_js_fetch_ctx *fetch_ctx, struct aura_srv_ctx *srv_ctx);
+// int aura_h2_client_req_create(struct aura_qjs_fetch_ctx *fetch_ctx, struct aura_srv_ctx *srv_ctx);
 
 #endif

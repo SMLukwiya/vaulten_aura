@@ -207,8 +207,7 @@ static void a_conn_pool_destroy(struct aura_srv_conn_pool *pool) {
 struct aura_srv_host_conf *a_resolve_sni(struct aura_srv_listeners_conf *lc, const char *server_name) {
     aura_rax_node_t *host_node;
 
-    app_debug(true, 0, "A_RESOLVE_SNI servername=%s, len=%u", server_name, strlen(server_name));
-    host_node = aura_rax_lookup(lc->sni, server_name, strlen(server_name));
+    host_node = aura_rax_lookup(&lc->sni, server_name, strlen(server_name));
     if (!host_node)
         return NULL;
 
@@ -1253,7 +1252,7 @@ static int a_setup_configs(struct aura_srv_global_ctx *gc, void *config) {
             host_conf->router.srv_ctx = gc->srv_ctx;
 
             /* add host + conf to listener sni map */
-            if (!aura_rax_insert(lc->sni, hostname, strlen(hostname), A_RAX_NODE_TYPE_SPARSE, a_rax_data_init_ptr(host_conf))) {
+            if (!aura_rax_insert(&lc->sni, hostname, strlen(hostname), A_RAX_NODE_TYPE_SPARSE, a_rax_data_init_ptr(host_conf))) {
                 sys_debug(true, errno, "a_setup_configs: sni insert for hostname: %s err", hostname);
                 return -1;
             }
@@ -1356,108 +1355,135 @@ void a_load_fn_destructor(const void *stat) {
 /**
  * Load top k busy functions
  */
-static void a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd) {
+static int a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd) {
     struct aura_mem_ctx *mc = &gc->mem_ctx;
     struct aura_heap *hp;
     struct aura_fn_list *fn_list;
     struct aura_fn_stat *fn_stat;
     struct aura_heap_ent *hp_ent, *least_active_ent;
     struct aura_fn_stat_wrapper *aux_stat, *_aux_stat;
+    struct aura_fn_registry_ent *ent;
     struct aura_fn *fn;
     struct aura_srv_host_conf *host;
-    int rv, error;
+    int rv, error, j;
     bool least_active_changed;
 
     hp = aura_alloc(&gc->mem_ctx, sizeof(*hp));
-    if (!hp)
-        sys_exit(true, errno, "a_preload_functions error : heap alloc");
+    if (!hp) {
+        sys_debug(true, errno, "a_preload_functions error : heap alloc");
+        return -1;
+    }
 
-    if (aura_heap_init(hp, &gc->mem_ctx, A_MAX_PRELOAD_FN_CNT, aura_fn_stat_compare, A_HP_TYPE_MAX_HEAP) < 0)
-        sys_exit(true, errno, "a_preload_functions error : aura_heap_init");
+    if (aura_heap_init(hp, &gc->mem_ctx, A_MAX_PRELOAD_FN_CNT, aura_fn_stat_compare, A_HP_TYPE_MAX_HEAP) < 0) {
+        sys_debug(true, errno, "a_preload_functions error : aura_heap_init");
+        aura_heap_destroy(hp);
+        return -1;
+    }
 
     fn_list = aura_fn_list_fetch_brokered(mc, dmn_sock_fd, &error);
     /* No functions deployed yet! */
     if (!fn_list) {
         /* Fatal error */
-        if (error < 0)
-            sys_exit(true, errno, "a_preload_functions: aura_fn_list_fetch error:");
-        return;
+        if (error < 0) {
+            sys_debug(true, errno, "a_preload_functions: aura_fn_list_fetch error:");
+            aura_heap_destroy(hp);
+            return -1;
+        }
+        return 0;
     }
 
-    /**
-     * Load the top k functions using their stats
-     */
     if (fn_list->func_cnt > 0) {
-        for (int i = 0; i < fn_list->func_cnt; ++i) {
-            fn_stat = aura_fn_stat_fetch_brokered(
-              mc,
-              fn_list->func_tags[i].fn_name,
-              fn_list->func_tags[i].fn_version,
-              dmn_sock_fd);
-            A_BUG_ON_2(!fn_stat, true);
+        j = 0;
+        for (int i = 0; i < fn_list->func_cnt && j < A_FN_MAX_REGISTRY_CNT; ++i) {
+            if (fn_list->func_tags[i].triggers->trigger == A_TRIGGER_HTTP) {
+                /* Load HTTP functions to registry */
+                // ent = &gc->fn_registry.entries[j++];
+                ent = aura_fn_load_fn_registry_entry(&gc->fn_registry, &fn_list->func_tags[i], j++);
 
-            aux_stat = aura_alloc(mc, sizeof(*aux_stat));
-            if (!aux_stat)
-                sys_exit(true, errno, "a_preload_functions: aura_alloc aux_stat error:");
+                /**
+                 * Load the top k functions using their stats
+                 */
+                fn_stat = aura_fn_stat_fetch_brokered(
+                  mc,
+                  fn_list->func_tags[i].fn_name,
+                  fn_list->func_tags[i].fn_version,
+                  dmn_sock_fd);
+                A_BUG_ON_2(!fn_stat, true);
 
-            aux_stat->fn_stat = fn_stat;
-            aux_stat->fn_name = fn_list->func_tags[i].fn_name;
-            aux_stat->fn_version = fn_list->func_tags[i].fn_version;
+                aux_stat = aura_alloc(mc, sizeof(*aux_stat));
+                if (!aux_stat)
+                    sys_exit(true, errno, "a_preload_functions: aura_alloc aux_stat error:");
 
-            if (!aura_heap_is_full(hp)) {
-                aura_heap_push(hp, &aux_stat->hp_ent);
-                continue;
-            }
+                aux_stat->fn_stat = fn_stat;
+                aux_stat->fn_name = fn_list->func_tags[i].fn_name;
+                aux_stat->fn_version = fn_list->func_tags[i].fn_version;
 
-            /**
-             * If the heap is full, get the first lesser active function
-             * and replace with current entry we are looking at.
-             * least_active_changed confirms whether another least active
-             * function was found.
-             */
-            least_active_ent = &aux_stat->hp_ent;
-            least_active_changed = false;
-            aura_heap_for_each(hp, hp_ent) {
-                _aux_stat = aura_container_of(hp_ent, struct aura_fn_stat_wrapper, hp_ent);
-                if (aura_fn_stat_compare((void *)_aux_stat, (void *)aux_stat) < 0) {
-                    least_active_ent = hp_ent;
-                    least_active_changed = true;
-                    break;
+                if (!aura_heap_is_full(hp)) {
+                    aura_heap_push(hp, &aux_stat->hp_ent);
+                    continue;
                 }
+
+                /**
+                 * If the heap is full, get the first lesser active function
+                 * and replace with current entry we are looking at.
+                 * least_active_changed confirms whether another least active
+                 * function was found.
+                 */
+                least_active_ent = &aux_stat->hp_ent;
+                least_active_changed = false;
+                aura_heap_for_each(hp, hp_ent) {
+                    _aux_stat = aura_container_of(hp_ent, struct aura_fn_stat_wrapper, hp_ent);
+                    if (aura_fn_stat_compare((void *)_aux_stat, (void *)aux_stat) < 0) {
+                        least_active_ent = hp_ent;
+                        least_active_changed = true;
+                        break;
+                    }
+                }
+
+                /* continue if the least active is the current function */
+                if (!least_active_changed) {
+                    a_load_fn_destructor((void *)aux_stat);
+                    continue;
+                }
+
+                /* Delete the least active function */
+                aura_heap_del(hp, least_active_ent);
+                _aux_stat = aura_container_of(least_active_ent, struct aura_fn_stat_wrapper, hp_ent);
+                a_load_fn_destructor(_aux_stat);
+
+                /* Push the stat we have created space for */
+                aura_heap_push(hp, &aux_stat->hp_ent);
             }
-
-            /* continue if the least active is the current function */
-            if (!least_active_changed) {
-                a_load_fn_destructor((void *)aux_stat);
-                continue;
-            }
-
-            /* Delete the least active function */
-            aura_heap_del(hp, least_active_ent);
-            _aux_stat = aura_container_of(least_active_ent, struct aura_fn_stat_wrapper, hp_ent);
-            a_load_fn_destructor(_aux_stat);
-
-            /* Push the stat we have created space for */
-            aura_heap_push(hp, &aux_stat->hp_ent);
         }
 
         /**
-         * Add the loaded functions to their respective routes
+         * Load top functions into fn cache
          */
-        aura_heap_for_each(hp, hp_ent) {
-            aux_stat = aura_container_of(hp_ent, struct aura_fn_stat_wrapper, hp_ent);
-            fn = aura_fn_load_brokered(mc, aux_stat->fn_name, aux_stat->fn_version, dmn_sock_fd);
-            A_BUG_ON_2(!fn, true);
+        //     struct aura_lru_entry *fn_e;
+        //     void *cache;
+        //     aura_heap_for_each(hp, hp_ent) {
+        //         aux_stat = aura_container_of(hp_ent, struct aura_fn_stat_wrapper, hp_ent);
+        //         fn = aura_fn_load_brokered(mc, aux_stat->fn_name, aux_stat->fn_version, dmn_sock_fd);
+        //         A_BUG_ON_2(!fn, true);
 
-            host = a_find_host(gc, fn->meta.host);
-            if (!host) {
-                aura_fn_destroy(fn);
-                continue;
-            }
-            if (aura_route_add(&host->router, fn) < 0) {
-                aura_fn_destroy(fn);
-            }
-        }
+        //         host = a_find_host(gc, fn->meta.host);
+        //         if (!host) {
+        //             aura_fn_destroy(fn);
+        //             continue;
+        //         }
+
+        //         /* Load fetched function into cache */
+        //         fn_e = aura_lru_cache_get(&gc->fn_cache, fn->meta.fn_id);
+        //         if (fn_e) {
+        //             aura_fn_cache_load(fn_e, fn);
+
+        //         }
+
+        //         if (aura_route_add(&host->router, fn) < 0) {
+        //             rv = -1;
+        //         }
+        //         aura_fn_destroy(fn);
+        //     }
     }
 
     aura_free(fn_list);
@@ -1538,6 +1564,10 @@ static int a_setup_memory_caches(struct aura_mem_ctx *mc) {
     /* stream slab cache */
     sc = aura_slab_cache_create(mc, A_SLAB_CACHE_ID_H2_STREAM, "stream", sizeof(struct aura_h2_stream), NULL, 0);
     if (!sc)
+        goto exception;
+
+    /* Function cache backing slab */
+    if (!aura_fn_slab_cache_create(mc))
         goto exception;
 
     return 0;
@@ -1643,14 +1673,12 @@ static inline int a_glob_conf_init(struct aura_srv_global_ctx *gc) {
     gc->boot_time = aura_now_ms(CLOCK_MONOTONIC);
 
     /* init app memory context */
-
     if (a_setup_memory_caches(&gc->mem_ctx) < 0) {
         sys_debug(true, errno, "main: a_setup_memory_caches error");
         return -1;
     }
 
-    gc->listeners.sni = aura_rax_new();
-    if (!gc->listeners.sni)
+    if (aura_rax_init(&gc->listeners.sni) < 0)
         return -1;
 
     aura_host_pool_init(&gc->host_pool);
@@ -1714,7 +1742,8 @@ int main(int argc, char *argv[]) {
             sys_exit(true, errno, "main: listener fd epoll register");
     }
 
-    a_preload_functions(gc, dmn_fd);
+    if (a_preload_functions(gc, dmn_fd) < 0)
+        sys_exit(true, errno, "main: a_preload_functions");
 
     /**
      * Notify daemon upon successful

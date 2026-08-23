@@ -127,7 +127,9 @@ void aura_header_field_destroy2(struct aura_header_field *header) {
     /* name always interned, so we destroy it when destroying intern table */
 
     if (!(header->flags & A_HDR_FIELD_FLAG_VALUE_INTERNED)) {
-        if (header->value.raw.str.base)
+        if (header->value.raw.str.base && --header->value.raw.ref_cnt == 0) {
             aura_free(header->value.raw.str.base);
+            header->value.raw.str.base = NULL;
+        }
     }
 }

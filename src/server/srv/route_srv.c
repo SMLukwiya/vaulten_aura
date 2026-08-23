@@ -4,8 +4,7 @@
 
 int aura_router_init(struct aura_router *router) {
     memset(router, 0, sizeof(*router));
-    router->r_tree = aura_rax_new();
-    if (!router->r_tree)
+    if (aura_rax_init(&router->r_tree) < 0)
         return -1;
 
     return 0;
@@ -15,8 +14,7 @@ void aura_router_destroy(struct aura_router *router) {
     if (!router)
         return;
 
-    if (router->r_tree)
-        aura_rax_free(router->r_tree);
+    aura_rax_free(&router->r_tree);
 
     if (router->route_pool.routes)
         free(router->route_pool.routes);
@@ -32,16 +30,16 @@ static inline bool a_route_destroy(struct aura_route *route) {
     if (!route)
         return true;
 
-    if (route->fn)
-        aura_fn_destroy(route->fn);
+    // if (route->fn)
+    //     aura_fn_destroy(route->fn);
 
-    if (aura_work_queue_destroy(route->wq) != 0) {
-        /** @todo: Failed to destroy work queue, what should I do?? */
-        return false;
-    }
+    // if (aura_work_queue_destroy(route->wq) != 0) {
+    //     /** @todo: Failed to destroy work queue, what should I do?? */
+    //     return false;
+    // }
 
     /* remove from tree */
-    aura_rax_remove(route->router->r_tree, route->fn->meta.http_trigger.path.base, route->fn->meta.http_trigger.path.len, NULL);
+    // aura_rax_remove(&route->router->r_tree, route->fn->meta.http_trigger.path.base, route->fn->meta.http_trigger.path.len, NULL);
 
     memset(route, 0, sizeof(*route));
     /** @todo: a new slot is free on the vector, either keep a free offset for later use or compact memory */
@@ -71,7 +69,7 @@ int aura_route_add(struct aura_router *router, struct aura_fn *fn) {
     pattern = fn->meta.http_trigger.path.base;
     pattern_len = fn->meta.http_trigger.path.len;
     /* check for existent route */
-    n = aura_rax_lookup(router->r_tree, pattern, pattern_len);
+    n = aura_rax_lookup(&router->r_tree, pattern, pattern_len);
     if (n) {
         /* route already exists in router */
         errno = EEXIST;
@@ -83,7 +81,6 @@ int aura_route_add(struct aura_router *router, struct aura_fn *fn) {
         return -1;
     memset(new_route, 0, sizeof(*new_route));
 
-    // new_route->version = 0x1;
     new_route->router = router;
     snprintf(new_route->url, sizeof(new_route->url), "%s", fn->meta.host);
     if (pattern[0] != '/') {
@@ -91,18 +88,18 @@ int aura_route_add(struct aura_router *router, struct aura_fn *fn) {
     }
 
     strncat(new_route->url + strlen(new_route->url), pattern, sizeof(new_route->url) - strlen(new_route->url) - 1);
-    new_route->fn = fn;
-    new_route->wq = malloc(sizeof(struct aura_work_queue));
-    if (!new_route->wq)
-        return -1;
+    // new_route->fn = fn;
+    // new_route->wq = malloc(sizeof(struct aura_work_queue));
+    // if (!new_route->wq)
+    //     return -1;
 
-    res = aura_work_queue_init(new_route->wq, router->srv_ctx, fn);
-    if (res) {
-        sys_debug(true, errno, "Failed to initialize workqueue: %d", res);
-        return -1;
-    }
+    // res = aura_work_queue_init(new_route->wq, router->srv_ctx, fn);
+    // if (res) {
+    //     sys_debug(true, errno, "Failed to initialize workqueue: %d", res);
+    //     return -1;
+    // }
 
-    res = aura_rax_insert(router->r_tree, pattern, pattern_len, A_RAX_NODE_TYPE_SPARSE, a_rax_data_init_ptr(new_route));
+    res = aura_rax_insert(&router->r_tree, pattern, pattern_len, A_RAX_NODE_TYPE_SPARSE, a_rax_data_init_ptr(new_route));
     if (!res) {
         a_route_destroy(new_route);
         return -1;
@@ -116,10 +113,10 @@ bool aura_route_remove(struct aura_route *route) {
 }
 
 struct aura_route *aura_route_match(struct aura_router *router, const char *pattern,
-                                    size_t pattern_len, a_http_method_t method) {
+                                    size_t pattern_len, uint8_t method) {
     aura_rax_node_t *node;
 
-    node = aura_rax_lookup(router->r_tree, pattern, pattern_len);
+    node = aura_rax_lookup(&router->r_tree, pattern, pattern_len);
     if (!node)
         return NULL;
 

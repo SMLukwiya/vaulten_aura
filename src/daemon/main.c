@@ -1,6 +1,12 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+
+#include <limits.h>
+#include <signal.h>
+#include <sys/resource.h>
+#include <sys/wait.h>
+
 #include "command/function.h"
 #include "command/server.h"
 #include "command/system.h"
@@ -10,23 +16,16 @@
 #include "unix/sock.h"
 #include "utils_lib.h"
 
-#include <limits.h>
-#include <signal.h>
-#include <sys/resource.h>
-#include <sys/wait.h>
-
 static long A_MAX_FILE = 256;
 
 const char cli_auth_error[] = "\x1B[1;32mClient Not Authenticated\x1B[0m";
 
 #ifdef AURA_DEV_BUILD
 const char *passphrase = "dev_default_password";
-#else
-/* read passphrase */
-#endif
 
-typedef int (*dmn_cb)(void *);
-
+/**
+ * Create database path during testing
+ */
 static int a_ensure_db_path(const char *path, int mode) {
     char temp[1024];
     char *p;
@@ -52,6 +51,9 @@ static int a_ensure_db_path(const char *path, int mode) {
 
     return 0;
 }
+#else
+/* read passphrase */
+#endif
 
 int aura_path_get_db_file_path(char *path, size_t len) {
     bool dev_mode;
@@ -211,7 +213,7 @@ static int a_dmn_initialize_pollfd_slot(struct pollfd *p) {
     return 0;
 }
 
-static int a_setup_database(struct aura_dmn_glob_conf *gc) {
+static int a_dmn_setup_database(struct aura_dmn_glob_conf *gc) {
     int res;
     char db_path[A_DB_MAX_FILE_PATH_LEN];
 
@@ -220,7 +222,7 @@ static int a_setup_database(struct aura_dmn_glob_conf *gc) {
 
     gc->db_handle = aura_db_open(&gc->mc, db_path);
     if (!gc->db_handle) {
-        sys_debug(true, errno, "a_setup_database: aura_db_open error");
+        sys_debug(true, errno, "a_dmn_setup_database: aura_db_open error");
         return -1;
     }
 
@@ -235,28 +237,74 @@ static bool a_authenticate_cli(struct aura_dmn_glob_conf *gc, int cli_fd, struct
     return true;
 }
 
+extern struct aura_evt_src_ops http_src_ops;
+extern struct aura_evt_src_ops cron_src_ops;
+
+static int a_dmn_load_native_evt_sources(struct aura_evt_src_registry *r) {
+    /* HTTP source */
+    struct aura_evt_src *http_src = &r->sources[r->cnt++];
+    http_src->ops = &http_src_ops;
+    if (http_src->ops->init(http_src) < 0)
+        return -1;
+
+    /* CRON source */
+    struct aura_evt_src *cron_src = &r->sources[r->cnt++];
+    cron_src->ops = &cron_src_ops;
+    if (cron_src->ops->init(cron_src) < 0)
+        return -1;
+
+    return 0;
+}
+
+static int a_dmn_load_fn_registry(struct aura_dmn_glob_conf *gc) {
+    struct aura_fn_list *fn_list;
+    struct aura_fn_registry_ent *ent;
+    struct aura_evt_src *evt_src;
+    int error;
+
+    fn_list = aura_fn_list_fetch(gc->db_handle, &error);
+    if (!fn_list) {
+        if (error < 0)
+            return -1;
+        return 0;
+    }
+
+    for (int i = 0; i < fn_list->func_cnt && i < A_FN_MAX_REGISTRY_CNT; ++i) {
+        // ent = &gc->fn_registry.entries[i];
+        ent = aura_fn_load_fn_registry_entry(&gc->fn_registry, &fn_list->func_tags[i], i);
+
+        switch (ent->fn_tag.triggers->trigger) {
+        case A_TRIGGER_HTTP:
+            evt_src = aura_evt_src_get(&gc->evt_src_registry, "http");
+            if (evt_src->ops->bind(evt_src, ent) < 0) {
+            }
+            break;
+
+        case A_TRIGGER_CRON:
+            evt_src = aura_evt_src_get(&gc->evt_src_registry, "cron");
+            if (evt_src->ops->bind(evt_src, ent) < 0) {
+            }
+
+        default:
+            break;
+        }
+    }
+
+    return 0;
+}
+
+static int a_dmn_get_next_poll_timeout(struct aura_dmn_glob_conf *gc) {
+    /** @todo */
+    return -1;
+}
+
 int main(int argc, char *argv[]) {
-    struct aura_dmn_glob_conf glob_conf;
+    struct aura_dmn_glob_conf *gc;
     struct aura_unix_sock d_sock;
     int rv, cli_fd;
     size_t n_read, num_fd;
     struct aura_msg aura_msg;
     struct rlimit rlimit;
-
-    // if (getrlimit(RLIMIT_NOFILE, &rlimit) < 0)
-    //     sys_exit(true, errno, "main: get resource limit err");
-
-    // if (rlimit.rlim_max != RLIM_INFINITY)
-    //     A_MAX_FILE = rlimit.rlim_max;
-
-    memset(&glob_conf, 0, sizeof(glob_conf));
-    glob_conf.server_fd = A_DMN_DEFAULT_SERVER_FD;
-    if (aura_now_ts(&glob_conf.boot_time, CLOCK_MONOTONIC) < 0)
-        sys_exit(true, 0, "Daemon config error:");
-
-    if (aura_usr_get_rec(&glob_conf.user) < 0)
-        sys_exit(true, 0, "Daemon config error:");
-
     /* Set up unix socket */
     char sock_path[256];
     bool dev_mode = false;
@@ -265,42 +313,77 @@ int main(int argc, char *argv[]) {
     dev_mode = true;
 #endif
 
+    // if (getrlimit(RLIMIT_NOFILE, &rlimit) < 0)
+    //     sys_exit(true, errno, "main: get resource limit err");
+
+    // if (rlimit.rlim_max != RLIM_INFINITY)
+    //     A_MAX_FILE = rlimit.rlim_max;
+
+    gc = alloca(sizeof(*gc));
+    if (!gc)
+        sys_exit(true, errno, "aura_daemon: gc alloca");
+    memset(&gc, 0, sizeof(gc));
+
+    /* init memory context */
+    aura_mem_ctx_init(&gc->mc);
+    if (aura_create_dynamic_slab_alloc_caches(&gc->mc) < 0)
+        sys_exit(true, errno, "aura_daemon: aura_create_dynamic_slab_alloc_caches error:");
+
+    /* Setup database connection */
+    if (a_dmn_setup_database(gc) < 0)
+        sys_exit(true, errno, "DB error");
+
+    /* Load native event sources */
+    if (a_dmn_load_native_evt_sources(&gc->evt_src_registry) < 0)
+        sys_exit(true, errno, "aura_daemon: a_dmn_load_native_evt_sources error:");
+
+    /* init function registry */
+    if (a_dmn_load_fn_registry(gc) < 0)
+        sys_exit(true, errno, "aura_daemon: a_dmn_load_fn_registry error:");
+
+    gc->server_fd = A_DMN_DEFAULT_SERVER_FD;
+
+    aura_install_signal_handler(SIGCHLD, a_sig_ch_handler);
+
+    if (aura_usr_get_rec(&gc->user) < 0)
+        sys_exit(true, 0, "Daemon config error:");
+
+    /* init unix socket */
     aura_ipc_get_unix_sock_path(dev_mode, sock_path, sizeof(sock_path));
     if (aura_unix_server_listen(&d_sock, sock_path) < 0)
         sys_exit(false, errno, "aura_daemon: aura_unix_server_listen error: %s", sock_path);
 
-    aura_pollfd_dense_pool_init(&glob_conf.pollfd_pool);
-    aura_pollfd_dense_pool_for_each(&glob_conf.pollfd_pool, a_dmn_initialize_pollfd_slot);
+    /* poll fd */
+    aura_pollfd_dense_pool_init(&gc->pollfd_pool);
+    aura_pollfd_dense_pool_for_each(&gc->pollfd_pool, a_dmn_initialize_pollfd_slot);
 
     /* Add unix IPC socket to poll */
-    aura_add_pollfd_entry(&glob_conf.pollfd_pool, d_sock.fd);
-    glob_conf.unix_sock_fd = d_sock.fd;
+    aura_add_pollfd_entry(&gc->pollfd_pool, d_sock.fd);
+    gc->unix_sock_fd = d_sock.fd;
 
-    aura_install_signal_handler(SIGCHLD, a_sig_ch_handler);
-
-    /* set up memory context */
-    aura_mem_ctx_init(&glob_conf.mc);
-    if (aura_create_dynamic_slab_alloc_caches(&glob_conf.mc) < 0)
-        sys_exit(true, errno, "aura_daemon: aura_create_dynamic_slab_alloc_caches error:");
-
-    /* Setup database */
-    if (a_setup_database(&glob_conf) < 0)
-        sys_exit(true, errno, "DB error");
+    if (aura_now_ts(&gc->boot_time, CLOCK_MONOTONIC) < 0)
+        sys_exit(true, 0, "Daemon config error:");
 
     /* Make visible to signal handler */
-    conf = &glob_conf;
+    conf = gc;
 
     for (;;) {
-        if (poll(aura_pollfd_dense_pool_get_entries(&glob_conf.pollfd_pool), A_DMN_POLLFD_POOL_SZ, -1) < 0 && errno != EINTR) {
+        int timeout = a_dmn_get_next_poll_timeout(gc);
+
+        if (poll(
+              aura_pollfd_dense_pool_get_entries(&gc->pollfd_pool),
+              A_DMN_POLLFD_POOL_SZ,
+              timeout) < 0 &&
+            errno != EINTR) {
             sys_debug(true, errno, "aura_daemon: poll error:");
             break;
         }
 
         for (int i = 0; i < A_DMN_POLLFD_POOL_SZ; ++i) {
-            struct pollfd *pfd = aura_pollfd_dense_pool_get_slot(&glob_conf.pollfd_pool, i);
+            struct pollfd *pfd = aura_pollfd_dense_pool_get_slot(&gc->pollfd_pool, i);
             if (pfd->revents & (POLLHUP | POLLERR | POLLNVAL | POLLOUT)) {
             err:
-                aura_release_pollfd_entry(&glob_conf.pollfd_pool, i);
+                aura_release_pollfd_entry(&gc->pollfd_pool, i);
 
             } else if (pfd->revents & POLLIN) {
                 if (pfd->fd == d_sock.fd) {
@@ -310,7 +393,7 @@ int main(int argc, char *argv[]) {
                         break;
                     }
 
-                    if (aura_add_pollfd_entry(&glob_conf.pollfd_pool, cli_fd) < 0) {
+                    if (aura_add_pollfd_entry(&gc->pollfd_pool, cli_fd) < 0) {
                         close(cli_fd);
                     }
                     continue;
@@ -320,19 +403,19 @@ int main(int argc, char *argv[]) {
                 if (rv <= 0)
                     goto err;
 
-                if (pfd->fd == glob_conf.server_fd) {
+                if (pfd->fd == gc->server_fd) {
                     /* server request */
-                    a_handle_client_request(&aura_msg, pfd->fd, (void *)&glob_conf);
+                    a_handle_client_request(&aura_msg, pfd->fd, (void *)gc);
 
                 } else {
                     /* cli request */
-                    if (a_authenticate_cli(&glob_conf, pfd->fd, &aura_msg) == false)
+                    if (a_authenticate_cli(gc, pfd->fd, &aura_msg) == false)
                         goto err;
 
-                    a_handle_client_request(&aura_msg, pfd->fd, (void *)&glob_conf);
+                    a_handle_client_request(&aura_msg, pfd->fd, (void *)gc);
                 }
 
-                aura_release_pollfd_entry(&glob_conf.pollfd_pool, i);
+                aura_release_pollfd_entry(&gc->pollfd_pool, i);
             }
         }
     }

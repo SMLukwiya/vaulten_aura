@@ -3,8 +3,8 @@
 
 #include <stdbool.h>
 
+#include "executors/js/quickjs/rt.h"
 #include "fn/lib.h"
-#include "js.h"
 #include "quickjs.h"
 #include "server_srv.h"
 #include "task_srv.h"
@@ -29,7 +29,7 @@ struct aura_rt_ops {
     /* Destroy underlying engine */
     void (*on_destroy)(struct aura_runtime *);
     /* Invoke underlying engine executor */
-    int (*on_execute)(struct aura_runtime *, struct aura_task *);
+    int (*on_execute)(struct aura_runtime *, struct _aura_task *);
 };
 
 /* Generic runtime structure */

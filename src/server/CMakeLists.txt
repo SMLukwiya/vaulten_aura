@@ -26,6 +26,14 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/dense_pool/dynamic_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/data_path/data_path.c
     ${vaulten_aura_SOURCE_DIR}/lib/flight_queue/queue.c
+    ${vaulten_aura_SOURCE_DIR}/lib/timer/timer.c
+    ${vaulten_aura_SOURCE_DIR}/lib/executors/js/quickjs/bindings.c
+    ${vaulten_aura_SOURCE_DIR}/lib/executors/js/quickjs/qjs_rt.c
+    ${vaulten_aura_SOURCE_DIR}/lib/event_ctx/http.c
+    ${vaulten_aura_SOURCE_DIR}/lib/executors/js/quickjs/rt.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory/lru_cache.c
+    ${vaulten_aura_SOURCE_DIR}/lib/request/req.c
+    ${vaulten_aura_SOURCE_DIR}/lib/stream/lib_v1.c
 )
 
 add_executable(aura_server
@@ -54,9 +62,6 @@ add_executable(aura_server
     runtime/request.c
     runtime/task.c
     runtime/completion.c
-    runtime/quickjs/qjs_rt.c
-    runtime/quickjs/js_bindings.c 
-    infra/timer/timer_srv.c
     ${lib_sources}
 )
 

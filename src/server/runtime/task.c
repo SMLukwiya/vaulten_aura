@@ -4,12 +4,12 @@
 #include "string_lib.h"
 #include "task_srv.h"
 
-struct aura_task *aura_task_create(struct aura_h2_stream *stream, struct aura_mem_ctx *mc,
-                                   uint8_t *url, uint64_t next_id, uint32_t conn_id,
-                                   uint32_t conn_idx, a_task_protocol_t prot) {
-    struct aura_task *task;
-    Request *req;
-    Response *resp;
+struct _aura_task *aura_task_create(struct aura_h2_stream *stream, struct aura_mem_ctx *mc,
+                                    uint8_t *url, uint64_t next_id, uint32_t conn_id,
+                                    uint32_t conn_idx, a_task_protocol_t prot) {
+    struct _aura_task *task;
+    _Request *req;
+    _Response *resp;
 
     /* Create request holder */
     req = aura_rt_create_req(mc);
@@ -48,7 +48,7 @@ struct aura_task *aura_task_create(struct aura_h2_stream *stream, struct aura_me
     req->body = NULL;
     req->body_len = 0;
     /* @todo: add the stuff on the requests */
-    if (req->method == HTTP_POST) {
+    if (req->method == A_HTTP_POST) {
         req->body = stream->req.body;
         req->body_len = stream->req.content_length;
         stream->req.body = NULL;
@@ -76,7 +76,7 @@ struct aura_task *aura_task_create(struct aura_h2_stream *stream, struct aura_me
     return task;
 }
 
-void aura_task_destroy(struct aura_task *task) {
+void aura_task_destroy(struct _aura_task *task) {
     if (!task)
         return;
 
@@ -87,7 +87,7 @@ void aura_task_destroy(struct aura_task *task) {
         aura_rt_res_destroy(task->res_data);
 }
 
-void aura_task_dump(struct aura_task *task) {
+void aura_task_dump(struct _aura_task *task) {
     app_debug(true, 0, "AURA_TASK");
     app_debug(true, 0, "    Id: %lu", task->id);
     app_debug(true, 0, "    State: %d", task->state);

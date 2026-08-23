@@ -62,7 +62,7 @@ struct aura_yml_usr_data_ctx {
     struct aura_yml_srv_listeners listeners; /* store listeners */
     struct aura_yml_tls_tags tls_tags;       /* tls tags */
     struct aura_yml_srv_hosts hosts;
-    aura_rax_tree_t *parse_tree;
+    aura_rax_tree_t parse_tree;
     st_aura_b_builder builder;
     struct {
         struct aura_yml_node *entries;
@@ -97,6 +97,10 @@ enum srv_node_idx {
     A_IDX_SERVER_TLS_IDEN,    // tls identities
     A_IDX_SERVER_TLS_CIPHERS, // tls ciphers
     A_IDX_SERVER_HOSTS        // hosts
+};
+
+enum aura_srv_data_t {
+    A_SERVER_CONF
 };
 
 typedef void (*cmd_cb)(int fd, pid_t pid);

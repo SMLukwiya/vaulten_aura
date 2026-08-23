@@ -150,7 +150,7 @@ struct aura_hpack_dyn_tab {
 struct aura_hpack_static_table {
     struct aura_token tokens[A_TOKEN_WWW_AUTHENTICATE - 1];
     struct aura_hpack_tab_entry entries[ARRAY_SIZE(rfc_static_table)];
-    struct aura_intern_tab intern_tab; /* Intern table for hpack static strings */
+    struct aura_intern_tab *intern_tab; /* Intern table for hpack static strings */
 };
 
 /* Receiver buffer for name/value strings */
@@ -328,6 +328,7 @@ static inline void aura_hpack_header_table_evict_one(struct aura_hpack_dyn_tab *
 
     entry = aura_hpack_dyn_header_tab_get_entry(tb, --tb->cnt + A_HPACK_DYNAMIC_TAB_HEADER_OFFSET);
     name_len = entry->header_field.name->len;
+    app_debug(true, 0, "----------->> SOMETHING WAS EVICTED name=%s", entry->header_field.name->data);
 
     if (entry->header_field.flags & A_HDR_FIELD_FLAG_VALUE_INTERNED) {
         value_len = entry->header_field.name->len;

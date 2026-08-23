@@ -96,7 +96,7 @@ int aura_h2_submit_error_response(struct aura_h2_core *h2_conn, struct aura_h2_s
  * Construct a response to send to the peer
  */
 int aura_h2_submit_rt_response(struct aura_h2_core *h2_conn, struct aura_h2_stream *stream,
-                               Response *resp, struct aura_mem_ctx *mc);
+                               _Response *resp, struct aura_mem_ctx *mc);
 
 /* Create h2 server connection */
 struct aura_h2_server_conn *aura_h2_srv_conn_create(struct aura_mem_ctx *mc);

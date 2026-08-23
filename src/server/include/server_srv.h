@@ -2,7 +2,6 @@
 #define AURA_SERVER_H
 
 #include "../infra/metrics/metrics_srv.h"
-#include "../infra/timer/timer_srv.h"
 #include "connection.h"
 #include "db/db.h"
 #include "dense_pool/dynamic.h"
@@ -12,11 +11,13 @@
 #include "interned.h"
 #include "list_lib.h"
 #include "mem.h"
+#include "memory/lru_cache.h"
 #include "optimizer.h"
 #include "pending_req.h"
 #include "radix/tree.h"
 #include "runtime/completions.h"
 #include "socket_srv.h"
+#include "timer/timer.h"
 #include "tls_srv.h"
 #include "types_lib.h"
 #include "utils_lib.h"
@@ -28,6 +29,13 @@
 
 #define A_CONN_TAB_INVALID_IDX UINT32_MAX
 #define A_CONN_TAB_DEFAULT_SZ 512
+
+enum server_slab_ids {
+    A_SLAB_CACHE_GENERIC_CONN = A_SLAB_CACHE_SERVER_BASE + 0,
+    A_SLAB_CACHE_ID_H2_SERVER_CONN,
+    A_SLAB_CACHE_ID_H2_CLIENT_CONN,
+    A_SLAB_CACHE_ID_H2_STREAM,
+};
 
 /* Server queues structure */
 struct aura_srv_req_queue {
@@ -45,7 +53,7 @@ struct aura_srv_listeners_conf {
     struct aura_srv_tls_iden_pool tls_pool;
     ptls_t *ptls;
     struct aura_srv_host_conf *fb_host_conf; /* fallback host, if SNI lookup fails */
-    aura_rax_tree_t *sni;                    /* radix tree */
+    aura_rax_tree_t sni;                     /* radix tree */
 };
 
 /* connection pool structure */
@@ -105,6 +113,10 @@ struct aura_srv_global_ctx {
     struct aura_srv_host_pool host_pool;
     struct aura_mem_ctx mem_ctx;
     struct aura_iovec user;
+    struct aura_task_queue tq;
+    struct aura_worker_pool *worker_pool;
+    struct aura_fn_registry fn_registry;
+    struct aura_lru_cache fn_cache;
     time_t boot_time; /* server boot time */
 };
 

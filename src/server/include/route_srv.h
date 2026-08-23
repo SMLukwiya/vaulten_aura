@@ -13,8 +13,8 @@ struct aura_router;
 
 /* Route structure */
 struct aura_route {
-    struct aura_fn *fn;
-    struct aura_work_queue *wq;
+    // struct aura_fn *fn;
+    // struct aura_work_queue *wq;
     struct aura_router *router; /* router to which route belongs */
     void *bpf_program;
     uint32_t flag; /* config flags, only http2 enabled now */
@@ -31,7 +31,7 @@ struct aura_route_pool {
 /* Router structure */
 struct aura_router {
     struct aura_srv_ctx *srv_ctx;
-    aura_rax_tree_t *r_tree;
+    aura_rax_tree_t r_tree;
     struct aura_route_pool route_pool;
     // struct router_t *next; /* v1 routes to v2 routes */
 };
@@ -64,6 +64,6 @@ bool aura_route_remove(struct aura_route *route);
  * the list of routes returning NULL is not
  * route is matched
  */
-struct aura_route *aura_route_match(struct aura_router *router, const char *pattern, size_t pattern_len, a_http_method_t method);
+struct aura_route *aura_route_match(struct aura_router *router, const char *pattern, size_t pattern_len, uint8_t method);
 
 #endif

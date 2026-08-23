@@ -11,6 +11,26 @@
 
 #define BASE_16_TO_10(x) (((x) >= '0' && (x) <= '9') ? ((x) - '0') : (toupper((x)) - 'A' + 10))
 
+/**
+ * trim whitespace in the front
+ * and back of a string.
+ * Returns the str without whitespaces, with
+ * it's new length
+ */
+static inline char *aura_str_trim(char *str, uint64_t *len) {
+    uint64_t _len = *len;
+    while (_len > 0 && isspace(*str)) {
+        ++str;
+        --_len;
+    }
+
+    while (_len > 0 && isspace(*(str + _len - 1)))
+        --_len;
+
+    *len = _len;
+    return str;
+}
+
 size_t _strlcpy(char *dest, const char *src, size_t size);
 size_t _strlcat(char *dest, const char *src, size_t size);
 

@@ -33,7 +33,6 @@ void aura_heap_destroy(struct aura_heap *hp) {
     if (!hp)
         return;
 
-    memset(hp->entries, 0, hp->cap * sizeof(*hp->entries));
     if (hp->entries)
         aura_free(hp->entries);
     hp->entries = NULL;

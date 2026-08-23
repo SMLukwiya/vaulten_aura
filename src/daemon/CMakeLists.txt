@@ -14,6 +14,7 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/blobber/lib_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/encrypt/lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/hasher_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/hashmap/map_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/db/db.c
     ${vaulten_aura_SOURCE_DIR}/lib/db/broker.c
     ${vaulten_aura_SOURCE_DIR}/lib/file/lib.c
@@ -25,6 +26,12 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/user/user.c
     ${vaulten_aura_SOURCE_DIR}/lib/ipc/ipc.c
     ${vaulten_aura_SOURCE_DIR}/lib/ipc/wait.c
+    ${vaulten_aura_SOURCE_DIR}/lib/event_ctx/http.c
+    ${vaulten_aura_SOURCE_DIR}/lib/event_ctx/cron.c
+    ${vaulten_aura_SOURCE_DIR}/lib/cron/ccronexpr.c
+    ${vaulten_aura_SOURCE_DIR}/lib/memory/lru_cache.c
+    ${vaulten_aura_SOURCE_DIR}/lib/timer/timer.c
+    ${vaulten_aura_SOURCE_DIR}/lib/stream/lib_v1.c
 )
 
 add_executable(aura_daemon

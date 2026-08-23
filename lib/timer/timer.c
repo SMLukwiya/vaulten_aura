@@ -1,4 +1,4 @@
-#include "timer_srv.h"
+#include "timer.h"
 #include "bitmap_lib.h"
 #include "error_lib.h"
 #include "time_lib.h"
@@ -80,7 +80,7 @@ void aura_timer_add(struct aura_timer_wheel *tw, struct aura_timer_node *tn) {
     aura_timer_enqueue(tw, tn, idx, bucket_deadline);
 }
 
-void aura_timer_node_init(struct aura_timer_node *tn, void (*func)(struct aura_timer_node *),
+void aura_timer_node_init(struct aura_timer_node *tn, timer_cb func,
                           uint64_t deadline, void *user_data) {
     tn->callback = func;
     tn->deadline = deadline;

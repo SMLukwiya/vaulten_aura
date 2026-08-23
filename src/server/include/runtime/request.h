@@ -14,7 +14,7 @@ typedef struct aura_js_request {
     struct aura_header_vector2 headers;
     const uint8_t *body;
     size_t body_len;
-} Request;
+} _Request;
 
 /* JS response object */
 typedef struct aura_js_response {
@@ -23,27 +23,27 @@ typedef struct aura_js_response {
     const uint8_t *body;
     size_t body_len;
     bool ok;
-} Response;
+} _Response;
 
 /* Create runtime request object */
-Request *aura_rt_create_req(struct aura_mem_ctx *mc);
+_Request *aura_rt_create_req(struct aura_mem_ctx *mc);
 
 /* Create runtime response object */
-Response *aura_rt_create_res(struct aura_mem_ctx *mc);
+_Response *aura_rt_create_res(struct aura_mem_ctx *mc);
 
 /* Get header field slot from Request object */
-struct aura_basic_header *aura_rt_req_get_header_slot(struct aura_mem_ctx *mc, Request *req);
+struct aura_basic_header *aura_rt_req_get_header_slot(struct aura_mem_ctx *mc, _Request *req);
 
 /* Get header field slot from Response object */
-struct aura_basic_header *aura_rt_res_get_header_slot(struct aura_mem_ctx *mc, Response *resp);
+struct aura_basic_header *aura_rt_res_get_header_slot(struct aura_mem_ctx *mc, _Response *resp);
 
 /* Destroy runtime request object */
-void aura_rt_req_destroy(Request *req);
+void aura_rt_req_destroy(_Request *req);
 
 /* Destroy runtime response object */
-void aura_rt_res_destroy(Response *res);
+void aura_rt_res_destroy(_Response *res);
 
 /* Print runtime response */
-void aura_rt_resp_dump(Response *resp);
+void aura_rt_resp_dump(_Response *resp);
 
 #endif

@@ -3,59 +3,19 @@
 #include "utils_lib.h"
 
 /**
- * Dumping Stuff
- */
-void a_rax_node_dump(aura_rax_tree_t *t, aura_rax_node_t *node) {
-    char buf[4096];
-    snprintf(buf, node->prefix_len != 0 ? node->prefix_len + 1 : sizeof("Root"), "%s", node->prefix_len != 0 ? &t->prefix_pool[node->prefix_off] : "Root");
-
-    app_debug(true, 0, "AURA RAX NODE:");
-    app_debug(true, 0, "   key -> '%s'", buf);
-    app_debug(true, 0, "   flags -> %u", node->flags);
-    app_debug(true, 0, "   node is key -> %s", node_is_key(node) ? "Yes" : "no");
-    app_debug(true, 0, "   node Level -> %u", node->node_lvl);
-    app_debug(true, 0, "   num of chd -> %u", node->num_of_ch);
-    app_debug(true, 0, "   parent idx -> %u", node->parent_idx);
-    app_debug(true, 0, "   sibling idx -> %u", node->sibling_idx);
-    app_debug(true, 0, "   prefix offset -> %u", node->prefix_off);
-    app_debug(true, 0, "   prefix len -> %u", node->prefix_len);
-    app_debug(true, 0, "   rsrved slot cnt -> %u", node->reserved_slot_cnt);
-    app_debug(true, 0, "   next rsrved idx -> %u", node->nxt_reserved_idx);
-    app_debug(true, 0, "   node in rsrved slot -> %s", node->in_reserved_slot ? "Yes" : "No");
-    app_debug(true, 0, "   Value type: %d", node->data.type);
-}
-
-void a_dump_rax_tree(aura_rax_tree_t *t) {
-    app_debug(true, 0, "AURA_TREE");
-    app_debug(true, 0, "  Root offset: %d", t->root_node_off);
-    app_debug(true, 0, "  Capacity: %d", t->node_capacity);
-    app_debug(true, 0, "  Count: %d", t->node_cnt);
-    app_debug(true, 0, "  Node Array: %p", t->nodes);
-    app_debug(true, 0, "  Prefix pool: %p", t->prefix_pool);
-    app_debug(true, 0, "  Prefix size: %d", t->prefix_size);
-    app_debug(true, 0, "  Prefix used: %d", t->prefix_used);
-    app_debug(true, 0, "  Nxt insert idx: %d", t->next_node_insert_idx);
-    app_debug(true, 0, "  First leaf off: %d", t->first_leaf_off);
-}
-
-void a_dump_node_children(aura_rax_node_t *node) {
-    for (int i = 0; i < node->num_of_ch; ++i)
-        if (node_is_dense(node))
-            app_debug(true, 0, "dump-> ch dense -> %c", node->children.dense.direct_ch[i]);
-        else if (node_is_sparse(node))
-            app_debug(true, 0, "dump-> ch sparse -> %c", node->children.sparse.ch_entries[i]);
-}
-
-/**
  *
  */
 #define a_node_idx_from_ptr(t, ptr) (((void *)(ptr) - (void *)(t->nodes)) / sizeof(aura_rax_node_t))
 
+void a_rax_node_dump(aura_rax_tree_t *t, aura_rax_node_t *node);
+void a_dump_rax_tree(aura_rax_tree_t *t);
+void a_dump_node_children(aura_rax_node_t *node);
+
 /**
  * Returns the next index for a new node in the tree
  * expanding the tree if space was unavailable.
- * Use the new tree nodes array after calling this function
- * since the nodea array pointer could have moved due to realloc.
+ * Because realloc can change the underlying tree nodes array,
+ * caller must reacquire the tree node's pointer again.
  */
 static uint32_t aura_new_rax_node(aura_rax_tree_t *t, uint32_t reserved_cnt) {
     /* keep old values and restore on failed reallocation */
@@ -92,27 +52,25 @@ static uint32_t aura_new_rax_node(aura_rax_tree_t *t, uint32_t reserved_cnt) {
  * We need to set the capacity before creating the first
  * node, so we don't use 0 as the initial capacity
  */
-aura_rax_tree_t *aura_rax_new(void) {
-    aura_rax_tree_t *t;
+int aura_rax_init(aura_rax_tree_t *t) {
     uint32_t root_idx;
 
-    t = malloc(sizeof(*t));
-    if (!t)
-        return NULL;
     memset((void *)t, 0, sizeof(*t));
 
     t->prefix_pool = malloc(128);
     if (!t->prefix_pool)
-        return NULL;
+        return -1;
 
     root_idx = aura_new_rax_node(t, 0);
-    if (root_idx == RAX_OFFSET_ERROR)
-        return NULL;
+    if (root_idx == RAX_OFFSET_ERROR) {
+        free(t->prefix_pool);
+        return -1;
+    }
     t->prefix_size = 128;
     t->prefix_used = 0;
     t->root_node_off = root_idx;
     memset(&t->nodes[root_idx], 0, sizeof(aura_rax_node_t));
-    return t;
+    return 0;
 }
 
 void aura_rax_free(aura_rax_tree_t *t) {
@@ -121,7 +79,6 @@ void aura_rax_free(aura_rax_tree_t *t) {
 
     free(t->prefix_pool);
     free(t->nodes);
-    free(t);
 }
 
 /**
@@ -522,7 +479,6 @@ bool aura_rax_insert(aura_rax_tree_t *t, const char *key, size_t key_len, uint8_
     }
     /**
      * We failed
-     * Ohhh Sh!!!!t
      */
     return false;
 }
@@ -1102,4 +1058,48 @@ uint32_t aura_rax_prefix_find_offset(aura_rax_tree_t *t, const char *prefix, siz
         return A_RAX_NIL_OFFSET;
 
     return node_idx;
+}
+
+/**
+ * Dumping Stuff
+ */
+void a_rax_node_dump(aura_rax_tree_t *t, aura_rax_node_t *node) {
+    char buf[4096];
+    snprintf(buf, node->prefix_len != 0 ? node->prefix_len + 1 : sizeof("Root"), "%s", node->prefix_len != 0 ? &t->prefix_pool[node->prefix_off] : "Root");
+
+    app_debug(true, 0, "AURA RAX NODE:");
+    app_debug(true, 0, "   key -> '%s'", buf);
+    app_debug(true, 0, "   flags -> %u", node->flags);
+    app_debug(true, 0, "   node is key -> %s", node_is_key(node) ? "Yes" : "no");
+    app_debug(true, 0, "   node Level -> %u", node->node_lvl);
+    app_debug(true, 0, "   num of chd -> %u", node->num_of_ch);
+    app_debug(true, 0, "   parent idx -> %u", node->parent_idx);
+    app_debug(true, 0, "   sibling idx -> %u", node->sibling_idx);
+    app_debug(true, 0, "   prefix offset -> %u", node->prefix_off);
+    app_debug(true, 0, "   prefix len -> %u", node->prefix_len);
+    app_debug(true, 0, "   rsrved slot cnt -> %u", node->reserved_slot_cnt);
+    app_debug(true, 0, "   next rsrved idx -> %u", node->nxt_reserved_idx);
+    app_debug(true, 0, "   node in rsrved slot -> %s", node->in_reserved_slot ? "Yes" : "No");
+    app_debug(true, 0, "   Value type: %d", node->data.type);
+}
+
+void a_dump_rax_tree(aura_rax_tree_t *t) {
+    app_debug(true, 0, "AURA_TREE");
+    app_debug(true, 0, "  Root offset: %d", t->root_node_off);
+    app_debug(true, 0, "  Capacity: %d", t->node_capacity);
+    app_debug(true, 0, "  Count: %d", t->node_cnt);
+    app_debug(true, 0, "  Node Array: %p", t->nodes);
+    app_debug(true, 0, "  Prefix pool: %p", t->prefix_pool);
+    app_debug(true, 0, "  Prefix size: %d", t->prefix_size);
+    app_debug(true, 0, "  Prefix used: %d", t->prefix_used);
+    app_debug(true, 0, "  Nxt insert idx: %d", t->next_node_insert_idx);
+    app_debug(true, 0, "  First leaf off: %d", t->first_leaf_off);
+}
+
+void a_dump_node_children(aura_rax_node_t *node) {
+    for (int i = 0; i < node->num_of_ch; ++i)
+        if (node_is_dense(node))
+            app_debug(true, 0, "dump-> ch dense -> %c", node->children.dense.direct_ch[i]);
+        else if (node_is_sparse(node))
+            app_debug(true, 0, "dump-> ch sparse -> %c", node->children.sparse.ch_entries[i]);
 }

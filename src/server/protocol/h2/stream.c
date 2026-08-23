@@ -14,7 +14,7 @@ struct aura_h2_stream *aura_h2_stream_open(struct aura_h2_core *core, struct aur
     struct aura_slab_cache *sc;
 
     sc = aura_slab_cache_find_by_id(mc, A_SLAB_CACHE_ID_H2_STREAM);
-    s = aura_slab_alloc(sc);
+    s = aura_slab_alloc(sc, sizeof(*s));
     if (!s)
         return NULL;
     memset(s, 0, sizeof(*s));
@@ -127,7 +127,7 @@ void aura_h2_stream_dump(struct aura_h2_stream *stream) {
     app_debug(true, 0, "    stream header buf size: %lu", aura_sliding_buf_read_len(&stream->sync));
 }
 
-int aura_h2_stream_claim_rt_request(struct aura_mem_ctx *mc, struct aura_h2_stream *stream, Request *req) {
+int aura_h2_stream_claim_rt_request(struct aura_mem_ctx *mc, struct aura_h2_stream *stream, _Request *req) {
     struct aura_basic_header *header;
 
     /* Take ownership of url structure and its underlying memory */
@@ -172,7 +172,7 @@ int aura_h2_stream_claim_rt_request(struct aura_mem_ctx *mc, struct aura_h2_stre
     return 0;
 }
 
-int aura_h2_stream_claim_rt_response(struct aura_h2_stream *stream, Response *resp, struct aura_mem_ctx *mc) {
+int aura_h2_stream_claim_rt_response(struct aura_h2_stream *stream, _Response *resp, struct aura_mem_ctx *mc) {
     // struct aura_basic_header *header;
 
     stream->res.status_code = resp->status;

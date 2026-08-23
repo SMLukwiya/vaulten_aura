@@ -3,14 +3,14 @@
 
 /* Method */
 typedef enum {
-    HTTP_NONE,
-    HTTP_GET,
-    HTTP_POST,
-    HTTP_PUT,
-    HTTP_DELETE,
-    HTTP_PATCH,
-    HTTP_HEAD,
-} a_http_method_t;
+    A_HTTP_NONE,
+    A_HTTP_GET,
+    A_HTTP_POST,
+    A_HTTP_PUT,
+    A_HTTP_DELETE,
+    A_HTTP_PATCH,
+    A_HTTP_HEAD,
+} aura_http_method;
 
 static const char *a_http_methods_str[] = {
   "NONE",
@@ -24,9 +24,9 @@ static const char *a_http_methods_str[] = {
 
 /* Scheme */
 typedef enum {
-    SCHEME_NONE,
-    SCHEME_HTTP,
-    SCHEME_HTTPS
+    A_SCHEME_NONE,
+    A_SCHEME_HTTP,
+    A_SCHEME_HTTPS
 } a_http_scheme_t;
 
 static const char *a_http_scheme_str[] = {

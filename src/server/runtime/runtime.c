@@ -3,12 +3,12 @@
 int aura_rt_qjs_create(struct aura_runtime *rt, struct aura_srv_ctx *s_ctx, struct aura_fn *fn) {
     struct aura_qjs_runtime *qjs;
 
-    qjs = aura_qjs_create(s_ctx, fn);
-    if (!qjs)
-        return -1;
+    // qjs = aura_qjs_create(s_ctx, fn);
+    // if (!qjs)
+    //     return -1;
 
-    rt->rt_ctx = qjs;
-    return 0;
+    // rt->rt_ctx = qjs;
+    // return 0;
 }
 
 void aura_rt_qjs_destroy(struct aura_runtime *rt) {
@@ -22,7 +22,8 @@ int aura_rt_qjs_execute(struct aura_runtime *rt, struct aura_task *task) {
     struct aura_qjs_runtime *qjs;
 
     qjs = rt->rt_ctx;
-    return aura_qjs_execute(qjs, task);
+    // return aura_qjs_execute(qjs, task);
+    return 0;
 }
 
 /** */

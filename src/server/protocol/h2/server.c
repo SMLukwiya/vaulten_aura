@@ -2,12 +2,12 @@
 #include "bug_lib.h"
 #include "connection.h"
 #include "error_lib.h"
+#include "executors/js/quickjs/bindings.h"
 #include "h2/hpack.h"
 #include "h2/scheduler.h"
 #include "h2/sentinel.h"
 #include "header_srv.h"
 #include "route_srv.h"
-#include "runtime/js.h"
 #include "server_srv.h"
 #include "slab.h"
 #include "socket_srv.h"
@@ -313,7 +313,7 @@ int aura_h2_submit_error_response(struct aura_h2_core *h2_c, struct aura_h2_stre
 }
 
 int aura_h2_submit_rt_response(struct aura_h2_core *h2_conn, struct aura_h2_stream *stream,
-                               Response *resp, struct aura_mem_ctx *mc) {
+                               _Response *resp, struct aura_mem_ctx *mc) {
     int status, rv;
 
     rv = A_H2_ERR_NONE;
@@ -469,22 +469,22 @@ static int a_srv_process_push_promise(struct aura_h2_server_conn *c, struct aura
  * Returns true if provided method is valid,
  * otherwise false
  */
-a_http_method_t a_is_header_method_valid(const char *method) {
+uint8_t a_is_header_method_valid(const char *method) {
     if (strcasecmp(method, "GET") == 0)
-        return HTTP_GET;
+        return A_HTTP_GET;
 
     if (strcasecmp(method, "POST") == 0)
-        return HTTP_POST;
+        return A_HTTP_POST;
 
     if (strcasecmp(method, "PUT") == 0)
-        return HTTP_PUT;
+        return A_HTTP_PUT;
 
     if (strcasecmp(method, "HEAD") == 0)
-        return HTTP_HEAD;
+        return A_HTTP_HEAD;
 
     /** @todo: add others */
 
-    return HTTP_NONE;
+    return A_HTTP_NONE;
 }
 
 /**
@@ -509,7 +509,7 @@ static inline int a_header_method_cb(struct aura_h2_core *h2_c, struct aura_h2_s
                                      const char *name, size_t name_len, const char *value,
                                      size_t val_len) {
     uint64_t content_len;
-    a_http_method_t method;
+    uint8_t method;
 
     app_debug(true, 0, "a_header_method_cb <<<< value: %s", value);
     if (strcmp(value, "CONNECT") == 0 || strcmp(value, "TRACE") == 0) {
@@ -518,7 +518,7 @@ static inline int a_header_method_cb(struct aura_h2_core *h2_c, struct aura_h2_s
     }
 
     method = a_is_header_method_valid(value);
-    if (method == HTTP_NONE)
+    if (method == A_HTTP_NONE)
         return A_HPACK_INVALID_METHOD_ERR;
 
     stream->req.method = method;
@@ -557,11 +557,11 @@ static inline int a_header_path_cb(struct aura_h2_core *h2_c, struct aura_h2_str
 
 static a_http_scheme_t a_http_get_scheme(const char *scheme, size_t len) {
     if (strncasecmp(scheme, "HTTP", len) == 0)
-        return SCHEME_HTTP;
+        return A_SCHEME_HTTP;
     else if (strncasecmp(scheme, "HTTPS", len) == 0)
-        return SCHEME_HTTPS;
+        return A_SCHEME_HTTPS;
     else
-        return SCHEME_NONE;
+        return A_SCHEME_NONE;
 }
 
 /**
@@ -573,7 +573,7 @@ static inline int a_header_scheme_cb(struct aura_h2_core *h2_conn, struct aura_h
     /**/
     app_debug(true, 0, "a_header_scheme_cb <<<<: %s", value);
     stream->req.scheme = a_http_get_scheme(value, val_len);
-    if (stream->req.scheme == SCHEME_NONE)
+    if (stream->req.scheme == A_SCHEME_NONE)
         return A_HPACK_INVALID_SCHEME_ERR;
     return A_HPACK_OK;
 }
@@ -629,9 +629,9 @@ static inline int a_header_content_len_cb(struct aura_h2_core *h2_conn, struct a
 static int aura_h2_srv_process_request(struct aura_h2_server_conn *c, struct aura_h2_stream *stream) {
     struct aura_route *route;
     struct aura_work_queue *wq;
-    struct aura_task *task;
-    Request *req;
-    Response *resp;
+    struct _aura_task *task;
+    _Request *req;
+    _Response *resp;
     int rv;
 
     if (stream->state == A_H2_STREAM_STATE_HALF_CLOSED_REMOTE) {
@@ -651,7 +651,7 @@ static int aura_h2_srv_process_request(struct aura_h2_server_conn *c, struct aur
         if (!task)
             return A_H2_INTERNAL_ERR;
 
-        rv = aura_work_queue_add(route->wq, route->fn, task);
+        // rv = aura_work_queue_add(route->wq, route->fn, task);
         if (rv) {
             aura_rt_req_destroy(req);
             aura_free(task);

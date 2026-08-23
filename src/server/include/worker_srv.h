@@ -51,7 +51,7 @@ int aura_work_queue_destroy(struct aura_work_queue *wq);
 /**
  * Add a task to the work queue
  */
-int aura_work_queue_add(struct aura_work_queue *wq, struct aura_fn *fn, struct aura_task *task);
+int aura_work_queue_add(struct aura_work_queue *wq, struct aura_fn *fn, struct _aura_task *task);
 
 /**/
 int aura_work_queue_thread_vec_add(struct aura_wq_thread_vec *vec, struct aura_mem_ctx *mc,

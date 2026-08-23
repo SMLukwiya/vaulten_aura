@@ -167,5 +167,6 @@ uint32_t aura_build_blob_from_rax(aura_rax_tree_t *t, st_aura_b_builder *b, stru
             stack->ns.cnt -= scalar_cnt + 1;
         }
     }
+
     return root_off;
 }

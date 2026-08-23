@@ -74,37 +74,41 @@ static void *a_build_fn_meta(struct aura_yml_fn_data_ctx *usr_data) {
     root_off = aura_blob_b_add_map(&b);
     /* Function */
     func_off = aura_build_blob_from_rax(
-      usr_data->parse_tree,
+      &usr_data->parse_tree,
       &b,
       usr_data->node_vec.entries,
       "function",
       sizeof("function") - 1,
       &fn_stack,
       _fn_conf_tab);
-    aura_blob_b_map_add_kv(&b, root_off, "function", func_off);
+    if (func_off != A_RAX_NIL_OFFSET)
+        aura_blob_b_map_add_kv(&b, root_off, "function", func_off);
 
     /* Triggers */
     triggers_off = aura_build_blob_from_rax(
-      usr_data->parse_tree,
+      &usr_data->parse_tree,
       &b,
       usr_data->node_vec.entries,
       "triggers",
       sizeof("triggers") - 1,
       &fn_stack,
       _fn_conf_tab);
-    aura_blob_b_map_add_kv(&b, root_off, "triggers", triggers_off);
+    if (triggers_off != A_RAX_NIL_OFFSET)
+        aura_blob_b_map_add_kv(&b, root_off, "triggers", triggers_off);
 
     /* Resources */
     resources_off = aura_build_blob_from_rax(
-      usr_data->parse_tree,
+      &usr_data->parse_tree,
       &b,
       usr_data->node_vec.entries,
       "resources",
       sizeof("resources") - 1,
       &fn_stack,
       _fn_conf_tab);
-    aura_blob_b_map_add_kv(&b, root_off, "resources", resources_off);
+    if (resources_off != A_RAX_NIL_OFFSET)
+        aura_blob_b_map_add_kv(&b, root_off, "resources", resources_off);
 
+    /* Serialize fn meta */
     fn_meta = aura_serialize_blob(&b, _fn_conf_tab, _fn_conf_tab_size, NULL, 0);
     aura_blob_free(&b);
     return fn_meta;
@@ -121,7 +125,7 @@ static void *a_build_fn_config(struct aura_yml_fn_data_ctx *usr_data) {
     root_off = aura_blob_b_add_map(&b);
     /* Environment vars */
     env_off = aura_build_blob_from_rax(
-      usr_data->parse_tree,
+      &usr_data->parse_tree,
       &b,
       usr_data->node_vec.entries,
       "env",
@@ -132,7 +136,7 @@ static void *a_build_fn_config(struct aura_yml_fn_data_ctx *usr_data) {
 
     /* Concurrency */
     concurrency_off = aura_build_blob_from_rax(
-      usr_data->parse_tree,
+      &usr_data->parse_tree,
       &b,
       usr_data->node_vec.entries,
       "concurrency",
@@ -166,13 +170,9 @@ static const char *a_get_entry_file(void *fn_meta) {
 }
 
 static void a_fn_name_get(void *fn_meta, char *fn_name) {
-    const st_aura_blob_node *nodes, *node;
-    const char *strtab, *name;
-    const int *fn_tab;
-
-    nodes = aura_blob_get_nodes(fn_meta);
-    strtab = aura_blob_get_strtab(fn_meta);
-    fn_tab = aura_blob_get_tab(fn_meta);
+    const st_aura_blob_node *nodes = aura_blob_get_nodes(fn_meta), *node;
+    const char *strtab, *name = aura_blob_get_strtab(fn_meta);
+    const int *fn_tab = aura_blob_get_tab(fn_meta);
 
     if (fn_tab[A_IDX_FN_NAME] != 0) {
         node = &nodes[fn_tab[A_IDX_FN_NAME]];
@@ -181,18 +181,28 @@ static void a_fn_name_get(void *fn_meta, char *fn_name) {
 }
 
 static void a_fn_version_get(void *fn_meta, char *fn_version) {
-    const st_aura_blob_node *nodes, *node;
-    const char *strtab;
-    const int *fn_tab;
-
-    nodes = aura_blob_get_nodes(fn_meta);
-    strtab = aura_blob_get_strtab(fn_meta);
-    fn_tab = aura_blob_get_tab(fn_meta);
+    const st_aura_blob_node *nodes = aura_blob_get_nodes(fn_meta), *node;
+    const char *strtab = aura_blob_get_strtab(fn_meta);
+    const int *fn_tab = aura_blob_get_tab(fn_meta);
 
     if (fn_tab[A_IDX_FN_VERSION] != 0) {
         node = &nodes[fn_tab[A_IDX_FN_VERSION]];
         memcpy(fn_version, strtab + node->str_offset, strlen(strtab + node->str_offset));
     }
+}
+
+static int a_fn_id_get(void *fn_meta, uint64_t *fn_id) {
+    const st_aura_blob_node *nodes = aura_blob_get_nodes(fn_meta), *node;
+    const char *strtab = aura_blob_get_strtab(fn_meta);
+    const int *fn_tab = aura_blob_get_tab(fn_meta);
+
+    if (fn_tab[A_IDX_FN_ID] != 0) {
+        node = &nodes[fn_tab[A_IDX_FN_ID]];
+        if (aura_scan_str(strtab + node->str_offset, "%lu" SCNu64, fn_id) < 0)
+            return -1;
+    }
+
+    return 0;
 }
 
 /** */
@@ -202,22 +212,25 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
     struct aura_yml_err_ctx *parser_err;
     JSRuntime *rt;
     JSContext *ctx;
-    bool fail_fast = true, extract = true;
-    int config_fd, entry_file_fd;
-    uint64_t entry_file_len;
     const uint8_t *entry_file, *entry_script;
+    uint64_t entry_file_len;
     uint32_t root_off, func_root, triggers_root;
     struct aura_msg_hdr hdr;
     struct aura_fn_evt evt;
-    char buf[2000];
-    int res, srv_fd = gc->server_fd;
-    int state;
-
     void *bytecode, *fn_meta, *fn_config;
-    uint64_t bytecode_len, fn_meta_size, fn_config_size;
+    uint64_t bytecode_len, fn_meta_size;
+    uint64_t fn_config_size, fn_id;
+    // char fn_name[A_FN_NAME_MAX_LEN];
+    // char fn_version[A_FN_VERSION_MAX_LEN];
+    struct aura_fn_meta _fn_meta;
+    struct aura_fn_config _fn_config;
+    int res, srv_fd = gc->server_fd;
+    int config_fd, entry_file_fd;
+    bool fail_fast = true, extract = true;
+    bool destroy_meta = false;
     struct aura_iovec key, data;
-
-    char fn_name[A_FN_NAME_MAX_LEN], fn_version[A_FN_VERSION_MAX_LEN];
+    char buf[2000];
+    int state;
 
     rt = NULL;  /* Runtime */
     ctx = NULL; /* Runtime context */
@@ -225,8 +238,9 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
     fn_meta = NULL;
     fn_config = NULL;
     entry_script = NULL;
-    memset(fn_name, 0, sizeof(fn_name));
-    memset(fn_version, 0, sizeof(fn_version));
+    // memset(fn_name, 0, sizeof(fn_name));
+    // memset(fn_version, 0, sizeof(fn_version));
+    fn_id = 0;
 
     state = A_FN_OP_STATE_RUNNING;
     switch (state) {
@@ -279,17 +293,24 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
             goto err;
         }
 
-        struct aura_fn_meta _fn_meta;
-        struct aura_fn_config _fn_config;
-
-        /* Build function metadata and verify it's correctness */
+        /* Build function metadata and verify correctness */
         fn_meta = a_build_fn_meta(&usr_data);
+        if (!fn_meta) {
+            error = A_FN_ERROR_CONFIG;
+            goto err;
+        }
+
         fn_meta_size = aura_blob_get_size(fn_meta);
         if (aura_fn_meta_parse(fn_meta, &_fn_meta) != 0) {
             error = A_FN_ERROR_CONFIG;
             goto err;
         }
-        aura_fn_meta_destroy(&_fn_meta);
+        /**
+         * Fn meta is used in fn list setup.
+         * We defer it's destruction to the
+         * end of the deployment process.
+         */
+        destroy_meta = true;
 
         /* Build function config data and verify it's correctness */
         fn_config = a_build_fn_config(&usr_data);
@@ -440,11 +461,13 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
     case A_FN_OP_STATE_TAG:
         struct aura_fn_tag *fn_tag;
 
-        a_fn_name_get(fn_meta, fn_name);
-        a_fn_version_get(fn_meta, fn_version);
+        // a_fn_name_get(fn_meta, fn_name);
+        // a_fn_version_get(fn_meta, fn_version);
+        // a_fn_id_get(fn_meta, &fn_id);
 
         /* Check if we have duplicate */
-        fn_tag = aura_fn_tag_fetch(gc->db_handle, &gc->mc, fn_name, fn_version, &error);
+        // fn_tag = aura_fn_tag_fetch(gc->db_handle, &gc->mc, fn_name, fn_version, &error);
+        fn_tag = aura_fn_tag_fetch(gc->db_handle, &gc->mc, _fn_meta.name, _fn_meta.version, &error);
         if (fn_tag) {
             /* Record no longer needed */
             aura_free(fn_tag);
@@ -493,7 +516,15 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
         /* format: fn:<name>:<version>:<schema_suffix> */
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_META_SUFFIX);
+        // snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_META_SUFFIX);
+        snprintf(
+          buf,
+          sizeof(buf),
+          "%s:%s:%s:%s",
+          A_DB_FN_KEY_PREFIX,
+          _fn_meta.name,
+          _fn_meta.version,
+          A_DB_FN_META_SUFFIX);
         struct aura_iovec meta_key, meta_data;
 
         meta_key.base = buf;
@@ -516,7 +547,15 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
     case A_FN_OP_STATE_CONFIG:
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_CONF_SUFFIX);
+        // snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_CONF_SUFFIX);
+        snprintf(
+          buf,
+          sizeof(buf),
+          "%s:%s:%s:%s",
+          A_DB_FN_KEY_PREFIX,
+          _fn_meta.name,
+          _fn_meta.version,
+          A_DB_FN_CONF_SUFFIX);
 
         struct aura_iovec conf_key, conf_data;
         conf_key.base = buf;
@@ -539,7 +578,15 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
     case A_FN_OP_STATE_CODE:
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_CODE_SUFFIX);
+        // snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_CODE_SUFFIX);
+        snprintf(
+          buf,
+          sizeof(buf),
+          "%s:%s:%s:%s",
+          A_DB_FN_KEY_PREFIX,
+          _fn_meta.name,
+          _fn_meta.version,
+          A_DB_FN_CODE_SUFFIX);
 
         struct aura_iovec code_key, code_data;
         code_key.base = buf;
@@ -565,7 +612,15 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
         /* stats */
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_STAT_SUFFIX);
+        // snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_STAT_SUFFIX);
+        snprintf(
+          buf,
+          sizeof(buf),
+          "%s:%s:%s:%s",
+          A_DB_FN_KEY_PREFIX,
+          _fn_meta.name,
+          _fn_meta.version,
+          A_DB_FN_STAT_SUFFIX);
 
         struct aura_iovec stat_key, stat_data;
 
@@ -593,7 +648,15 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
         /* state */
         memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_STATE_SUFFIX);
+        // snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_STATE_SUFFIX);
+        snprintf(
+          buf,
+          sizeof(buf),
+          "%s:%s:%s:%s",
+          A_DB_FN_KEY_PREFIX,
+          _fn_meta.name,
+          _fn_meta.version,
+          A_DB_FN_STATE_SUFFIX);
 
         struct aura_iovec fn_state_key, fn_state_data;
 
@@ -618,7 +681,7 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
     case A_FN_OP_STATE_FN_LIST_UPDATE:
         /* Insert function into function list */
-        if (aura_fn_list_add_fn(gc->db_handle, &gc->mc, fn_name, fn_version) < 0) {
+        if (aura_fn_list_add_fn(gc->db_handle, &gc->mc, &_fn_meta) < 0) {
             evt.state = A_FN_OP_STATE_FAILED;
             evt.error_code = A_FN_ERROR_GENERIC;
             evt.msg_len = 0;
@@ -652,6 +715,9 @@ err_out:
     aura_resp_send(cli_fd, (void *)&evt, sizeof(evt));
 
 out:
+    if (destroy_meta)
+        aura_fn_meta_destroy(&_fn_meta);
+
     close(cli_fd);
     close(dir_fd);
 

@@ -1,18 +1,12 @@
 #ifndef AURA_RADIX_H
 #define AURA_RADIX_H
 
-/*---- RADIX VERSION 1 AKA Poor man's radix tree ----*/
-/**
- * Offset based radix implementation, it sounds cute right!
- * but about 500 lines in, it became less cute real quick.
- */
-
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/param.h> /** @todo: check if present in other unix variants */
+#include <sys/param.h>
 
 typedef enum {
     A_RAX_NODE_TYPE_SPARSE = 1, /* Node type sparse */
@@ -74,7 +68,7 @@ typedef struct aura_rax_data {
 typedef struct aura_rax_node {
     uint32_t prefix_off; /* offset in prefix string pool */
     uint16_t prefix_len; /* length of str */
-    uint8_t num_of_ch;   /* number of valid children used to iteration */
+    uint8_t num_of_ch;   /* number of valid children used for iteration */
     uint8_t flags;
 
     uint32_t parent_idx;  /* parent node idx */
@@ -93,25 +87,17 @@ typedef struct aura_rax_node {
         struct {
             uint8_t ch_entries[20];  /* each entry leads to the edge char a, b, c, d... */
             uint32_t ch_offsets[20]; /* offset into global rax array where the child node lives */
-            // uint32_t first_ch;       /* First child for iteration */
         } sparse;
         struct {
             /**
              * Direct mapping character to offset in the radix array
              */
             uint8_t direct_ch[256];
-            // uint32_t ch_list[256];
         } dense;
     } children;
 
     aura_rax_data data;
-    /**
-     * This holds the next slot in reserved slots for insertion
-     * If node does not support slots as is the situation for all
-     * non root nodes, it holds the index of the the node.
-     * Default is iterative
-     */
-    bool in_reserved_slot : 1;
+    bool in_reserved_slot; /* Is this node allocated in a reserved slot */
 } aura_rax_node_t;
 
 /**
@@ -157,15 +143,29 @@ typedef struct aura_rax_iterator {
     aura_rax_node_cb cb; /* Optional callback, used especially for buliding blob tree */
 } aura_rax_iterator_t;
 
-aura_rax_tree_t *aura_rax_new(void);
-void aura_rax_free(aura_rax_tree_t *tree);
+/* initialize tree */
+int aura_rax_init(aura_rax_tree_t *);
+
+/* destroy radix tree */
+void aura_rax_free(aura_rax_tree_t *t);
+
+/* Retrieve given key */
 aura_rax_node_t *aura_rax_lookup(aura_rax_tree_t *tree, const char *key, size_t key_len);
-bool aura_rax_insert(aura_rax_tree_t *tree, const char *key, size_t key_len, uint8_t flags, aura_rax_data data);
+
+/* Insert key with associated data */
+bool aura_rax_insert(aura_rax_tree_t *tree, const char *key, size_t key_len,
+                     uint8_t flags, aura_rax_data data);
+
+/* Remove key with it's associated data */
 bool aura_rax_remove(aura_rax_tree_t *tree, const char *key, size_t key_len, aura_rax_data *data);
+
+/* Iterate tree */
 aura_rax_iterator_t aura_rax_iter_begin(aura_rax_tree_t *tree, aura_rax_node_cb cb);
+
+/* Dump tree */
 void a_rax_node_dump(aura_rax_tree_t *t, aura_rax_node_t *node);
 
-/**/
+/* Find offset of given refix */
 uint32_t aura_rax_prefix_find_offset(aura_rax_tree_t *t, const char *prefix, size_t len);
 
 #endif

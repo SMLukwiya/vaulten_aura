@@ -1,12 +1,12 @@
 #ifndef AURA_EVT_LOOP_H
 #define AURA_EVT_LOOP_H
 
-#include "../infra/timer/timer_srv.h"
-#include "time_lib.h"
-
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+
+#include "time_lib.h"
+#include "timer/timer.h"
 
 #define AURA_EVENT_READ 0x1
 #define AURA_EVENT_WRITE 0x2

@@ -107,3 +107,20 @@ pid_t aura_lock_test(int fd, int type, off_t offset, int whence, off_t len) {
 
     return lock.l_pid;
 }
+
+int aura_get_dir_from_file_path(const char *fp, char *buf, size_t len) {
+    char *slash = strrchr(fp, '/');
+    if (!slash)
+        return -1;
+
+    if (len <= slash - fp)
+        return -1;
+
+    memset(buf, 0, len);
+
+    if ((slash - fp) < len)
+        len = slash - fp + 1;
+
+    snprintf(buf, len, "%s", fp);
+    return 0;
+}

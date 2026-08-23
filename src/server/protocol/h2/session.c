@@ -180,7 +180,7 @@ int aura_h2_core_init(struct aura_h2_core *core, struct aura_mem_ctx *mc, bool i
         goto err_map;
     }
 
-    core->intern_tab = aura_intern_tab_create(mc, 128);
+    core->intern_tab = aura_intern_tab_create(mc);
     if (!core->intern_tab) {
         rv = -1;
         goto err_sched;
@@ -206,7 +206,7 @@ void aura_h2_core_destroy(struct aura_h2_core *h2_c, bool is_server) {
     aura_hpack_encoder_destroy(&h2_c->enc);
     aura_hpack_decoder_destroy(&h2_c->dec);
     aura_h2_sched_destroy(&h2_c->scheduler);
-    aura_intern_tab_destroy2(h2_c->intern_tab);
+    aura_intern_tab_destroy(h2_c->intern_tab);
     aura_fq_destroy(&h2_c->fq);
 
     for (int i = 0; i < h2_c->stream_map.cap; ++i) {

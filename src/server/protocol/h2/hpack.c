@@ -1646,7 +1646,8 @@ int aura_hpack_load_static_table(struct aura_mem_ctx *mc) {
     struct aura_hpack_static_table *stat_tab = (struct aura_hpack_static_table *)&static_table;
 
     memset(stat_tab, 0, sizeof(*stat_tab));
-    if (aura_intern_tab_create2(&stat_tab->intern_tab, mc, 128) < 0)
+    stat_tab->intern_tab = aura_intern_tab_create(mc);
+    if (!stat_tab->intern_tab)
         return -1;
 
     for (int i = 1; i < ARRAY_SIZE(rfc_static_table); ++i) {
@@ -1655,13 +1656,13 @@ int aura_hpack_load_static_table(struct aura_mem_ctx *mc) {
         memset(hdr, 0, sizeof(*hdr));
 
         hdr->token = lookup_token(e.name.base, e.name.len);
-        hdr->name = aura_interned_str_find_or_add(&stat_tab->intern_tab, e.name.base, e.name.len);
+        hdr->name = aura_interned_str_find_or_add(stat_tab->intern_tab, e.name.base, e.name.len);
         if (!hdr->name)
             return -1;
 
         hdr->value.interned = NULL;
         if (e.value.len > 0) {
-            hdr->value.interned = aura_interned_str_find_or_add(&stat_tab->intern_tab, e.value.base, e.value.len);
+            hdr->value.interned = aura_interned_str_find_or_add(stat_tab->intern_tab, e.value.base, e.value.len);
             if (!hdr->value.interned)
                 return -1;
         }
@@ -1994,7 +1995,6 @@ static int a_hpack_emit_new_name(struct aura_hpack_decoder *dec,
     bool should_intern_value;
     int rv;
 
-    // app_debug(true, 0, "a_hpack_emit_new_name >>>>");
     memset(hdr, 0, sizeof(*hdr));
     /* intern all names */
     r_name = &dec->name_recv_buf;
@@ -2016,7 +2016,7 @@ static int a_hpack_emit_new_name(struct aura_hpack_decoder *dec,
         goto out;
 
     /* Try and get in static intern table */
-    value = aura_interned_str_find((struct aura_intern_tab *)&static_table.intern_tab, r_value->base, r_value->len);
+    value = aura_interned_str_find(static_table.intern_tab, r_value->base, r_value->len);
     if (value) {
         hdr->value.interned = value;
         hdr->flags |= A_HDR_FIELD_FLAG_VALUE_INTERNED;
@@ -2036,8 +2036,7 @@ static int a_hpack_emit_new_name(struct aura_hpack_decoder *dec,
         hdr->value.raw.str.base = aura_strndup(dec->mc, r_value->base, r_value->len);
         hdr->value.raw.str.len = r_value->len;
 
-        /* No one yet have reference to raw string just created */
-        hdr->value.raw.ref_cnt = 0;
+        hdr->value.raw.ref_cnt = 1;
     }
 
     if (dec->new_tab_insert) {
@@ -2079,7 +2078,7 @@ static int a_hpack_emit_indexed_name(struct aura_hpack_decoder *dec,
     should_intern_value = r_value->len > 0 && r_value->len <= 64 && !(hdr->flags & A_HDR_FIELD_FLAG_NO_INTERN);
 
     /* try getting value in static intern table */
-    value = aura_interned_str_find((struct aura_intern_tab *)&static_table.intern_tab, r_value->base, r_value->len);
+    value = aura_interned_str_find(static_table.intern_tab, r_value->base, r_value->len);
     if (value) {
         hdr->value.interned = value;
         hdr->flags |= A_HDR_FIELD_FLAG_VALUE_INTERNED;
@@ -2100,8 +2099,7 @@ static int a_hpack_emit_indexed_name(struct aura_hpack_decoder *dec,
         hdr->value.raw.str.base = aura_strndup(dec->mc, r_value->base, r_value->len);
         hdr->value.raw.str.len = r_value->len;
 
-        /* No one yet have reference to raw string just created */
-        hdr->value.raw.ref_cnt = 0;
+        hdr->value.raw.ref_cnt = 1;
     }
 
     if (dec->new_tab_insert) {
@@ -2797,7 +2795,7 @@ static void a_hpack_header_find_or_create2(struct aura_header_field *hdr, struct
         hdr->name = static_table.tokens[token].name;
         hdr->flags = static_table.tokens[token].flags;
         /* check for value in static intern table first */
-        hdr->value.interned = aura_interned_str_find((struct aura_intern_tab *)&static_table.intern_tab, val, val_len);
+        hdr->value.interned = aura_interned_str_find(static_table.intern_tab, val, val_len);
         if (hdr->value.interned) {
             hdr->flags |= A_HDR_FIELD_FLAG_VALUE_INTERNED;
             return;

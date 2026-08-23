@@ -7,8 +7,6 @@
 
 /* Http request structure */
 struct aura_http_req {
-    a_http_method_t method;
-    a_http_scheme_t scheme;
     struct aura_iovec path;
     struct {
         struct aura_iovec host;
@@ -19,6 +17,8 @@ struct aura_http_req {
     struct aura_iovec query;
     struct aura_header_vector2 headers;
     int version; /* represent in numeric */
+    uint8_t method;
+    uint8_t scheme;
 };
 
 /* Http response structure */

@@ -4,6 +4,8 @@
 #include "db/db.h"
 #include "dense_pool/static.h"
 #include "error_lib.h"
+#include "event_ctx/context.h"
+#include "fn/lib.h"
 #include "mem.h"
 #include "time_lib.h"
 #include "types_lib.h"
@@ -38,11 +40,13 @@ enum {
 
 /* Daemon Global Config structure */
 struct aura_dmn_glob_conf {
-    AURA_DBHANDLE db_handle;                   /* Database handle */
-    struct aura_mem_ctx mc;                    /* memory context */
-    struct timespec boot_time;                 /* Start time */
-    struct aura_pollfd_dense_pool pollfd_pool; /* Daemon polling structure */
-    struct aura_user_rec user;                 /* Daemon user */
+    struct aura_evt_src_registry evt_src_registry; /* Event sources */
+    struct aura_fn_registry fn_registry;           /* Function registry */
+    AURA_DBHANDLE db_handle;                       /* Database handle */
+    struct aura_mem_ctx mc;                        /* memory context */
+    struct timespec boot_time;                     /* Start time */
+    struct aura_pollfd_dense_pool pollfd_pool;     /* Daemon polling structure */
+    struct aura_user_rec user;                     /* Daemon user */
     struct aura_dmn_conf admin_conf;
     int unix_sock_fd;
     int server_pid;               /* server process id */

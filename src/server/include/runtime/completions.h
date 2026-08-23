@@ -20,7 +20,7 @@ struct aura_completion_queue {
 
 /* Completion structure */
 struct aura_completion {
-    struct aura_task *task;
+    struct _aura_task *task;
     struct aura_list_head c_list;
 };
 
@@ -33,7 +33,7 @@ void aura_completion_queue_destroy(struct aura_completion_queue *cq);
 /* Destroy a completion object */
 void aura_completion_destroy(struct aura_completion *c);
 
-static inline struct aura_completion *aura_completion_create(struct aura_mem_ctx *mc, struct aura_task *task) {
+static inline struct aura_completion *aura_completion_create(struct aura_mem_ctx *mc, struct _aura_task *task) {
     struct aura_completion *c;
 
     c = (struct aura_completion *)aura_alloc(mc, sizeof(*c));

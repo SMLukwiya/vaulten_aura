@@ -1,5 +1,6 @@
 #include "connection.h"
 #include "data_path/data_path.h"
+#include "executors/js/quickjs/bindings.h"
 #include "h2/scheduler.h"
 #include "picotls.h"
 #include "server_srv.h"
@@ -25,7 +26,7 @@ static inline struct aura_conn *a_conn_alloc(struct aura_mem_ctx *mc) {
     sc = aura_slab_cache_find_by_id(mc, A_SLAB_CACHE_GENERIC_CONN);
 
     A_BUG_ON_2(!sc, true);
-    conn = aura_slab_alloc(sc);
+    conn = aura_slab_alloc(sc, sizeof(*conn));
     return conn;
 }
 
@@ -200,7 +201,7 @@ void aura_conn_destroy(struct aura_conn *conn) {
         pthread_mutex_unlock(&conn->srv_ctx->req_coord.mutex);
 
         /* Fail the collected requests */
-        struct aura_js_fetch_ctx *fetch_ctx;
+        struct aura_qjs_fetch_ctx *fetch_ctx;
         while (!aura_list_is_empty(&fail_list)) {
             a_list_dequeue(p_req, &conn->srv_ctx->req_coord.head, p_list);
 
@@ -912,8 +913,8 @@ void aura_conn_process_completions(struct aura_srv_ctx *srv_ctx) {
     struct aura_conn *conn;
     struct aura_h2_client_conn *c;
     struct aura_h2_stream *stream;
-    struct aura_task *task;
-    Response *resp;
+    struct _aura_task *task;
+    _Response *resp;
     int rv = -256;
 
     while (!aura_list_is_empty(&srv_ctx->completions.list)) {

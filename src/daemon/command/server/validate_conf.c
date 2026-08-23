@@ -50,7 +50,7 @@ static inline void a_parse_tree_insert(struct aura_yml_conf_parser *p, yaml_even
     int res;
 
     us = (struct aura_yml_usr_data_ctx *)p->usr_data_ctx;
-    t = us->parse_tree;
+    t = &us->parse_tree;
 
     res = aura_rax_insert(
       t,
@@ -113,7 +113,7 @@ void a_yml_validate_server_info(struct aura_yml_conf_parser *p, yaml_event_t *ev
     int res;
 
     usr_data = (struct aura_yml_usr_data_ctx *)p->usr_data_ctx;
-    rax = usr_data->parse_tree;
+    rax = &usr_data->parse_tree;
 
     if (!yn) {
         app_alert(true, 0, "Validation node not passed: fix asap");
@@ -286,7 +286,7 @@ void a_yml_validate_listeners(struct aura_yml_conf_parser *p, yaml_event_t *evt,
     int res;
 
     usr_data = (struct aura_yml_usr_data_ctx *)p->usr_data_ctx;
-    rax = usr_data->parse_tree;
+    rax = &usr_data->parse_tree;
 
     if (!yn) {
         app_alert(true, 0, "Validation node not passed: fix asap");
@@ -530,7 +530,7 @@ void a_yml_validate_tls(struct aura_yml_conf_parser *p, yaml_event_t *evt, struc
     int res;
 
     usr_data = (struct aura_yml_usr_data_ctx *)p->usr_data_ctx;
-    rax = usr_data->parse_tree;
+    rax = &usr_data->parse_tree;
 
     if (!yn) {
         app_alert(true, 0, "Validation node not passed: fix asap");
@@ -835,7 +835,7 @@ void a_yml_validate_hosts(struct aura_yml_conf_parser *p, yaml_event_t *evt, str
     int res;
 
     usr_data = (struct aura_yml_usr_data_ctx *)p->usr_data_ctx;
-    rax = usr_data->parse_tree;
+    rax = &usr_data->parse_tree;
 
     if (!yn) {
         app_alert(true, 0, "Validation node not passed");
@@ -1116,8 +1116,7 @@ int aura_srv_init_user_data_ctx(struct aura_yml_usr_data_ctx *usr_data, bool ext
     usr_data->extract = extract;
 
     if (usr_data->extract) {
-        usr_data->parse_tree = aura_rax_new();
-        if (!usr_data->parse_tree)
+        if (aura_rax_init(&usr_data->parse_tree) < 0)
             return -1;
 
         aura_blob_builder_init(&usr_data->builder);
@@ -1154,11 +1153,10 @@ void a_srv_free_user_data_ctx(struct aura_yml_usr_data_ctx *usr_data) {
         }
     }
 
-    if (usr_data->parse_tree)
-        aura_rax_free(usr_data->parse_tree);
-
-    if (usr_data->extract)
+    if (usr_data->extract) {
+        aura_rax_free(&usr_data->parse_tree);
         aura_blob_free(&usr_data->builder);
+    }
 
     if (usr_data->node_vec.entries)
         free(usr_data->node_vec.entries);

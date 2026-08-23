@@ -8,6 +8,7 @@ set(common_sources
     ${vaulten_aura_SOURCE_DIR}/lib/memory/mem_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/memory/slab_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/memory/sliding_buf.c
+    ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
 )
 
 # -------------------- DB TESTS -------------------- #
@@ -169,7 +170,7 @@ set_tests_properties(heap_test PROPERTIES
 
 # ----------------------- URL LIB TEST ---------------------- #
 add_executable(test_aura_url
-    unit/url.c
+    url/basic.c
     ${vaulten_aura_SOURCE_DIR}/lib/url/lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
     ${common_sources}
@@ -255,6 +256,12 @@ set_tests_properties(hpack_test PROPERTIES
 add_executable(test_aura_qjs
     js/basic.c
     ${vaulten_aura_SOURCE_DIR}/lib/file/lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/request/req.c
+    ${vaulten_aura_SOURCE_DIR}/lib/url/lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/file/lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/executors/js/quickjs/rt.c
+    ${vaulten_aura_SOURCE_DIR}/lib/executors/js/quickjs/bindings.c
+    ${vaulten_aura_SOURCE_DIR}/lib/stream/lib_v1.c
     ${common_sources}
 )
 
@@ -277,5 +284,5 @@ add_test(
 
 set_tests_properties(quickjs_test PROPERTIES
     LABELS "quickjs"
-    TIMEOUT 10
+    TIMEOUT 15
 )

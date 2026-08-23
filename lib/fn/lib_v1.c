@@ -1,6 +1,7 @@
 #include "blobber/lib.h"
 #include "db/broker.h"
 #include "fn/lib.h"
+#include "string_lib.h"
 
 const struct aura_fn_runtime runtimes[] = {
   {"js", JIT},
@@ -72,6 +73,7 @@ int _fn_conf_tab[] = {
   [A_IDX_FN_FUNCTION] = 0,
   [A_IDX_FN_NAME] = 0,
   [A_IDX_FN_DESCRIPTION] = 0,
+  [A_IDX_FN_ID] = 0,
   [A_IDX_FN_VERSION] = 0,
   [A_IDX_FN_HOST] = 0,
   [A_IDX_FN_ENTRY_POINT] = 0,
@@ -142,9 +144,10 @@ struct aura_fn_list *aura_fn_list_fetch_brokered(struct aura_mem_ctx *mc, int dm
  * If function list record does not exist, create
  * one on the fly.
  */
-int aura_fn_list_add_fn(AURA_DBHANDLE db, struct aura_mem_ctx *mc, char *fn_name, char *fn_version) {
+int aura_fn_list_add_fn(AURA_DBHANDLE db, struct aura_mem_ctx *mc, struct aura_fn_meta *fn_meta) {
     struct aura_fn_list *fn_list, *fns_ptr;
     struct aura_iovec fn_list_key, fn_list_data;
+    struct aura_fn_tag *new_fn;
     size_t fns_len;
     int error;
 
@@ -171,10 +174,35 @@ int aura_fn_list_add_fn(AURA_DBHANDLE db, struct aura_mem_ctx *mc, char *fn_name
         fn_list->func_cnt = 1;
         fn_list->func_tags = (struct aura_fn_tag *)(fn_list_data.base + sizeof(*fn_list));
 
-        memcpy(fn_list->func_tags[0].fn_name, fn_name, A_FN_NAME_MAX_LEN);
-        if (fn_version)
-            memcpy(fn_list->func_tags[0].fn_version, fn_version, A_FN_VERSION_MAX_LEN);
-        // fn_list->func_tags[0].timestamp_ms = time;
+        new_fn = &fn_list->func_tags[0];
+        memcpy(new_fn->fn_name, fn_meta->name, strlen(fn_meta->name));
+        if (fn_meta->version)
+            memcpy(new_fn->fn_version, fn_meta->version, strlen(fn_meta->version));
+        new_fn->fn_id = fn_meta->fn_id;
+        new_fn->timestamp_ms = fn_meta->fn_id;
+
+        int i = 0;
+        while (i < A_FN_MAX_TRIGGERS) {
+            if (fn_meta->http_trigger.path.base) {
+                new_fn->triggers[i].http_trigger.path = aura_strdup(mc, fn_meta->http_trigger.path.base);
+                new_fn->triggers->http_trigger.method = (uint8_t)fn_meta->http_trigger.http_method->value;
+                new_fn->triggers->trigger = A_TRIGGER_HTTP;
+
+                ++i;
+                continue;
+            }
+
+            if (fn_meta->cron_trigger.cron_schedule) {
+                memcpy(new_fn->triggers[i].cron_trigger.schedule, fn_meta->cron_trigger.cron_schedule, 8);
+                new_fn->triggers[i].trigger = A_TRIGGER_CRON;
+
+                ++i;
+                continue;
+            }
+
+            ++i;
+            continue;
+        }
 
         if (aura_db_insert(
               db,
@@ -215,9 +243,34 @@ int aura_fn_list_add_fn(AURA_DBHANDLE db, struct aura_mem_ctx *mc, char *fn_name
 
     /* Copy over new function tag to created slot on fn list */
     memset(fns_ptr->func_tags, 0, sizeof(struct aura_fn_tag));
-    memcpy(fns_ptr->func_tags[0].fn_name, fn_name, A_FN_NAME_MAX_LEN);
-    memcpy(fns_ptr->func_tags[0].fn_version, fn_version, A_FN_VERSION_MAX_LEN);
-    // fns_ptr->func_tags[0].tx_id = tx_id;
+    memcpy(fns_ptr->func_tags[0].fn_name, fn_meta->name, strlen(fn_meta->name));
+    memcpy(fns_ptr->func_tags[0].fn_version, fn_meta->version, strlen(fn_meta->version));
+    new_fn->fn_id = fn_meta->fn_id;
+    new_fn->timestamp_ms = fn_meta->fn_id;
+
+    int i = 0;
+    while (i < A_FN_MAX_TRIGGERS) {
+        if (fn_meta->http_trigger.path.base) {
+            new_fn->triggers[i].http_trigger.path = aura_strdup(mc, fn_meta->http_trigger.path.base);
+            new_fn->triggers->http_trigger.method = (uint8_t)fn_meta->http_trigger.http_method->value;
+            new_fn->triggers->trigger = A_TRIGGER_HTTP;
+
+            ++i;
+            continue;
+        }
+
+        if (fn_meta->cron_trigger.cron_schedule) {
+            memcpy(new_fn->triggers[i].cron_trigger.schedule, fn_meta->cron_trigger.cron_schedule, 8);
+            new_fn->triggers[i].trigger = A_TRIGGER_CRON;
+
+            ++i;
+            continue;
+        }
+
+        ++i;
+        continue;
+    }
+
     fns_ptr->func_cnt++;
 
     if (aura_db_insert(
@@ -237,11 +290,30 @@ int aura_fn_list_add_fn(AURA_DBHANDLE db, struct aura_mem_ctx *mc, char *fn_name
     return 0;
 }
 
+/* Destroy a deleted function tag */
+void a_fn_tag_destroy(struct aura_fn_tag *del_tag) {
+    for (int i = 0; i < A_FN_MAX_TRIGGERS; ++i) {
+        switch (del_tag->triggers[i].trigger) {
+        case A_TRIGGER_HTTP:
+            aura_free(del_tag->triggers[i].http_trigger.path);
+            break;
+
+        case A_TRIGGER_CRON:
+            aura_free(del_tag->triggers[i].cron_trigger.schedule);
+            break;
+
+        default:
+            break;
+        }
+    }
+}
+
 int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
                         char *fn_name, char *fn_version) {
     struct aura_fn_list *fn_list;
     struct aura_fn_tag *tag_arr;
     struct aura_iovec key, data;
+    struct aura_fn_tag *del_tag;
     int res, del_idx;
     int rv, error;
     size_t fns_len;
@@ -262,6 +334,9 @@ int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
             memcmp(fn_list->func_tags[i].fn_version, fn_version, A_FN_VERSION_MAX_LEN) == 0) {
             /* Delete index of matching function */
             tag_arr = (struct aura_fn_tag *)((char *)(fn_list) + sizeof(*fn_list));
+            /* Tag to delete */
+            del_tag = &fn_list->func_tags[i];
+            a_fn_tag_destroy(del_tag);
 
             /* Update fn count */
             --(fn_list->func_cnt);
@@ -334,11 +409,16 @@ int aura_fn_meta_parse(void *meta, struct aura_fn_meta *fn_meta) {
 
     /* Version */
     if (fn_tab[A_IDX_FN_VERSION] != 0) {
-        const char *version;
-
         node = &nodes[fn_tab[A_IDX_FN_VERSION]];
-        version = strtab + node->str_offset;
-        if (aura_scan_str(version, "%d" SCNu32, &fn_meta->version) < 0)
+        fn_meta->version = strdup(strtab + node->str_offset);
+    }
+
+    /* FN ID */
+    if (fn_tab[A_IDX_FN_ID] != 0) {
+        const char *fn_id;
+        node = &nodes[fn_tab[A_IDX_FN_ID]];
+        fn_id = strtab + node->str_offset;
+        if (aura_scan_str(fn_id, "%lu" SCNu64, &fn_meta->fn_id) < 0)
             goto exception;
     }
 
@@ -580,13 +660,20 @@ void *aura_fn_config_blob(struct aura_fn_config *config) {
 
 void aura_fn_meta_destroy(const struct aura_fn_meta *fn_meta) {
     if (fn_meta->name)
-        free((char *)fn_meta->name);
+        free((void *)fn_meta->name);
     if (fn_meta->description)
-        free((char *)fn_meta->description);
+        free((void *)fn_meta->description);
+
+    if (fn_meta->version)
+        free((void *)fn_meta->version);
+
+    if (fn_meta->prev_version)
+        free((void *)fn_meta->prev_version);
+
     if (fn_meta->host)
-        free((char *)fn_meta->host);
+        free((void *)fn_meta->host);
     if (fn_meta->entry_point)
-        free((char *)fn_meta->entry_point);
+        free((void *)fn_meta->entry_point);
 
     aura_fn_resources_destroy(&fn_meta->fn_resources);
 
@@ -673,7 +760,7 @@ struct aura_fn_tag *aura_fn_tag_fetch(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
             fn_tag_found = memcmp(fn_list->func_tags[i].fn_name, fn_name, A_FN_NAME_MAX_LEN) == 0 &&
                            memcmp(fn_list->func_tags[i].fn_version, fn_version, A_FN_VERSION_MAX_LEN) == 0;
         else
-            fn_tag_found = strcmp(fn_list->func_tags[i].fn_name, fn_name) == 0;
+            fn_tag_found = memcmp(fn_list->func_tags[i].fn_name, fn_name, A_FN_NAME_MAX_LEN) == 0;
 
         if (fn_tag_found) {
             data.len = sizeof(struct aura_fn_tag);
@@ -889,6 +976,61 @@ struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
     fn->backend = 1;
 
     return fn;
+}
+
+int aura_fn_queue_init(struct aura_fn_queue *fn_q, struct aura_worker_pool *glob_pool) {
+    memset(fn_q, 0, sizeof(*fn_q));
+
+    if (pthread_mutex_init(&fn_q->lock, NULL) != 0)
+        return -1;
+
+    aura_list_head_init(&fn_q->fn_node);
+    aura_list_head_init(&fn_q->task_list);
+    aura_list_head_init(&fn_q->exec_slots);
+    fn_q->fn = NULL;
+    fn_q->paused = false;
+    fn_q->glob_pool = glob_pool;
+}
+
+int aura_fn_registry_init(struct aura_fn_registry *r, struct aura_mem_ctx *mc, uint32_t max_size) {
+    memset(r, 0, sizeof(*r));
+
+    if (aura_rh_map_init(&r->hashmap, mc, A_FN_MAX_REGISTRY_CNT, A_RH_KEY_U64, false) < 0)
+        return -1;
+}
+
+int aura_fn_cache_init(struct aura_lru_cache *cache, struct aura_slab_cache *sc,
+                       struct aura_mem_ctx *mc) {
+    char *cache_name = aura_strdup(mc, "function cache");
+
+    if (aura_lru_cache_init(
+          cache,
+          cache_name,
+          sc,
+          A_FN_MAX_REGISTRY_CNT,
+          sc->obj_size,
+          offsetof(struct aura_fn, lc_entry)) < 0) {
+        aura_free(cache_name);
+        return -1;
+    }
+
+    return -1;
+}
+
+struct aura_fn_registry_ent *aura_fn_load_fn_registry_entry(struct aura_fn_registry *r,
+                                                            struct aura_fn_tag *fn_tag,
+                                                            uint32_t index) {
+    struct aura_fn_registry_ent *e = &r->entries[index];
+    struct aura_rh_map_key key;
+
+    e->fn = NULL;
+    e->load_state = A_FN_UNLOADED;
+    e->fn_tag = *fn_tag;
+
+    aura_rh_map_key_init(&key, fn_tag->fn_id, sizeof(uint64_t), A_RH_KEY_U64);
+    aura_rh_map_put(&r->hashmap, &key, (void *)e);
+
+    return e;
 }
 
 struct aura_fn *aura_fn_load_brokered(struct aura_mem_ctx *mc, char *fn_name,

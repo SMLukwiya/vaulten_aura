@@ -46,7 +46,7 @@ static inline void a_parse_tree_insert(struct aura_yml_conf_parser *p, yaml_even
     int res;
 
     us = (struct aura_yml_fn_data_ctx *)p->usr_data_ctx;
-    t = us->parse_tree;
+    t = &us->parse_tree;
 
     res = aura_rax_insert(t, yn->full_path, strlen(yn->full_path), A_RAX_NODE_TYPE_SPARSE, a_rax_data_init_int(off));
     if (!res) {
@@ -105,7 +105,7 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
     int res;
 
     usr_data = (struct aura_yml_fn_data_ctx *)p->usr_data_ctx;
-    rax = usr_data->parse_tree;
+    rax = &usr_data->parse_tree;
 
     if (!yn) {
         app_alert(true, 0, "Validation node not passed: fix asap");
@@ -178,6 +178,17 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
         return;
     }
 
+    /* Insert FN ID manually */
+    if (usr_data->extract && !p->in_panic) {
+        uint64_t fn_id = aura_now_ms(CLOCK_MONOTONIC);
+
+        node_off = a_get_node_off(p, evt);
+        yml_node = &usr_data->node_vec.entries[node_off];
+        a_init_yaml_node(yml_node, A_YAML_SCALAR, "id", A_YAML_NUM, A_IDX_FN_ID);
+        yml_node->uint_val = fn_id;
+        a_parse_tree_insert(p, evt, yn, node_off);
+    }
+
     /* FN entry point */
     if (strcmp(yn->key, "entrypoint") == 0) {
         int entry_fd;
@@ -228,7 +239,7 @@ void a_fn_validate_env(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct
     int res;
 
     usr_data = (struct aura_yml_fn_data_ctx *)p->usr_data_ctx;
-    rax = usr_data->parse_tree;
+    rax = &usr_data->parse_tree;
 
     if (!yn) {
         app_alert(true, 0, "Validation node not passed: fix asap");
@@ -355,7 +366,7 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
     int res;
 
     usr_data = (struct aura_yml_fn_data_ctx *)p->usr_data_ctx;
-    rax = usr_data->parse_tree;
+    rax = &usr_data->parse_tree;
 
     if (!yn) {
         app_alert(true, 0, "Validation node not passed: fix asap");
@@ -555,7 +566,7 @@ void a_fn_validate_concurrency(struct aura_yml_conf_parser *p, yaml_event_t *evt
     int res;
 
     usr_data = (struct aura_yml_fn_data_ctx *)p->usr_data_ctx;
-    rax = usr_data->parse_tree;
+    rax = &usr_data->parse_tree;
 
     if (!yn) {
         app_alert(true, 0, "Validation node not passed: fix asap");
@@ -670,7 +681,7 @@ void a_fn_validate_resource(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
     int res;
 
     usr_data = (struct aura_yml_fn_data_ctx *)p->usr_data_ctx;
-    rax = usr_data->parse_tree;
+    rax = &usr_data->parse_tree;
 
     if (!yn) {
         app_alert(true, 0, "Validation node not passed: fix asap");
@@ -776,15 +787,19 @@ int aura_function_validator_len = ARRAY_SIZE(aura_function_validator);
 /**
  *
  */
-void a_fn_init_user_data_ctx(struct aura_yml_fn_data_ctx *usr_data, bool extract, int fn_dir_fd) {
+int a_fn_init_user_data_ctx(struct aura_yml_fn_data_ctx *usr_data, bool extract, int fn_dir_fd) {
     memset(usr_data, 0, sizeof(*usr_data));
     usr_data->extract = extract;
     usr_data->dir_fd = fn_dir_fd; /* function directory fd */
 
     if (usr_data->extract) {
-        usr_data->parse_tree = aura_rax_new();
+        if (aura_rax_init(&usr_data->parse_tree) < 0)
+            return -1;
+
         aura_blob_builder_init(&usr_data->builder);
     }
+
+    return 0;
 }
 
 void a_fn_free_user_data_ctx(struct aura_yml_fn_data_ctx *usr_data) {
@@ -800,11 +815,10 @@ void a_fn_free_user_data_ctx(struct aura_yml_fn_data_ctx *usr_data) {
         }
     }
 
-    if (usr_data->parse_tree)
-        aura_rax_free(usr_data->parse_tree);
-
-    if (usr_data->extract)
+    if (usr_data->extract) {
+        aura_rax_free(&usr_data->parse_tree);
         aura_blob_free(&usr_data->builder);
+    }
 
     if (usr_data->node_vec.entries)
         free(usr_data->node_vec.entries);
@@ -822,7 +836,10 @@ void aura_dmn_validate_fn_conf(int conf_fd, int cli_fd) {
 
     parser_err = aura_create_yml_error_ctx(fail_fast);
     /* we don't have the dir fd when validating, so we just pass -1 */
-    a_fn_init_user_data_ctx(&usr_data, extract, -1);
+    if (a_fn_init_user_data_ctx(&usr_data, extract, -1) < 0) {
+        aura_resp_send(cli_fd, (void *)fn_config_valid, sizeof(fn_config_valid) - 1);
+        return;
+    }
 
     res = aura_load_config_fd(conf_fd, aura_function_validator, aura_function_validator_len, parser_err, (void *)&usr_data);
     if (res != 0 && parser_err->err_cnt > 0) {

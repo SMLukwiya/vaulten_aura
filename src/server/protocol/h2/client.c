@@ -4,6 +4,7 @@
 
 #include "h2/client.h"
 #include "connection.h"
+#include "executors/js/quickjs/bindings.h"
 #include "header_srv.h"
 #include "pending_req.h"
 #include "picotls.h"
@@ -145,7 +146,7 @@ int aura_h2_client_handle_queued_streams(struct aura_h2_client_conn *c) {
     struct aura_req_coordinator *req_c;
     struct aura_pending_req *p_req;
     struct aura_h2_stream *stream;
-    struct aura_js_fetch_ctx *fetch_ctx;
+    struct aura_qjs_fetch_ctx *fetch_ctx;
     struct aura_list_head process_list, fail_list;
     int rv;
 
@@ -189,7 +190,8 @@ int aura_h2_client_handle_queued_streams(struct aura_h2_client_conn *c) {
             /**
              * This consumes request object fetch_ctx->req.
              */
-            aura_h2_stream_claim_rt_request(c->conn->mc, stream, fetch_ctx->req);
+            // aura_h2_stream_claim_rt_request(c->conn->mc, stream, fetch_ctx->req);
+            aura_h2_stream_claim_rt_request(c->conn->mc, stream, NULL);
             fetch_ctx->req = NULL;
 
             aura_pending_req_destroy(p_req);
@@ -313,150 +315,150 @@ int aura_client_handshake_init(struct aura_conn *conn) {
 /**
  * Create client requests
  */
-int aura_h2_client_req_create(struct aura_js_fetch_ctx *fetch_ctx, struct aura_srv_ctx *srv_ctx) {
+int aura_h2_client_req_create(struct aura_qjs_fetch_ctx *fetch_ctx, struct aura_srv_ctx *srv_ctx) {
     struct aura_conn *conn;
     struct aura_h2_client_conn *c;
     struct aura_h2_stream *stream;
     struct aura_rh_map_key key;
     struct aura_pending_req *pending_req;
-    Request *req = fetch_ctx->req;
-    struct aura_mem_ctx *mc = srv_ctx->mc;
+    // Request *req = fetch_ctx->req;
+    // struct aura_mem_ctx *mc = srv_ctx->mc;
     int rv;
 
-    if (aura_url_parse(mc, req->url.base, req->url.len, &req->parsed_url) < 0) {
-        return -1;
-    }
+    // if (aura_url_parse(mc, req->url.base, req->url.len, &req->parsed_url) < 0) {
+    //     return -1;
+    // }
 
-    /* Search in connection pool matching connection */
-    aura_rh_map_key_init(&key, (uint64_t)req->parsed_url.authority.host.base, req->parsed_url.authority.host.len, A_RH_KEY_STR);
+    // /* Search in connection pool matching connection */
+    // aura_rh_map_key_init(&key, (uint64_t)req->parsed_url.authority.host.base, req->parsed_url.authority.host.len, A_RH_KEY_STR);
 
-    pthread_mutex_lock(&srv_ctx->conn_pool.mutex);
-    conn = aura_rh_map_get(&srv_ctx->conn_pool.pool, &key);
+    // pthread_mutex_lock(&srv_ctx->conn_pool.mutex);
+    // conn = aura_rh_map_get(&srv_ctx->conn_pool.pool, &key);
 
-    if (!conn) {
-        struct aura_srv_sock sock;
+    // if (!conn) {
+    //     struct aura_srv_sock sock;
 
-        conn = aura_conn_create(srv_ctx, false, true, false);
-        if (!conn) {
-            pthread_mutex_unlock(&srv_ctx->conn_pool.mutex);
-            return -1;
-        }
+    //     conn = aura_conn_create(srv_ctx, false, true, false);
+    //     if (!conn) {
+    //         pthread_mutex_unlock(&srv_ctx->conn_pool.mutex);
+    //         return -1;
+    //     }
 
-        if (aura_rh_map_put(&srv_ctx->conn_pool.pool, &key, conn) > 0) {
-            aura_conn_destroy(conn);
-            pthread_mutex_unlock(&srv_ctx->conn_pool.mutex);
-            return -1;
-        }
-        pthread_mutex_unlock(&srv_ctx->conn_pool.mutex);
+    //     if (aura_rh_map_put(&srv_ctx->conn_pool.pool, &key, conn) > 0) {
+    //         aura_conn_destroy(conn);
+    //         pthread_mutex_unlock(&srv_ctx->conn_pool.mutex);
+    //         return -1;
+    //     }
+    //     pthread_mutex_unlock(&srv_ctx->conn_pool.mutex);
 
-        /**
-         * We don't lock the conn while doing
-         * the heavy conn setup work, we only
-         * lock while updating the state, since thats
-         * the only thing other threads care about
-         */
-        if (aura_client_init(&conn->sock, req->parsed_url.authority.host.base, SOCK_STREAM) < 0) {
-            rv = -1;
-            goto err;
-        }
-        aura_conn_set_server_name(conn, req->parsed_url.authority.host.base, req->parsed_url.authority.host.len);
+    //     /**
+    //      * We don't lock the conn while doing
+    //      * the heavy conn setup work, we only
+    //      * lock while updating the state, since thats
+    //      * the only thing other threads care about
+    //      */
+    //     if (aura_client_init(&conn->sock, req->parsed_url.authority.host.base, SOCK_STREAM) < 0) {
+    //         rv = -1;
+    //         goto err;
+    //     }
+    //     aura_conn_set_server_name(conn, req->parsed_url.authority.host.base, req->parsed_url.authority.host.len);
 
-        /* Create underlying protocol ctx */
-        // if (conn->protocol_callbacks.on_create(conn) < 0) {
-        //     rv = -1;
-        //     goto err;
-        // }
-        // h2_conn = conn->protocol_ctx.ctx;
+    //     /* Create underlying protocol ctx */
+    //     // if (conn->protocol_callbacks.on_create(conn) < 0) {
+    //     //     rv = -1;
+    //     //     goto err;
+    //     // }
+    //     // h2_conn = conn->protocol_ctx.ctx;
 
-        /* add to event loop */
-        if (conn->srv_ctx->evt_loop->ops->add(conn->srv_ctx->evt_loop, conn->sock.sock_fd, conn, AURA_EVENT_READ) < 0) {
-            rv = -1;
-            goto err;
-        }
+    //     /* add to event loop */
+    //     if (conn->srv_ctx->evt_loop->ops->add(conn->srv_ctx->evt_loop, conn->sock.sock_fd, conn, AURA_EVENT_READ) < 0) {
+    //         rv = -1;
+    //         goto err;
+    //     }
 
-        /* Initialize handshake after successful creation of connection */
-        if (aura_client_handshake_init(conn) < 0) {
-            conn->srv_ctx->evt_loop->ops->remove(conn->srv_ctx->evt_loop, conn->sock.sock_fd);
-            rv = -1;
-            goto err;
-        }
+    //     /* Initialize handshake after successful creation of connection */
+    //     if (aura_client_handshake_init(conn) < 0) {
+    //         conn->srv_ctx->evt_loop->ops->remove(conn->srv_ctx->evt_loop, conn->sock.sock_fd);
+    //         rv = -1;
+    //         goto err;
+    //     }
 
-        /* Attach request to run once handshake completes */
-        pending_req = aura_pending_req_create(
-          mc,
-          A_PENDING_REQ_H2_JS,
-          (void *)fetch_ctx,
-          (user_data_destructor)aura_qjs_fetch_ctx_destroy,
-          conn,
-          req->parsed_url.authority.host.base,
-          req->parsed_url.authority.host.len);
-        if (!pending_req) {
-            conn->srv_ctx->evt_loop->ops->remove(conn->srv_ctx->evt_loop, conn->sock.sock_fd);
-            rv = -1;
-            goto err;
-        }
+    //     /* Attach request to run once handshake completes */
+    //     pending_req = aura_pending_req_create(
+    //       mc,
+    //       A_PENDING_REQ_H2_JS,
+    //       (void *)fetch_ctx,
+    //       (user_data_destructor)aura_qjs_fetch_ctx_destroy,
+    //       conn,
+    //       req->parsed_url.authority.host.base,
+    //       req->parsed_url.authority.host.len);
+    //     if (!pending_req) {
+    //         conn->srv_ctx->evt_loop->ops->remove(conn->srv_ctx->evt_loop, conn->sock.sock_fd);
+    //         rv = -1;
+    //         goto err;
+    //     }
 
-        aura_pending_req_add(&conn->srv_ctx->req_coord, pending_req);
+    //     aura_pending_req_add(&conn->srv_ctx->req_coord, pending_req);
 
-    } else {
-        pthread_mutex_unlock(&srv_ctx->conn_pool.mutex);
+    // } else {
+    //     pthread_mutex_unlock(&srv_ctx->conn_pool.mutex);
 
-        /* lock the conn itself to check valid state */
-        pthread_mutex_lock(&c->mutex);
+    //     /* lock the conn itself to check valid state */
+    //     pthread_mutex_lock(&c->mutex);
 
-        if (conn->state == A_CONN_STATE_CONNECTING) {
-            pthread_mutex_unlock(&c->mutex);
+    //     if (conn->state == A_CONN_STATE_CONNECTING) {
+    //         pthread_mutex_unlock(&c->mutex);
 
-            pending_req = aura_pending_req_create(
-              mc,
-              A_PENDING_REQ_H2_JS,
-              (void *)fetch_ctx,
-              (user_data_destructor)aura_qjs_fetch_ctx_destroy,
-              conn,
-              req->parsed_url.authority.host.base,
-              req->parsed_url.authority.host.len);
-            /* return to the caller so it errors fails js request immediately */
-            if (!pending_req) {
-                return -1;
-            }
+    //         pending_req = aura_pending_req_create(
+    //           mc,
+    //           A_PENDING_REQ_H2_JS,
+    //           (void *)fetch_ctx,
+    //           (user_data_destructor)aura_qjs_fetch_ctx_destroy,
+    //           conn,
+    //           req->parsed_url.authority.host.base,
+    //           req->parsed_url.authority.host.len);
+    //         /* return to the caller so it errors fails js request immediately */
+    //         if (!pending_req) {
+    //             return -1;
+    //         }
 
-            aura_pending_req_add(&conn->srv_ctx->req_coord, pending_req);
-            rv = 0;
-        } else {
-            /* Connection in ready state */
+    //         aura_pending_req_add(&conn->srv_ctx->req_coord, pending_req);
+    //         rv = 0;
+    //     } else {
+    //         /* Connection in ready state */
 
-            c = &conn->h2_client;
-            stream = aura_h2_conn_stream_open(
-              &c->core,
-              mc,
-              c->core.next_stream_id,
-              A_H2_STREAM_STATE_IDLE,
-              0,
-              (void *)fetch_ctx,
-              (user_data_destructor)aura_qjs_fetch_ctx_destroy,
-              false);
-            if (!stream) {
-                pthread_mutex_unlock(&c->mutex);
-                return -1;
-            }
+    //         c = &conn->h2_client;
+    //         stream = aura_h2_conn_stream_open(
+    //           &c->core,
+    //           mc,
+    //           c->core.next_stream_id,
+    //           A_H2_STREAM_STATE_IDLE,
+    //           0,
+    //           (void *)fetch_ctx,
+    //           (user_data_destructor)aura_qjs_fetch_ctx_destroy,
+    //           false);
+    //         if (!stream) {
+    //             pthread_mutex_unlock(&c->mutex);
+    //             return -1;
+    //         }
 
-            if (aura_h2_stream_claim_rt_request(mc, stream, req) < 0) {
-                aura_h2_stream_destroy(stream, false);
-                pthread_mutex_unlock(&c->mutex);
-                return -1;
-            }
+    //         if (aura_h2_stream_claim_rt_request(mc, stream, req) < 0) {
+    //             aura_h2_stream_destroy(stream, false);
+    //             pthread_mutex_unlock(&c->mutex);
+    //             return -1;
+    //         }
 
-            rv = aura_h2_client_request_send(&c->core, stream);
-            if (rv < 0) {
-                aura_h2_stream_destroy(stream, false);
-                pthread_mutex_unlock(&c->mutex);
-                return -1;
-            }
-            pthread_mutex_unlock(&c->mutex);
+    //         rv = aura_h2_client_request_send(&c->core, stream);
+    //         if (rv < 0) {
+    //             aura_h2_stream_destroy(stream, false);
+    //             pthread_mutex_unlock(&c->mutex);
+    //             return -1;
+    //         }
+    //         pthread_mutex_unlock(&c->mutex);
 
-            rv = 0;
-        }
-    }
+    //         rv = 0;
+    //     }
+    // }
 
     return rv;
 
@@ -593,7 +595,7 @@ err:
 
 void aura_h2_fetch_ctx_req_destroy(void *data) {
     struct aura_h2_pending_req *p_req = data;
-    struct aura_js_fetch_ctx *fetch_ctx;
+    struct aura_qjs_fetch_ctx *fetch_ctx;
 
     if (!p_req)
         return;
@@ -651,7 +653,7 @@ void aura_cli_handle_conn_failure(struct aura_conn *conn) {
     pthread_mutex_unlock(&conn->srv_ctx->req_coord.mutex);
 
     /* Fail to collected requests */
-    struct aura_js_fetch_ctx *fetch_ctx;
+    struct aura_qjs_fetch_ctx *fetch_ctx;
     while (!aura_list_is_empty(&fail_list)) {
         a_list_dequeue(p_req, &conn->srv_ctx->req_coord.head, p_list);
 

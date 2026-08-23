@@ -3,6 +3,7 @@
 #include "db_broker.h"
 #include "dmn.h"
 #include "error_lib.h"
+#include "event_ctx/context.h"
 #include "ipc/wait.h"
 #include "utils_lib.h"
 
@@ -86,7 +87,7 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, void *_conf) {
 
     /* Server */
     server_root = aura_build_blob_from_rax(
-      usr_data.parse_tree,
+      &usr_data.parse_tree,
       &usr_data.builder,
       usr_data.node_vec.entries,
       "server",
@@ -101,7 +102,7 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, void *_conf) {
 
     /* listeners */
     listener_root = aura_build_blob_from_rax(
-      usr_data.parse_tree,
+      &usr_data.parse_tree,
       &usr_data.builder,
       usr_data.node_vec.entries,
       "listeners",
@@ -116,7 +117,7 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, void *_conf) {
 
     /* tls */
     tls_root = aura_build_blob_from_rax(
-      usr_data.parse_tree,
+      &usr_data.parse_tree,
       &usr_data.builder,
       usr_data.node_vec.entries,
       "tls",
@@ -131,7 +132,7 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, void *_conf) {
 
     /* Host */
     host_root = aura_build_blob_from_rax(
-      usr_data.parse_tree,
+      &usr_data.parse_tree,
       &usr_data.builder,
       usr_data.node_vec.entries,
       "hosts",
@@ -223,12 +224,21 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, void *_conf) {
         close(sock_fds[1]);
         parent_sock_closed = true;
 
-        a_init_msg_hdr(hdr, config_size, A_MSG_CONF_DATA, 0);
+        /* send over server configs */
+        a_init_msg_hdr(hdr, config_size, A_MSG_CONF_DATA, A_SERVER_CONF);
         if (aura_msg_send(sock_fds[0], &hdr, config, config_size, -1) != 0) {
             sys_debug(true, errno, "aura_dmn_start_server: send config error:");
             ret_val = -1;
             goto err_ipc_wait;
         }
+
+        // /* send over routing paths information */
+        // a_init_msg_hdr(hdr, config_size, A_MSG_CONF_DATA, A_ROUTING_INFO);
+        // if (aura_msg_send(sock_fds[0], &hdr, gc->evt_src_registry.sources[0].http_src.routes, config_size, -1) != 0) {
+        //     sys_debug(true, errno, "aura_dmn_start_server: send config error:");
+        //     ret_val = -1;
+        //     goto err_ipc_wait;
+        // }
 
         /* tell server things are set */
         if (aura_child_ipc_proceed(pid) == -1) {

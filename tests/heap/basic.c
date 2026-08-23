@@ -79,6 +79,7 @@ static void a_test_max_heap_insert_delete(void) {
     }
 
     aura_heap_destroy(hp);
+    aura_free(hp);
 }
 
 static void a_test_min_heap_insert_delete(void) {
@@ -127,6 +128,7 @@ static void a_test_min_heap_insert_delete(void) {
     }
 
     aura_heap_destroy(hp);
+    aura_free(hp);
 }
 
 int main(int argc, char **argv) {

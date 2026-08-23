@@ -1,23 +1,28 @@
 #ifndef AURA_FUNCTION_LIB_H
 #define AURA_FUNCTION_LIB_H
 
-#include "blobber/lib.h"
-#include "db/db.h"
-#include "error_lib.h"
-#include "heap/lib.h"
-#include "radix/tree.h"
-#include "time_lib.h"
-#include "types_lib.h"
-#include "utils_lib.h"
-
 #include <stdbool.h>
 #include <stdint.h>
 #include <sys/time.h>
 #include <sys/types.h>
 
-#define A_FN_NAME_MAX_LEN 256
+#include "blobber/lib.h"
+#include "db/db.h"
+#include "error_lib.h"
+#include "hashmap/map.h"
+#include "heap/lib.h"
+#include "memory/lru_cache.h"
+#include "radix/tree.h"
+#include "task_queue/tq.h"
+#include "time_lib.h"
+#include "types_lib.h"
+#include "utils_lib.h"
+
+#define A_FN_NAME_MAX_LEN 128
 #define A_FN_VERSION_MAX_LEN 32
 #define A_FN_DEFAULT_VERSION "1.0.0"
+#define A_FN_MAX_REGISTRY_CNT 32
+#define A_FN_MAX_TRIGGERS 16
 
 /* Namespace prefixes */
 #define A_DB_FN_KEY_PREFIX "fn"
@@ -30,6 +35,10 @@
 #define A_DB_FN_STATE_SUFFIX "state"
 
 #define A_FN_LIST_KEY "system:functions"
+
+enum aura_fn_cache_id {
+    A_FN_SLAB_CACHE_ID = A_SLAB_CACHE_FN_BASE + 1
+};
 
 /* Namespaces */
 typedef enum {
@@ -76,6 +85,7 @@ enum a_fn_node_idx {
     A_IDX_FN_NAME,
     A_IDX_FN_DESCRIPTION,
     A_IDX_FN_VERSION,
+    A_IDX_FN_ID,
     A_IDX_FN_HOST,
     A_IDX_FN_ENTRY_POINT,
     A_IDX_FN_ENV,
@@ -102,7 +112,7 @@ struct aura_yml_fn_data_ctx {
     bool seen_aura_version;
     bool extract;
     uint32_t trigger_type;
-    aura_rax_tree_t *parse_tree;
+    aura_rax_tree_t parse_tree;
     st_aura_b_builder builder;
     struct {
         struct aura_yml_node *entries;
@@ -459,8 +469,9 @@ reliability:
 struct aura_fn_meta {
     const char *name;
     const char *description;
-    uint32_t version;
-    uint32_t prev_version;
+    uint64_t fn_id;
+    const char *version;
+    const char *prev_version;
     const char *host;
     const char *entry_point;
     struct aura_fn_http_trigger http_trigger;
@@ -512,41 +523,78 @@ struct aura_fn_stat_wrapper {
     struct aura_heap_ent hp_ent;
 };
 
-/** Function state */
-struct aura_fn_state {
-    bool is_active; /* Fn can be invoked */
+enum {
+    A_FN_UNLOADED,
+    A_FN_LOADED,
+    A_FN_LOADING,
 };
 
-/* Function Complete structure (contains everything about a fn) */
-struct aura_fn {
-    uint64_t fn_id;
-    uint8_t backend;
-    struct aura_fn_meta meta;
-    struct aura_fn_config config;
-    struct aura_fn_stat stats;
-    struct aura_fn_state state;
-    uint64_t fn_code_len;
-    void *fn_code;
-};
+/* Fn tag trigger structure */
+struct fn_tag_trigger {
+    union {
+        struct {
+            char *path;
+            uint8_t method;
+        } http_trigger;
+        struct {
+            char schedule[8];
+        } cron_trigger;
+    };
+    uint8_t trigger;
+} __attribute__((packed));
 
 /**
- * Function smallest structure.
- * I would imagine being able to locate in a reliable way
- * the latest version of a function given only the function name.
- * Given how keys are currently generated, a structure
- * like this would help since the key is simply the fn name
- * This is very tiny as compared to the real function meta
+ * Function structure used in function list structure.
+ * It would be nice to be able to represent functions
+ * without having to load the massive full function
+ * representation.
  */
 struct aura_fn_tag {
-    char fn_name[A_FN_NAME_MAX_LEN];          /* Function name */
-    uint8_t fn_version[A_FN_VERSION_MAX_LEN]; /* Function version */
-    uint64_t timestamp_ms;                    /* Deployment date */
+    char fn_name[A_FN_NAME_MAX_LEN];                   /* Function name */
+    uint8_t fn_version[A_FN_VERSION_MAX_LEN];          /* Function version */
+    uint64_t fn_id;                                    /* Function ID */
+    uint64_t timestamp_ms;                             /* Deployment time */
+    struct fn_tag_trigger triggers[A_FN_MAX_TRIGGERS]; /* Function triggers */
 };
 
 /** System functions structure */
 struct aura_fn_list {
     size_t func_cnt;
     struct aura_fn_tag *func_tags;
+};
+
+/* Function registry entry */
+struct aura_fn_registry_ent {
+    struct aura_fn_tag fn_tag;
+    struct aura_fn *fn;
+    struct aura_fn_queue fn_queue;
+    uint8_t load_state;
+};
+
+/* Function registry structure */
+struct aura_fn_registry {
+    struct aura_fn_registry_ent entries[A_FN_MAX_REGISTRY_CNT];
+    struct aura_rh_map hashmap; /* Quick fn lookup */
+};
+
+/** Function state */
+struct aura_fn_state {
+    bool is_active; /* Fn can be invoked */
+};
+
+/**
+ * Function Complete structure (contains everything about a fn)
+ */
+struct aura_fn {
+    struct aura_fn_meta meta;
+    struct aura_fn_config config;
+    struct aura_fn_stat stats;
+    struct aura_fn_state state;
+    uint64_t fn_code_len;
+    void *fn_code;
+    uint8_t backend;
+    /* LRU cache entry */
+    struct aura_lru_entry lc_entry;
 };
 
 struct aura_fn_tls_version {
@@ -687,7 +735,41 @@ static inline const struct aura_fn_oom_policy *aura_fn_oom_policy_get(const char
     }
 }
 
-/**/
+/**
+ * copy function transfering ownership of
+ * internal fields over to the cache slot
+ * represented by lru_entry.
+ */
+static inline void aura_fn_cache_load(struct aura_lru_entry *e, struct aura_fn *fn) {
+    uint64_t fn_size = offsetof(struct aura_fn, lc_entry);
+    void *slot = aura_lru_cache_entry(e, struct aura_fn, lc_entry);
+    /**
+     * lru entry is the last member of
+     * the fn struct. fn_size should there
+     * represent the length excluding the last
+     * member "lc_entry". We only copy the fn part.
+     */
+    memcpy(slot, fn, fn_size);
+
+    /**
+     * zero out the fn incase we call delete fn after.
+     * So we can preserve what we just transfere over.
+     */
+    memset(fn, 0, sizeof(*fn));
+}
+
+/* Create function backing cache */
+static inline struct aura_slab_cache *aura_fn_slab_cache_create(struct aura_mem_ctx *mc) {
+    return aura_slab_cache_create(
+      mc,
+      A_FN_SLAB_CACHE_ID,
+      "function cache",
+      sizeof(struct aura_fn),
+      NULL,
+      0);
+}
+
+/* Dump fn event structure */
 static inline void aura_fn_evt_response_dump(struct aura_fn_evt *evt, bool daemon) {
     app_debug(daemon, 0, "AURA FN EVT RESPONSE");
     app_debug(daemon, 0, "    State: %u", evt->state);
@@ -697,6 +779,10 @@ static inline void aura_fn_evt_response_dump(struct aura_fn_evt *evt, bool daemo
         app_debug(daemon, 0, "    Message: %p", evt->_msg);
 }
 
+/**
+ * Given a function representation string passed from
+ * cli. Extract the fn name and version.
+ */
 static inline void aura_fn_get_name_and_version(struct iovec *fn, char *fn_name,
                                                 uint64_t func_len, char *fn_version,
                                                 uint64_t func_vlen) {
@@ -724,40 +810,29 @@ static inline void aura_fn_get_name_and_version(struct iovec *fn, char *fn_name,
     memcpy(fn_name, fn->iov_base, func_len);
 }
 
-/** Parse function meta data */
+/* Parse function meta data */
 int aura_fn_meta_parse(void *meta, struct aura_fn_meta *fn_meta);
 
 /* Parse function config */
 int aura_fn_config_parse(void *config, struct aura_fn_config *fn_config);
 
-/** Free funtion meta data */
+/* Destroy funtion meta data */
 void aura_fn_meta_destroy(const struct aura_fn_meta *fn_meta);
 
-/** Free function config */
+/* Destroy function config */
 void aura_fn_config_destroy(struct aura_fn_config *fn_config);
 
-/**/
+/* Destroy function resource structure */
 void aura_fn_resources_destroy(const struct aura_fn_resources *resources);
 
-/**/
+/* Destroy function http trigger structure */
 void aura_fn_http_trigger_destroy(const struct aura_fn_http_trigger *http_trigger);
 
-/**/
+/* Destroy function cron trigger structure */
 void aura_fn_cron_trigger_destroy(const struct aura_fn_cron_trigger *cron_trigger);
 
-/**/
+/* Destroy function networking structure */
 void aura_fn_networking_destroy(const void *networking);
-
-/**
- * Free function
- */
-void aura_fn_destroy(struct aura_fn *fn);
-
-/**/
-void aura_fn_meta_dump(struct aura_fn_meta *fn_meta);
-
-/**/
-void aura_fn_config_dump(struct aura_fn_config *fn_conf);
 
 /**
  * Get 'tiny' function meta data from
@@ -771,8 +846,7 @@ struct aura_fn_tag *aura_fn_tag_fetch(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
 struct aura_fn_list *aura_fn_list_fetch(AURA_DBHANDLE db, int *error);
 
 /** Add a new function to the list of deployed functions */
-int aura_fn_list_add_fn(AURA_DBHANDLE db, struct aura_mem_ctx *mc, char *fn_name,
-                        char *fn_version);
+int aura_fn_list_add_fn(AURA_DBHANDLE db, struct aura_mem_ctx *mc, struct aura_fn_meta *fn_meta);
 
 /** Brokered fetch for the list of deployed functions */
 struct aura_fn_list *aura_fn_list_fetch_brokered(struct aura_mem_ctx *mc, int dmn_sock_fd, int *error);
@@ -781,27 +855,38 @@ struct aura_fn_list *aura_fn_list_fetch_brokered(struct aura_mem_ctx *mc, int dm
 int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
                         char *fn_name, char *fn_version);
 
-/** */
-struct aura_fn_stat *aura_fn_stat_fetch_brokered(struct aura_mem_ctx *mc, char *fn_name, char *fn_version, int dmn_fd);
-
-/**/
+/* Get function meta */
 struct aura_iovec aura_fn_meta_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_version);
 
-/**/
+/* Get function config */
 struct aura_iovec aura_fn_config_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_version);
 
-/**/
+/* Get function code */
 struct aura_iovec aura_fn_code_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_version);
 
-/**/
+/* Get function state*/
 struct aura_iovec aura_fn_state_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_version);
 
-/**
- * Load a function to memory
- */
+/* Get a function's complete structure */
 struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_mem_ctx *mc, char *fn_name, char *fn_version);
 
-/** */
+/* Initialize function registry */
+int aura_fn_registry_init(struct aura_fn_registry *r, struct aura_mem_ctx *mc, uint32_t max_size);
+
+/* Initialize fn cache */
+int aura_fn_cache_init(struct aura_lru_cache *cache, struct aura_slab_cache *sc,
+                       struct aura_mem_ctx *mc);
+
+/* Load function registry */
+struct aura_fn_registry_ent *aura_fn_load_fn_registry_entry(struct aura_fn_registry *r,
+                                                            struct aura_fn_tag *fn_tag,
+                                                            uint32_t index);
+
+/* */
+struct aura_fn_stat *aura_fn_stat_fetch_brokered(struct aura_mem_ctx *mc, char *fn_name,
+                                                 char *fn_version, int dmn_fd);
+
+/* */
 struct aura_fn *aura_fn_load_brokered(struct aura_mem_ctx *mc, char *fn_name, char *fn_version, int sock_fd);
 
 /** Fetch function stats */
@@ -810,7 +895,19 @@ struct aura_fn_stat *aura_fn_stat_fetch(AURA_DBHANDLE db, char *fn_name, char *f
 /* Compare function stats */
 int aura_fn_stat_compare(struct aura_heap_ent *s1, struct aura_heap_ent *s2);
 
-/**/
+/* Initialize function queue */
+int aura_fn_queue_init(struct aura_fn_queue *q, struct aura_worker_pool *glob_pool);
+
+/* Destroy function structure */
+void aura_fn_destroy(struct aura_fn *fn);
+
+/* Dump fn metadata */
+void aura_fn_meta_dump(struct aura_fn_meta *fn_meta);
+
+/* Dump function config */
+void aura_fn_config_dump(struct aura_fn_config *fn_conf);
+
+/* Dump function stats */
 void aura_fn_stat_dump(struct aura_fn_stat *stats);
 
 #endif

@@ -1,6 +1,6 @@
 #include "bug_lib.h"
 #include "error_lib.h"
-#include "runtime/js.h"
+#include "executors/js/quickjs/rt.h"
 #include "server_srv.h"
 #include "time_lib.h"
 #include "worker_srv.h"
@@ -24,7 +24,7 @@ void *aura_qjs_thread_routine(void *_arg) {
     struct aura_fn *fn;
     struct aura_runtime *rt;
     struct aura_qjs_runtime *qjs_rt;
-    struct aura_task *task;
+    struct _aura_task *task;
     Response *resp;
     int res;
     bool timedout, is_part_of_min;
@@ -263,7 +263,7 @@ int aura_work_queue_destroy(struct aura_work_queue *wq) {
     return 0;
 }
 
-int aura_work_queue_add(struct aura_work_queue *wq, struct aura_fn *fn, struct aura_task *task) {
+int aura_work_queue_add(struct aura_work_queue *wq, struct aura_fn *fn, struct _aura_task *task) {
     pthread_t new_th_id;
     int rv;
 

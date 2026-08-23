@@ -1,10 +1,11 @@
 #ifndef AURA_TIMER_H
 #define AURA_TIMER_H
 
-#include "bitmap_lib.h"
-#include "list_lib.h"
 #include <stdint.h>
 #include <string.h>
+
+#include "bitmap_lib.h"
+#include "list_lib.h"
 
 /**
  * Level 0: Granularity: 1ms, Range 0ms - 1023ms (~1s)
