@@ -74,14 +74,6 @@ int aura_dmn_db_req(struct iovec *data, int cli_fd, AURA_DBHANDLE db) {
             break;
 
         case A_FN_TAG_SCHEMA_ID:
-            struct aura_iovec state = aura_fn_state_fetch(db, fn_name, fn_version);
-            if (!state.base) {
-                res = aura_resp_send(cli_fd, NULL, 0);
-                return res;
-            }
-
-            res = aura_resp_send(cli_fd, state.base, sizeof(state.len));
-            aura_free(state.base);
             break;
 
         case A_FN_LIST_SCHEMA_ID:
@@ -97,6 +89,17 @@ int aura_dmn_db_req(struct iovec *data, int cli_fd, AURA_DBHANDLE db) {
             len = sizeof(*fns) + (fns->func_cnt * sizeof(struct aura_fn_tag));
             res = aura_resp_send(cli_fd, fns, len);
             aura_free(fns);
+            break;
+
+        case A_FN_STATE_SCHEMA_ID:
+            struct aura_iovec state = aura_fn_state_fetch(db, fn_name, fn_version);
+            if (!state.base) {
+                res = aura_resp_send(cli_fd, NULL, 0);
+                return res;
+            }
+
+            res = aura_resp_send(cli_fd, state.base, sizeof(state.len));
+            aura_free(state.base);
             break;
 
         default:

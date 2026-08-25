@@ -1,3 +1,4 @@
+#include "error_lib.h"
 #include "lib.h"
 
 void aura_blob_builder_init(st_aura_b_builder *b) {
@@ -90,7 +91,7 @@ static inline size_t a_ensure_nodes(st_aura_b_builder *b, size_t len) {
 }
 
 /* returns node idx */
-uint32_t aura_blob_b_add_str(st_aura_b_builder *b, const char *str) {
+uint32_t aura_blob_b_add_str(st_aura_b_builder *b, const char *str, uint32_t len) {
     uint32_t idx;
     size_t res;
 
@@ -106,11 +107,12 @@ uint32_t aura_blob_b_add_str(st_aura_b_builder *b, const char *str) {
     if (res == UINT32_MAX)
         return UINT32_MAX;
 
-    b->nodes[idx].str_offset = res;
+    b->nodes[idx].str.offset = res;
+    b->nodes[idx].str.len = len;
     return idx;
 }
 
-uint32_t aura_blob_b_add_num(st_aura_b_builder *b, uint64_t num, aura_blob_type_t t) {
+uint32_t aura_blob_b_add_int(st_aura_b_builder *b, int64_t num, aura_blob_type_t t) {
     uint32_t idx;
     size_t res;
     char buf[65];
@@ -119,6 +121,29 @@ uint32_t aura_blob_b_add_num(st_aura_b_builder *b, uint64_t num, aura_blob_type_
     if (res == SIZE_MAX)
         return UINT32_MAX;
 
+    snprintf(buf, sizeof(buf), "%ld", num);
+    idx = (uint32_t)b->nodes_len++;
+
+    memset(&b->nodes[idx], 0, sizeof(st_aura_blob_node));
+    b->nodes[idx].type = t;
+    res = a_blob_b_add_str(b, buf);
+    if (res == UINT32_MAX)
+        return UINT32_MAX;
+
+    b->nodes[idx].str.offset = res;
+    b->nodes[idx].str.len = strlen(buf);
+    return idx;
+}
+
+uint32_t aura_blob_b_add_uint(st_aura_b_builder *b, uint64_t num, aura_blob_type_t t) {
+    uint32_t idx;
+    size_t res;
+    char buf[65];
+
+    if (a_ensure_nodes(b, 1) == SIZE_MAX)
+        return UINT32_MAX;
+
+    memset(buf, 0, sizeof(buf));
     snprintf(buf, sizeof(buf), "%lu", num);
     idx = (uint32_t)b->nodes_len++;
 
@@ -128,7 +153,8 @@ uint32_t aura_blob_b_add_num(st_aura_b_builder *b, uint64_t num, aura_blob_type_
     if (res == UINT32_MAX)
         return UINT32_MAX;
 
-    b->nodes[idx].str_offset = res;
+    b->nodes[idx].str.offset = res;
+    b->nodes[idx].str.len = strlen(buf);
     return idx;
 }
 
@@ -395,13 +421,13 @@ void a_dump_blob_recursive(const void *base, uint32_t node_idx, int indent) {
 
     switch (start_node->type) {
     case A_BLOB_NODE_STR:
-        const char *s = strtab + start_node->str_offset;
+        const char *s = strtab + start_node->str.offset;
         // sprintf(buf + strlen(buf), "%*s\"%s\"", indent, " ", s);
         syslog(LOG_DEBUG, "%*s\"%s\"", indent, " ", s);
         break;
 
     case A_BLOB_NODE_INT:
-        const char *d = strtab + start_node->str_offset;
+        const char *d = strtab + start_node->str.offset;
         syslog(LOG_DEBUG, "%*s\"%s\"", indent, " ", d);
         break;
 

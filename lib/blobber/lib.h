@@ -39,7 +39,10 @@ typedef struct aura_blob_hdr {
 typedef struct aura_blob_node {
     uint32_t type;
     union {
-        uint32_t str_offset;
+        struct {
+            uint32_t offset;
+            uint32_t len;
+        } str;
         struct {
             uint32_t kv_idx;
             uint32_t kv_cnt;
@@ -97,8 +100,9 @@ typedef struct aura_blob_param {
  */
 void aura_blob_builder_init(st_aura_b_builder *b);
 void aura_blob_free(st_aura_b_builder *b);
-uint32_t aura_blob_b_add_str(st_aura_b_builder *b, const char *str);
-uint32_t aura_blob_b_add_num(st_aura_b_builder *b, uint64_t num, aura_blob_type_t t);
+uint32_t aura_blob_b_add_str(st_aura_b_builder *b, const char *str, uint32_t len);
+uint32_t aura_blob_b_add_int(st_aura_b_builder *b, int64_t num, aura_blob_type_t t);
+uint32_t aura_blob_b_add_uint(st_aura_b_builder *b, uint64_t num, aura_blob_type_t t);
 uint32_t aura_blob_b_add_map(st_aura_b_builder *b);
 uint32_t aura_blob_b_map_add_kv(st_aura_b_builder *b, uint32_t map_idx, const char *key, uint32_t val_node);
 uint32_t aura_blob_b_add_array(st_aura_b_builder *b);

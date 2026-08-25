@@ -277,7 +277,7 @@ int aura_unix_server_listen(struct aura_unix_sock *st, const char *name) {
         return -1;
     }
 
-    memset(st, 0, sizeof(struct aura_unix_sock));
+    memset(st, 0, sizeof(*st));
     a_unix_sock_init(st, name, name_len);
 
     st->fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -285,8 +285,7 @@ int aura_unix_server_listen(struct aura_unix_sock *st, const char *name) {
         return -1;
 
     unlink(name); /* delete if file exists */
-
-    res = bind(st->fd, (struct sockaddr *)&st->addr, st->sock_len);
+    res = bind(st->fd, (struct sockaddr *)&(st->addr), st->sock_len);
     if (res < 0)
         goto err_out;
 

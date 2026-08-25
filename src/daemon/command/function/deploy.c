@@ -163,46 +163,10 @@ static const char *a_get_entry_file(void *fn_meta) {
     /* Entry */
     if (fn_tab[A_IDX_FN_ENTRY_POINT] != 0) {
         node = &nodes[fn_tab[A_IDX_FN_ENTRY_POINT]];
-        file = strtab + node->str_offset;
+        file = strtab + node->str.offset;
         return file;
     }
     return NULL;
-}
-
-static void a_fn_name_get(void *fn_meta, char *fn_name) {
-    const st_aura_blob_node *nodes = aura_blob_get_nodes(fn_meta), *node;
-    const char *strtab, *name = aura_blob_get_strtab(fn_meta);
-    const int *fn_tab = aura_blob_get_tab(fn_meta);
-
-    if (fn_tab[A_IDX_FN_NAME] != 0) {
-        node = &nodes[fn_tab[A_IDX_FN_NAME]];
-        memcpy(fn_name, strtab + node->str_offset, strlen(strtab + node->str_offset));
-    }
-}
-
-static void a_fn_version_get(void *fn_meta, char *fn_version) {
-    const st_aura_blob_node *nodes = aura_blob_get_nodes(fn_meta), *node;
-    const char *strtab = aura_blob_get_strtab(fn_meta);
-    const int *fn_tab = aura_blob_get_tab(fn_meta);
-
-    if (fn_tab[A_IDX_FN_VERSION] != 0) {
-        node = &nodes[fn_tab[A_IDX_FN_VERSION]];
-        memcpy(fn_version, strtab + node->str_offset, strlen(strtab + node->str_offset));
-    }
-}
-
-static int a_fn_id_get(void *fn_meta, uint64_t *fn_id) {
-    const st_aura_blob_node *nodes = aura_blob_get_nodes(fn_meta), *node;
-    const char *strtab = aura_blob_get_strtab(fn_meta);
-    const int *fn_tab = aura_blob_get_tab(fn_meta);
-
-    if (fn_tab[A_IDX_FN_ID] != 0) {
-        node = &nodes[fn_tab[A_IDX_FN_ID]];
-        if (aura_scan_str(strtab + node->str_offset, "%lu" SCNu64, fn_id) < 0)
-            return -1;
-    }
-
-    return 0;
 }
 
 /** */
@@ -219,9 +183,7 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
     struct aura_fn_evt evt;
     void *bytecode, *fn_meta, *fn_config;
     uint64_t bytecode_len, fn_meta_size;
-    uint64_t fn_config_size, fn_id;
-    // char fn_name[A_FN_NAME_MAX_LEN];
-    // char fn_version[A_FN_VERSION_MAX_LEN];
+    uint64_t fn_config_size;
     struct aura_fn_meta _fn_meta;
     struct aura_fn_config _fn_config;
     int res, srv_fd = gc->server_fd;
@@ -238,9 +200,6 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
     fn_meta = NULL;
     fn_config = NULL;
     entry_script = NULL;
-    // memset(fn_name, 0, sizeof(fn_name));
-    // memset(fn_version, 0, sizeof(fn_version));
-    fn_id = 0;
 
     state = A_FN_OP_STATE_RUNNING;
     switch (state) {
@@ -461,12 +420,7 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
     case A_FN_OP_STATE_TAG:
         struct aura_fn_tag *fn_tag;
 
-        // a_fn_name_get(fn_meta, fn_name);
-        // a_fn_version_get(fn_meta, fn_version);
-        // a_fn_id_get(fn_meta, &fn_id);
-
         /* Check if we have duplicate */
-        // fn_tag = aura_fn_tag_fetch(gc->db_handle, &gc->mc, fn_name, fn_version, &error);
         fn_tag = aura_fn_tag_fetch(gc->db_handle, &gc->mc, _fn_meta.name, _fn_meta.version, &error);
         if (fn_tag) {
             /* Record no longer needed */
@@ -516,7 +470,6 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
         /* format: fn:<name>:<version>:<schema_suffix> */
         memset(buf, 0, sizeof(buf));
-        // snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_META_SUFFIX);
         snprintf(
           buf,
           sizeof(buf),
@@ -547,7 +500,6 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
     case A_FN_OP_STATE_CONFIG:
         memset(buf, 0, sizeof(buf));
-        // snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_CONF_SUFFIX);
         snprintf(
           buf,
           sizeof(buf),
@@ -578,7 +530,6 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
     case A_FN_OP_STATE_CODE:
         memset(buf, 0, sizeof(buf));
-        // snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_CODE_SUFFIX);
         snprintf(
           buf,
           sizeof(buf),
@@ -612,7 +563,6 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
         /* stats */
         memset(buf, 0, sizeof(buf));
-        // snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_STAT_SUFFIX);
         snprintf(
           buf,
           sizeof(buf),
@@ -648,7 +598,6 @@ void aura_dmn_deploy_fn(int dir_fd, int cli_fd, void *arg) {
 
         /* state */
         memset(buf, 0, sizeof(buf));
-        // snprintf(buf, sizeof(buf), "%s:%s:%s:%s", A_DB_FN_KEY_PREFIX, fn_name, fn_version, A_DB_FN_STATE_SUFFIX);
         snprintf(
           buf,
           sizeof(buf),

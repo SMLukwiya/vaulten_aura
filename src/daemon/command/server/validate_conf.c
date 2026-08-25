@@ -439,7 +439,7 @@ void a_yml_validate_listeners(struct aura_yml_conf_parser *p, yaml_event_t *evt,
               yml_node,
               yn->type,
               yn->key,
-              A_YAML_NUM,
+              A_YAML_INT,
               A_IDX_SERVER_NONE);
             yml_node->int_val = proto;
             a_parse_tree_insert(p, evt, yn, node_off);

@@ -456,14 +456,14 @@ static int a_parse_one_ech_config(const aura_blob_param_st *blob, const st_aura_
         val = &blob->nodes[kv->node_idx];
 
         if (strcmp(key, "config_id") == 0) {
-            const char *config_id = blob->strtab + val->str_offset;
+            const char *config_id = blob->strtab + val->str.offset;
             aura_scan_str(config_id, SCNu8, &ech_conf->config_id);
             continue;
         }
 
         if (strcmp(key, "key_file") == 0) {
             EVP_PKEY *pkey;
-            const char *key_file = blob->strtab + val->str_offset;
+            const char *key_file = blob->strtab + val->str.offset;
             pkey = a_load_key(key_file);
             if (key == NULL) {
                 /* although this shouldn't happen since validate would have failed if there was an error */
@@ -494,7 +494,7 @@ static int a_parse_one_ech_config(const aura_blob_param_st *blob, const st_aura_
         }
 
         if (strcmp(key, "public_name") == 0) {
-            public_name = blob->strtab + val->str_offset;
+            public_name = blob->strtab + val->str.offset;
             continue;
         }
 
@@ -504,7 +504,7 @@ static int a_parse_one_ech_config(const aura_blob_param_st *blob, const st_aura_
         }
 
         if (strcmp(key, "max_name_length") == 0) {
-            const char *max_name_len = blob->strtab + val->str_offset;
+            const char *max_name_len = blob->strtab + val->str.offset;
             aura_scan_str(max_name_len, SCNu8, &ech_conf->max_name_length);
             continue;
         }
@@ -520,7 +520,7 @@ static int a_parse_one_ech_config(const aura_blob_param_st *blob, const st_aura_
             for (j = 0; j < arr_cnt; ++j) {
                 for (cand = ptls_openssl_hpke_cipher_suites; *cand != NULL; ++cand) {
                     cipher_entry_node = &blob->nodes[blob->arrs[arr_idx + i].node_idx];
-                    const char *cipher = blob->strtab + cipher_entry_node->str_offset;
+                    const char *cipher = blob->strtab + cipher_entry_node->str.offset;
                     if (strcasecmp(cipher, (*cand)->name) == 0)
                         break;
                 }
@@ -896,7 +896,7 @@ static struct aura_iovec *a_build_h2_origin_frame(const aura_blob_param_st *blob
 
     for (i = 0; i < h2_cnt; ++i) {
         h2_origin_entry_node = &blob->nodes[blob->arrs[h2_idx + i].node_idx];
-        h2_frame = blob->strtab + h2_origin_entry_node->str_offset;
+        h2_frame = blob->strtab + h2_origin_entry_node->str.offset;
         h2_origin[i].len = htons((uint16_t)strlen(h2_frame));
         h2_origin[i].base = strdup(h2_frame);
         if (h2_origin[i].base == NULL)
@@ -931,7 +931,7 @@ static ptls_cipher_suite_t **a_parse_ciphers_suites(const aura_blob_param_st *bl
 
     for (i = 0; i < arr_cnt; ++i) {
         tls_cipher_entry_node = &blob->nodes[blob->arrs[arr_idx + i].node_idx];
-        cipher = blob->strtab + tls_cipher_entry_node->str_offset;
+        cipher = blob->strtab + tls_cipher_entry_node->str.offset;
 
         for (j = 0; (c = ptls_openssl_cipher_suites_all[j]) != NULL; ++j) {
             if (strcmp(cipher, c->name) == 0) {
@@ -1002,17 +1002,17 @@ static int a_tls_add_iden(const aura_blob_param_st *blob, const st_aura_blob_nod
 
         /* What is loaded is the chain cert file */
         if (strcmp(key, "cert_file") == 0) {
-            cert_chain_file = blob->strtab + entry_node->str_offset;
+            cert_chain_file = blob->strtab + entry_node->str.offset;
             continue;
         }
 
         if (strcmp(key, "key_file") == 0) {
-            key_file = blob->strtab + entry_node->str_offset;
+            key_file = blob->strtab + entry_node->str.offset;
             continue;
         }
 
         if (strcmp(key, "tag") == 0) {
-            tag = blob->strtab + entry_node->str_offset;
+            tag = blob->strtab + entry_node->str.offset;
             continue;
         }
     }
@@ -1133,28 +1133,28 @@ static int a_setup_configs(struct aura_srv_global_ctx *gc, void *config) {
                 entry_node = &nodes[kv->node_idx];
 
                 if (strcmp(key, "name") == 0) {
-                    listener_name = strtab + entry_node->str_offset;
+                    listener_name = strtab + entry_node->str.offset;
                     listener->name = strdup(listener_name);
                     continue;
                 }
 
                 if (strcmp(key, "address") == 0) {
                     const char *address;
-                    address = strtab + entry_node->str_offset;
+                    address = strtab + entry_node->str.offset;
                     listener->address = strdup(address);
                     continue;
                 }
 
                 if (strcmp(key, "port") == 0) {
                     const char *port;
-                    port = strtab + entry_node->str_offset;
+                    port = strtab + entry_node->str.offset;
                     listener->port = strdup(port);
                     continue;
                 }
 
                 if (strcmp(key, "protocol") == 0) {
                     const char *protocol;
-                    protocol = strtab + entry_node->str_offset;
+                    protocol = strtab + entry_node->str.offset;
                     if (aura_scan_str(protocol, "%" SCNu8, &listener->protocol) != 1) {
                         sys_debug(true, errno, "a_setup_config: config protocol err:");
                         return -1;
@@ -1164,7 +1164,7 @@ static int a_setup_configs(struct aura_srv_global_ctx *gc, void *config) {
 
                 if (strcmp(key, "tls") == 0) {
                     const char *tls;
-                    tls = strtab + entry_node->str_offset;
+                    tls = strtab + entry_node->str.offset;
                     if (aura_scan_str(tls, "%" SCNu8, &listener->tls) != 1) {
                         sys_debug(true, errno, "a_setup_config: tls boolean value invalid:");
                         return -1;
@@ -1174,7 +1174,7 @@ static int a_setup_configs(struct aura_srv_global_ctx *gc, void *config) {
 
                 if (strcmp(key, "quic") == 0) {
                     const char *quic;
-                    quic = strtab + entry_node->str_offset;
+                    quic = strtab + entry_node->str.offset;
                     if (aura_scan_str(quic, "%" SCNu8, &listener->quic) != 1) {
                         sys_debug(true, errno, "a_setup_config: quic boolean value invalid:");
                         return -1;
@@ -1214,14 +1214,14 @@ static int a_setup_configs(struct aura_srv_global_ctx *gc, void *config) {
                 entry_node = &nodes[kv->node_idx];
 
                 if (strcmp(key, "name") == 0) {
-                    hostname = strtab + entry_node->str_offset;
+                    hostname = strtab + entry_node->str.offset;
                     if (!hostname) {
                         /* should not happen */
                     }
                 }
 
                 if (strcmp(key, "tls") == 0) {
-                    tls = strtab + entry_node->str_offset;
+                    tls = strtab + entry_node->str.offset;
 
                     for (int i = 0; i < lc->tls_pool.cnt; ++i) {
                         if (strcmp(tls, lc->tls_pool.entries[i].tag) == 0) {
@@ -1347,7 +1347,11 @@ void a_load_fn_destructor(const void *stat) {
     if (!stat)
         return;
     _stat = (struct aura_fn_stat_wrapper *)stat;
-    // aura_free((void *)_stat->fn_stat);
+    if (_stat->fn_tag)
+        aura_fn_tag_destroy(_stat->fn_tag);
+
+    if (_stat->fn_stat)
+        aura_free((void *)_stat->fn_stat);
     // aura_free((void *)_stat->fn_name);
     aura_free(_stat);
 }
@@ -1365,6 +1369,7 @@ static int a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd) 
     struct aura_fn_registry_ent *ent;
     struct aura_fn *fn;
     struct aura_srv_host_conf *host;
+    struct aura_fn_tag *fn_tag;
     int rv, error, j;
     bool least_active_changed;
 
@@ -1395,95 +1400,124 @@ static int a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd) 
     if (fn_list->func_cnt > 0) {
         j = 0;
         for (int i = 0; i < fn_list->func_cnt && j < A_FN_MAX_REGISTRY_CNT; ++i) {
-            if (fn_list->func_tags[i].triggers->trigger == A_TRIGGER_HTTP) {
-                /* Load HTTP functions to registry */
-                // ent = &gc->fn_registry.entries[j++];
-                ent = aura_fn_load_fn_registry_entry(&gc->fn_registry, &fn_list->func_tags[i], j++);
-
-                /**
-                 * Load the top k functions using their stats
-                 */
-                fn_stat = aura_fn_stat_fetch_brokered(
-                  mc,
-                  fn_list->func_tags[i].fn_name,
-                  fn_list->func_tags[i].fn_version,
-                  dmn_sock_fd);
-                A_BUG_ON_2(!fn_stat, true);
-
-                aux_stat = aura_alloc(mc, sizeof(*aux_stat));
-                if (!aux_stat)
-                    sys_exit(true, errno, "a_preload_functions: aura_alloc aux_stat error:");
-
-                aux_stat->fn_stat = fn_stat;
-                aux_stat->fn_name = fn_list->func_tags[i].fn_name;
-                aux_stat->fn_version = fn_list->func_tags[i].fn_version;
-
-                if (!aura_heap_is_full(hp)) {
-                    aura_heap_push(hp, &aux_stat->hp_ent);
-                    continue;
-                }
-
-                /**
-                 * If the heap is full, get the first lesser active function
-                 * and replace with current entry we are looking at.
-                 * least_active_changed confirms whether another least active
-                 * function was found.
-                 */
-                least_active_ent = &aux_stat->hp_ent;
-                least_active_changed = false;
-                aura_heap_for_each(hp, hp_ent) {
-                    _aux_stat = aura_container_of(hp_ent, struct aura_fn_stat_wrapper, hp_ent);
-                    if (aura_fn_stat_compare((void *)_aux_stat, (void *)aux_stat) < 0) {
-                        least_active_ent = hp_ent;
-                        least_active_changed = true;
-                        break;
-                    }
-                }
-
-                /* continue if the least active is the current function */
-                if (!least_active_changed) {
-                    a_load_fn_destructor((void *)aux_stat);
-                    continue;
-                }
-
-                /* Delete the least active function */
-                aura_heap_del(hp, least_active_ent);
-                _aux_stat = aura_container_of(least_active_ent, struct aura_fn_stat_wrapper, hp_ent);
-                a_load_fn_destructor(_aux_stat);
-
-                /* Push the stat we have created space for */
-                aura_heap_push(hp, &aux_stat->hp_ent);
+            fn_tag = &fn_list->func_tags[i];
+            /* If not http triggered, skip */
+            if (!fn_tag->http) {
+                aura_fn_tag_destroy(fn_tag);
+                continue;
             }
+
+            if (aura_fn_fetch_trigger_brokered(&gc->mem_ctx, &fn_tag->fn_triggers, fn_tag->fn_name, fn_tag->fn_version, &error, dmn_sock_fd) < 0) {
+                return -1;
+            }
+
+            /* Load HTTP functions to registry */
+            ent = aura_fn_load_fn_registry_entry(&gc->fn_registry, fn_tag);
+            /* Function registry is full, abandon */
+            if (!ent) {
+                aura_fn_tag_destroy(fn_tag);
+                aura_free((void *)fn_list);
+                aura_heap_destroy(hp);
+                return 0;
+            }
+
+            /**
+             * Load the top k functions using their stats
+             */
+            fn_stat = aura_fn_stat_fetch_brokered(
+              mc,
+              fn_tag->fn_name,
+              fn_tag->fn_version,
+              dmn_sock_fd);
+            A_BUG_ON_2(!fn_stat, true);
+
+            aux_stat = aura_alloc(mc, sizeof(*aux_stat));
+            if (!aux_stat)
+                sys_exit(true, errno, "a_preload_functions: aura_alloc aux_stat error:");
+
+            memset(aux_stat, 0, sizeof(*aux_stat));
+            aux_stat->fn_stat = fn_stat;
+            aux_stat->fn_tag = fn_tag;
+
+            if (!aura_heap_is_full(hp)) {
+                aura_heap_push(hp, &aux_stat->hp_ent);
+                continue;
+            }
+
+            /**
+             * If the heap is full, replace least active function
+             * in the heap with the current function.
+             */
+            least_active_ent = &aux_stat->hp_ent;
+            least_active_changed = false;
+            aura_heap_for_each(hp, hp_ent) {
+                _aux_stat = aura_container_of(hp_ent, struct aura_fn_stat_wrapper, hp_ent);
+                if (aura_fn_stat_compare((void *)_aux_stat, (void *)aux_stat) < 0) {
+                    least_active_ent = hp_ent;
+                    least_active_changed = true;
+                    break;
+                }
+            }
+
+            /* continue if the least active is the current function */
+            if (!least_active_changed) {
+                a_load_fn_destructor((void *)aux_stat);
+                continue;
+            }
+
+            /* Delete the least active function and push the current fn */
+            aura_heap_del(hp, least_active_ent);
+            _aux_stat = aura_container_of(least_active_ent, struct aura_fn_stat_wrapper, hp_ent);
+            a_load_fn_destructor(_aux_stat);
+
+            aura_heap_push(hp, &aux_stat->hp_ent);
         }
 
         /**
          * Load top functions into fn cache
          */
-        //     struct aura_lru_entry *fn_e;
-        //     void *cache;
-        //     aura_heap_for_each(hp, hp_ent) {
-        //         aux_stat = aura_container_of(hp_ent, struct aura_fn_stat_wrapper, hp_ent);
-        //         fn = aura_fn_load_brokered(mc, aux_stat->fn_name, aux_stat->fn_version, dmn_sock_fd);
-        //         A_BUG_ON_2(!fn, true);
+        struct aura_lru_entry *fn_e;
+        void *cache;
+        aura_heap_for_each(hp, hp_ent) {
+            aux_stat = aura_container_of(hp_ent, struct aura_fn_stat_wrapper, hp_ent);
 
-        //         host = a_find_host(gc, fn->meta.host);
-        //         if (!host) {
-        //             aura_fn_destroy(fn);
-        //             continue;
-        //         }
+            /* Load fetched function into cache */
+            fn_e = aura_lru_cache_get(&gc->fn_cache, aux_stat->fn_tag->fn_id);
+            if (fn_e) {
+                fn = aura_lru_cache_entry(fn_e, struct aura_fn, lc_entry);
 
-        //         /* Load fetched function into cache */
-        //         fn_e = aura_lru_cache_get(&gc->fn_cache, fn->meta.fn_id);
-        //         if (fn_e) {
-        //             aura_fn_cache_load(fn_e, fn);
+                rv = aura_fn_load_brokered(
+                  mc,
+                  fn,
+                  aux_stat->fn_tag->fn_name,
+                  aux_stat->fn_tag->fn_version,
+                  dmn_sock_fd);
+                A_BUG_ON_2(rv == -1, true);
 
-        //         }
+                /* Update the function registry fn load state */
+                for (int i = 0; i < gc->fn_registry.cnt; ++i) {
+                    if (gc->fn_registry.entries[i].fn_tag.fn_id == fn->meta.fn_id) {
+                        gc->fn_registry.entries[i].load_state = A_FN_LOADED;
+                    }
+                }
+            }
 
-        //         if (aura_route_add(&host->router, fn) < 0) {
-        //             rv = -1;
-        //         }
-        //         aura_fn_destroy(fn);
-        //     }
+            /* only load functions which can be reachable from the outside */
+            host = a_find_host(gc, fn->meta.host);
+            if (!host) {
+                aura_fn_destroy(fn);
+                a_load_fn_destructor(aux_stat);
+                continue;
+            }
+
+            if (aura_route_add(&host->router, fn) < 0) {
+                aura_fn_destroy(fn);
+                a_load_fn_destructor(aux_stat);
+                return -1;
+            }
+
+            a_load_fn_destructor(aux_stat);
+        }
     }
 
     aura_free(fn_list);
@@ -1682,6 +1716,16 @@ static inline int a_glob_conf_init(struct aura_srv_global_ctx *gc) {
         return -1;
 
     aura_host_pool_init(&gc->host_pool);
+
+    /* Init fn cache */
+    if (aura_fn_cache_init(&gc->fn_cache, &gc->mem_ctx) < 0) {
+        sys_debug(true, errno, "main: aura_fn_cache_init error");
+        return -1;
+    }
+
+    /* initialize function registry */
+    if (aura_fn_registry_init(&gc->fn_registry, &gc->mem_ctx, A_FN_MAX_REGISTRY_CNT) < 0)
+        sys_exit(true, errno, "main: fn registry init err");
 
     return 0;
 }

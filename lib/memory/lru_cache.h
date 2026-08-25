@@ -20,8 +20,8 @@ enum {
 struct aura_lru_entry {
     struct aura_list_head list; /* Link to lru list or free list */
     struct aura_list_head hash; /* Link in lru_cache->lru_hash to handle collision */
+    uint64_t lru_number;
     uint32_t refcnt;
-    uint32_t lru_number;
 };
 
 struct aura_lru_cache {
@@ -40,14 +40,21 @@ struct aura_lru_cache {
     uint32_t flags;                       /* Flags*/
 };
 
-int aura_lru_cache_init(struct aura_lru_cache *lc, const char *name,
-                        struct aura_slab_cache *sc, uint32_t e_cnt,
+/**
+ * Create a LRU cache structure.
+ * e_cnt both the size of the cache and
+ * the hash list count.
+ * @todo: perhaps e_cnt could be split from hash list count:
+ *        This way we can hold more items and use the hash list chain as well.
+ */
+int aura_lru_cache_init(struct aura_lru_cache *lc, struct aura_mem_ctx *mc,
+                        const char *name, uint8_t cache_id, uint32_t e_cnt,
                         uint32_t obj_size, uint32_t e_off);
 
 void aura_lru_cache_destroy(struct aura_lru_cache *lc);
 
-struct aura_lru_entry *aura_lru_cache_find(struct aura_lru_cache *lc, uint32_t entry_nr);
+struct aura_lru_entry *aura_lru_cache_find(struct aura_lru_cache *lc, uint64_t entry_nr);
 
-struct aura_lru_entry *aura_lru_cache_get(struct aura_lru_cache *lc, uint32_t e);
+struct aura_lru_entry *aura_lru_cache_get(struct aura_lru_cache *lc, uint64_t entry_nr);
 
 #endif

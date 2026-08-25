@@ -45,7 +45,7 @@ void aura_dump_yml_node(struct aura_yml_node *yn) {
     case A_YAML_STRING:
         app_debug(true, 0, "str val: %s", yn->str_val);
         break;
-    case A_YAML_NUM:
+    case A_YAML_INT:
         app_debug(true, 0, "int value: %d", yn->uint_val);
         break;
     case A_YAML_BOOL:
@@ -404,8 +404,6 @@ static void a_handle_scalar(struct aura_yml_conf_parser *p, yaml_event_t *evt) {
     const char *value = (const char *)evt->data.scalar.value;
     int i, *curr_idx;
     aura_yml_parse_state_t *seq_ctx, *parent_ctx;
-
-    // app_debug(true, 0, "SCALAR VALUE: path: %s, value: %s, state: %d", tr->full_path, value, curr_state ? *curr_state : -1);
 
     seq_ctx = a_vector_pop(&tr->seq_context_stack);
     parent_ctx = a_vector_peek(&tr->seq_context_stack);

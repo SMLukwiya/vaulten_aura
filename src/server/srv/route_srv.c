@@ -30,14 +30,6 @@ static inline bool a_route_destroy(struct aura_route *route) {
     if (!route)
         return true;
 
-    // if (route->fn)
-    //     aura_fn_destroy(route->fn);
-
-    // if (aura_work_queue_destroy(route->wq) != 0) {
-    //     /** @todo: Failed to destroy work queue, what should I do?? */
-    //     return false;
-    // }
-
     /* remove from tree */
     // aura_rax_remove(&route->router->r_tree, route->fn->meta.http_trigger.path.base, route->fn->meta.http_trigger.path.len, NULL);
 
@@ -88,17 +80,6 @@ int aura_route_add(struct aura_router *router, struct aura_fn *fn) {
     }
 
     strncat(new_route->url + strlen(new_route->url), pattern, sizeof(new_route->url) - strlen(new_route->url) - 1);
-    // new_route->fn = fn;
-    // new_route->wq = malloc(sizeof(struct aura_work_queue));
-    // if (!new_route->wq)
-    //     return -1;
-
-    // res = aura_work_queue_init(new_route->wq, router->srv_ctx, fn);
-    // if (res) {
-    //     sys_debug(true, errno, "Failed to initialize workqueue: %d", res);
-    //     return -1;
-    // }
-
     res = aura_rax_insert(&router->r_tree, pattern, pattern_len, A_RAX_NODE_TYPE_SPARSE, a_rax_data_init_ptr(new_route));
     if (!res) {
         a_route_destroy(new_route);

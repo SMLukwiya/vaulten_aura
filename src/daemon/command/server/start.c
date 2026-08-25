@@ -206,6 +206,9 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, void *_conf) {
         goto err_ipc_wait;
     }
 
+    /* set server pid immediately so server can be waited on if it crushes */
+    gc->server_pid = pid;
+
     if (pid == 0) {
         /* server */
         char fd_str[16];
@@ -231,14 +234,6 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, void *_conf) {
             ret_val = -1;
             goto err_ipc_wait;
         }
-
-        // /* send over routing paths information */
-        // a_init_msg_hdr(hdr, config_size, A_MSG_CONF_DATA, A_ROUTING_INFO);
-        // if (aura_msg_send(sock_fds[0], &hdr, gc->evt_src_registry.sources[0].http_src.routes, config_size, -1) != 0) {
-        //     sys_debug(true, errno, "aura_dmn_start_server: send config error:");
-        //     ret_val = -1;
-        //     goto err_ipc_wait;
-        // }
 
         /* tell server things are set */
         if (aura_child_ipc_proceed(pid) == -1) {
@@ -319,6 +314,7 @@ err_socket_pair:
     close(sock_fds[0]);
     if (!parent_sock_closed)
         close(sock_fds[1]);
+    aura_resp_send(cli_fd, (void *)server_start_failed, sizeof(server_start_failed) - 1);
 
 out:
     aura_free_yml_error_ctx(parser_err);

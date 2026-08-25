@@ -9,6 +9,7 @@
 #include "timer/timer.h"
 
 #define A_EVT_SRC_MAX_CNT 16
+#define A_EVT_SRC_NAME_MAX_LEN 64
 
 enum aura_msg_data_kind {
     A_ROUTING_INFO
@@ -27,6 +28,22 @@ struct aura_exec_ctx {
     void *os;
     void *db;
     bool is_test; /* If context is being run inside test */
+};
+
+/* Event source types */
+typedef enum {
+    A_EVT_SRC_HTTP,
+    A_EVT_SRC_CRON,
+} aura_evt_src_t;
+
+/**
+ * Event source names
+ * NOTE: Order must match the event type
+ * enums above
+ */
+static char *aura_evt_src_str_name[] = {
+  "http",
+  "cron",
 };
 
 struct aura_http_evt_src {
@@ -53,12 +70,13 @@ struct aura_evt_trigger {
 
 /* Event source structure */
 struct aura_evt_src {
-    char name[64];
+    char name[A_EVT_SRC_NAME_MAX_LEN];
     struct aura_evt_src_ops *ops;
     union {
         struct aura_http_evt_src http_src;
         struct aura_cron_evt_src cron_src;
     };
+    uint8_t type;
     uint8_t flags;
 };
 
@@ -68,8 +86,8 @@ struct aura_evt_src_ops {
     int (*stop)(struct aura_evt_src *);
     void (*destroy)(struct aura_evt_src *);
 
-    int (*bind)(struct aura_evt_src *, struct aura_fn_registry_ent *trigger);
-    int (*unbind)(struct aura_evt_src *, struct aura_fn_registry_ent *trigger);
+    int (*bind)(struct aura_evt_src *, struct aura_fn_registry_ent *fn_ent, int trigger_idx);
+    int (*unbind)(struct aura_evt_src *, struct aura_fn_registry_ent *fn_ent, int trigger_idx);
 };
 
 enum {
@@ -83,16 +101,13 @@ struct aura_evt_src_registry {
     uint8_t cnt;
 };
 
-static inline struct aura_evt_src *aura_evt_src_get(struct aura_evt_src_registry *registry, const char *name) {
-    struct aura_evt_src *src;
+/**/
+int aura_event_registry_add(struct aura_evt_src_registry *reg, aura_evt_src_t type, int flags);
 
-    for (int i = 0; i < registry->cnt; ++i) {
-        src = registry[i].sources;
-        if (strcmp(src->name, name) == 0)
-            return src;
-    }
+/**/
+struct aura_evt_src *aura_evt_src_get(struct aura_evt_src_registry *reg, aura_evt_src_t type);
 
-    return NULL;
-}
+/**/
+void aura_evt_registry_destroy(struct aura_evt_src_registry *reg);
 
 #endif

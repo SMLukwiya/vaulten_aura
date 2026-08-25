@@ -24,7 +24,8 @@ typedef enum {
 typedef enum {
     A_YAML_NONE,
     A_YAML_STRING,
-    A_YAML_NUM,
+    A_YAML_INT,
+    A_YAML_UINT,
     A_YAML_BOOL
 } aura_yml_node_val_t;
 
@@ -109,7 +110,7 @@ struct aura_yml_node {
         const char *str_val;
         double double_val;
         uint64_t uint_val;
-        int int_val;
+        int64_t int_val;
         bool bool_val;
     };
     uint32_t tab_entry; /* table entry for 0(1) lookup */

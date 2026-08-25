@@ -134,12 +134,10 @@ void aura_qjs_fetch_ctx_destroy(struct aura_qjs_fetch_ctx *fetch_ctx) {
     if (!fetch_ctx)
         return;
 
-    app_debug(true, 0, "aura_qjs_fetch_ctx_Destroy_A");
     JS_FreeValue(fetch_ctx->ctx, fetch_ctx->reject);
     JS_FreeValue(fetch_ctx->ctx, fetch_ctx->resolve);
     if (fetch_ctx->data_src.type != A_QJS_BODY_TYPE_EMPTY)
         fetch_ctx->data_src.ops->destroy(&fetch_ctx->data_src);
-    app_debug(true, 0, "aura_qjs_fetch_ctx_Destroy_D");
 
     aura_free(fetch_ctx);
 }
@@ -2922,7 +2920,6 @@ JSValue aura_js_fetch_test_fn(JSContext *ctx, JSValueConst this_val, int argc, J
     int req_method;
     a_qjs_body_t body_type;
     struct aura_qjs_fetch_ctx *fetch_ctx;
-    app_debug(true, 0, "aura_js_fetch_test_fn <<<<----------A");
 
     if (argc < 1 || argc > 2)
         return JS_ThrowSyntaxError(ctx, "Incorrect number of fetch arguments provided");
@@ -3023,25 +3020,6 @@ JSValue aura_js_fetch_test_fn(JSContext *ctx, JSValueConst this_val, int argc, J
             }
         }
     }
-
-    // req = js_malloc(ctx, sizeof(*req));
-    // if (!req) {
-    //     JS_FreeCString(ctx, url);
-    //     aura_qjs_fetch_ctx_destroy(fetch_ctx);
-    //     return JS_ThrowOutOfMemory(ctx);
-    // }
-
-    // req->opaque_data = fetch_ctx;
-
-    // JSValue req_obj = JS_NewObjectClass(ctx, request_id);
-    // if (JS_IsException(req_obj)) {
-    //     JS_FreeCString(ctx, url);
-    //     aura_qjs_fetch_ctx_destroy(fetch_ctx);
-    //     aura_req_destroy(req);
-    //     return req_obj;
-    // }
-
-    // JS_SetOpaque(req_obj , req);
 
     promise = JS_NewPromiseCapability(ctx, promise_fn);
     if (JS_IsException(promise)) {

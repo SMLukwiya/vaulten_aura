@@ -1,8 +1,8 @@
 version: v1beta1
 
 function:
-  name: aura_hello_api
-  description: Aura Hello function deploy configs JS
+  name: aura_func1_api
+  description: Aura func1 function deploy configs JS
   version: 3
   host: vaultenaura.local
   # runtime: "js"
@@ -14,7 +14,7 @@ env:
 
 triggers:
   http:
-    path: /api/v1/hello
+    path: /api/v1/func1
     method: GET
     auth: none
 

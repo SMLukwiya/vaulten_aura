@@ -18,7 +18,7 @@
 #define A_PORT_UNSET 0
 
 static char server_started[] = "\x1B[1;32mServer started\x1B[0m";
-static char server_start_failed[] = "\x1B[1;32mFailed to start server\x1B[0m";
+static char server_start_failed[] = "\x1B[1;31mFailed to start server\x1B[0m";
 static char server_stopped[] = "\x1B[1;32mServer stopped\x1B[0m";
 static char server_stopped_failed[] = "\x1B[1;32mServer stop failed\x1B[0m";
 static char server_up[] = "\x1B[1;32mServer up\x1B[0m";

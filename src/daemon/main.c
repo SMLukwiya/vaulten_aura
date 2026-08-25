@@ -12,6 +12,7 @@
 #include "command/system.h"
 #include "db_broker.h"
 #include "dmn.h"
+#include "event_ctx/context.h"
 #include "ipc/ipc.h"
 #include "unix/sock.h"
 #include "utils_lib.h"
@@ -237,29 +238,32 @@ static bool a_authenticate_cli(struct aura_dmn_glob_conf *gc, int cli_fd, struct
     return true;
 }
 
-extern struct aura_evt_src_ops http_src_ops;
-extern struct aura_evt_src_ops cron_src_ops;
-
 static int a_dmn_load_native_evt_sources(struct aura_evt_src_registry *r) {
     /* HTTP source */
-    struct aura_evt_src *http_src = &r->sources[r->cnt++];
-    http_src->ops = &http_src_ops;
-    if (http_src->ops->init(http_src) < 0)
+    if (aura_event_registry_add(r, A_EVT_SRC_HTTP, 0) < 0)
         return -1;
 
     /* CRON source */
-    struct aura_evt_src *cron_src = &r->sources[r->cnt++];
-    cron_src->ops = &cron_src_ops;
-    if (cron_src->ops->init(cron_src) < 0)
+    if (aura_event_registry_add(r, A_EVT_SRC_CRON, 0) < 0)
         return -1;
 
     return 0;
 }
 
+/**
+ * Load function registry.
+ * Fetch function list and attach fn triggers
+ * from function meta.
+ * For each function trigger, bind the functions to
+ * their respective trigger sources. HTTP triggers are invoked
+ * via the server but binding them here helps us know
+ * which functions are available.
+ */
 static int a_dmn_load_fn_registry(struct aura_dmn_glob_conf *gc) {
     struct aura_fn_list *fn_list;
     struct aura_fn_registry_ent *ent;
     struct aura_evt_src *evt_src;
+    struct aura_fn_tag *fn_tag;
     int error;
 
     fn_list = aura_fn_list_fetch(gc->db_handle, &error);
@@ -270,25 +274,45 @@ static int a_dmn_load_fn_registry(struct aura_dmn_glob_conf *gc) {
     }
 
     for (int i = 0; i < fn_list->func_cnt && i < A_FN_MAX_REGISTRY_CNT; ++i) {
-        // ent = &gc->fn_registry.entries[i];
-        ent = aura_fn_load_fn_registry_entry(&gc->fn_registry, &fn_list->func_tags[i], i);
-
-        switch (ent->fn_tag.triggers->trigger) {
-        case A_TRIGGER_HTTP:
-            evt_src = aura_evt_src_get(&gc->evt_src_registry, "http");
-            if (evt_src->ops->bind(evt_src, ent) < 0) {
-            }
-            break;
-
-        case A_TRIGGER_CRON:
-            evt_src = aura_evt_src_get(&gc->evt_src_registry, "cron");
-            if (evt_src->ops->bind(evt_src, ent) < 0) {
-            }
-
-        default:
-            break;
+        fn_tag = &fn_list->func_tags[i];
+        if (aura_fn_fetch_trigger(gc->db_handle, &fn_tag->fn_triggers, fn_tag->fn_name, fn_tag->fn_version, &error) < 0) {
+            aura_fn_tag_destroy(fn_tag);
+            aura_free(fn_list);
+            return -1;
         }
+
+        ent = aura_fn_load_fn_registry_entry(&gc->fn_registry, fn_tag);
+        /* Function registry is full, abandon effort */
+        if (!ent) {
+            aura_fn_tag_destroy(fn_tag);
+            aura_free(fn_list);
+            return 0;
+        }
+
+        for (int j = 0; j < fn_tag->fn_triggers.cnt; ++j) {
+            switch (ent->fn_tag.fn_triggers.entries[j].trigger) {
+            case A_FN_TRIGGER_HTTP:
+                evt_src = aura_evt_src_get(&gc->evt_src_registry, A_EVT_SRC_HTTP);
+                if (evt_src->ops->bind(evt_src, ent, j) < 0) {
+                    return -1;
+                }
+                break;
+
+            case A_FN_TRIGGER_CRON:
+                evt_src = aura_evt_src_get(&gc->evt_src_registry, A_EVT_SRC_CRON);
+                if (evt_src->ops->bind(evt_src, ent, j) < 0) {
+                    /* Nothing yet */
+                }
+
+            default:
+                break;
+            }
+        }
+
+        aura_fn_tag_destroy(fn_tag);
     }
+
+    aura_free(fn_list);
 
     return 0;
 }
@@ -322,7 +346,7 @@ int main(int argc, char *argv[]) {
     gc = alloca(sizeof(*gc));
     if (!gc)
         sys_exit(true, errno, "aura_daemon: gc alloca");
-    memset(&gc, 0, sizeof(gc));
+    memset(gc, 0, sizeof(*gc));
 
     /* init memory context */
     aura_mem_ctx_init(&gc->mc);
@@ -338,6 +362,9 @@ int main(int argc, char *argv[]) {
         sys_exit(true, errno, "aura_daemon: a_dmn_load_native_evt_sources error:");
 
     /* init function registry */
+    if (aura_fn_registry_init(&gc->fn_registry, &gc->mc, A_FN_MAX_REGISTRY_CNT) < 0)
+        sys_exit(true, errno, "aura_daemon: aura_fn_registry_init");
+
     if (a_dmn_load_fn_registry(gc) < 0)
         sys_exit(true, errno, "aura_daemon: a_dmn_load_fn_registry error:");
 

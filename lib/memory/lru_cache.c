@@ -2,24 +2,41 @@
 #include "bitmap_lib.h"
 #include "bug_lib.h"
 #include <string.h>
+#include <string_lib.h>
 
-int aura_lru_cache_init(struct aura_lru_cache *lc, const char *name,
-                        struct aura_slab_cache *sc, uint32_t e_cnt,
+int aura_lru_cache_init(struct aura_lru_cache *lc, struct aura_mem_ctx *mc,
+                        const char *name, uint8_t cache_id, uint32_t e_cnt,
                         uint32_t obj_size, uint32_t e_off) {
     struct aura_lru_entry *ent;
+    struct aura_slab_cache *sc;
     int i;
 
     if (e_cnt > A_LC_MAX_CNT)
         return -1;
 
-    memset(lc, 0, sizeof(*lc));
-    lc->entries = aura_alloc(sc->mem_ctx, (e_cnt * sizeof(struct aura_lru_entry *)));
-    if (!lc->entries)
+    char *cache_name = aura_strndup(mc, name, strlen(name));
+    if (!cache_name)
         return -1;
 
-    lc->lru_hash = aura_alloc(sc->mem_ctx, e_cnt * sizeof(struct aura_list_head));
+    memset(lc, 0, sizeof(*lc));
+    lc->entries = aura_alloc(mc, (e_cnt * sizeof(struct aura_lru_entry *)));
+    if (!lc->entries) {
+        aura_free(cache_name);
+        return -1;
+    }
+
+    lc->lru_hash = aura_alloc(mc, e_cnt * sizeof(struct aura_list_head));
     if (!lc->lru_hash) {
+        aura_free(cache_name);
         aura_free(lc->entries);
+        return -1;
+    }
+
+    sc = aura_slab_cache_create(mc, cache_id, cache_name, obj_size, NULL, 0);
+    if (!sc) {
+        aura_free(cache_name);
+        aura_free(lc->entries);
+        aura_free(lc->lru_hash);
         return -1;
     }
 
@@ -41,8 +58,12 @@ int aura_lru_cache_init(struct aura_lru_cache *lc, const char *name,
         ent = e + e_off;
         ent->lru_number = A_LC_FREE;
         ent->refcnt = 0;
+        aura_list_head_init(&ent->hash);
         aura_list_add_tail(&lc->free, &ent->list);
         lc->entries[i] = ent;
+
+        /* Initialize the hash list while at it */
+        aura_list_head_init(&lc->lru_hash[i]);
     }
 
     if (i == e_cnt)
@@ -54,6 +75,7 @@ int aura_lru_cache_init(struct aura_lru_cache *lc, const char *name,
         aura_slab_free((void *)((void *)ent - e_off));
     }
 
+    aura_free(cache_name);
     aura_free(lc->lru_hash);
     aura_free(lc->entries);
     return -1;
@@ -75,18 +97,21 @@ void aura_lru_cache_destroy(struct aura_lru_cache *lc) {
     for (int i = 0; i < lc->nr_entries; ++i)
         a_lru_free_by_index(lc, i);
 
+    aura_free((void *)lc->name);
     aura_free(lc->entries);
+    aura_free(lc->lru_hash);
+    aura_slab_cache_destroy(lc->lru_cache);
 }
 
-static inline struct aura_list_head *a_lru_hash(struct aura_lru_cache *lc, int32_t entry_nr) {
+static inline struct aura_list_head *a_lru_hash(struct aura_lru_cache *lc, uint64_t entry_nr) {
     return lc->lru_hash + (entry_nr % lc->nr_entries);
 }
 
-static struct aura_lru_entry *a_lru_find(struct aura_lru_cache *lc, uint32_t entry_nr) {
+static struct aura_lru_entry *a_lru_find(struct aura_lru_cache *lc, uint64_t entry_nr) {
     struct aura_lru_entry *e;
 
     A_BUG_ON_2(!lc, true);
-    A_BUG_ON_2(!lc->nr_entries, true);
+    // A_BUG_ON_2(!lc->nr_entries, true);
 
     a_list_for_each(e, a_lru_hash(lc, entry_nr), hash) {
         if (e->lru_number != entry_nr)
@@ -100,7 +125,7 @@ static struct aura_lru_entry *a_lru_find(struct aura_lru_cache *lc, uint32_t ent
     return NULL;
 }
 
-struct aura_lru_entry *aura_lru_cache_find(struct aura_lru_cache *lc, uint32_t entry_nr) {
+struct aura_lru_entry *aura_lru_cache_find(struct aura_lru_cache *lc, uint64_t entry_nr) {
     return a_lru_find(lc, entry_nr);
 }
 
@@ -122,18 +147,16 @@ static int a_lru_entry_available(struct aura_lru_cache *lc) {
     return 0;
 }
 
-static struct aura_lru_entry *a_lru_cache_prepare_for_action(struct aura_lru_cache *lc, uint32_t entry_nr) {
-    struct aura_list_head *h;
+static struct aura_lru_entry *a_lru_cache_prepare_for_action(struct aura_lru_cache *lc, uint64_t entry_nr) {
     struct aura_lru_entry *e;
 
-    if (!aura_list_is_empty(&lc->free))
-        h = lc->free.next;
-    else if (!aura_list_is_empty(&lc->lru))
-        h = lc->lru.prev;
-    else
+    if (!aura_list_is_empty(&lc->free)) {
+        a_list_dequeue(e, &lc->free, list);
+    } else if (!aura_list_is_empty(&lc->lru)) {
+        a_list_dequeue(e, &lc->lru, list);
+    } else
         return NULL;
 
-    e = a_list_entry(h, struct aura_lru_entry, list);
     e->lru_number = entry_nr;
 
     /* Clear any hash link if present */
@@ -146,7 +169,7 @@ static struct aura_lru_entry *a_lru_cache_prepare_for_action(struct aura_lru_cac
     return e;
 }
 
-struct aura_lru_entry *aura_lru_cache_get(struct aura_lru_cache *lc, uint32_t entry_nr) {
+struct aura_lru_entry *aura_lru_cache_get(struct aura_lru_cache *lc, uint64_t entry_nr) {
     struct aura_lru_entry *e;
 
     if (aura_bitmap_test_bit(A_LC_WAITING, (uint64_t *)&lc->flags)) {

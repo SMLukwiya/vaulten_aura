@@ -10,9 +10,9 @@ const struct aura_fn_runtime runtimes[] = {
 };
 
 const struct aura_fn_trigger trigger_types[] = {
-  {"http", A_TRIGGER_HTTP},
-  {"cron", A_TRIGGER_CRON},
-  {"queue", A_TRIGGER_QUEUE},
+  {"http", A_FN_TRIGGER_HTTP},
+  {"cron", A_FN_TRIGGER_CRON},
+  {"queue", A_FN_TRIGGER_QUEUE},
 };
 
 const struct aura_fn_http_method http_methods[] = {
@@ -139,6 +139,122 @@ struct aura_fn_list *aura_fn_list_fetch_brokered(struct aura_mem_ctx *mc, int dm
     return fn_list;
 }
 
+static void a_fn_triggers_parse(void *meta, struct aura_fn_triggers *fn_triggers) {
+    const st_aura_blob_node *nodes;
+    const st_aura_blob_kv_pair *kv_pairs, *kv;
+    const char *strtab;
+    const int *fn_tab;
+    const st_aura_blob_node *kv_val_node;
+    uint32_t kv_cnt, kv_idx, arr_cnt, arr_idx;
+    const char *kv_key, *kv_val;
+
+    nodes = aura_blob_get_nodes(meta);
+    kv_pairs = aura_blob_get_kvs(meta);
+    strtab = aura_blob_get_strtab(meta);
+    fn_tab = aura_blob_get_tab(meta);
+
+    const st_aura_blob_node *trigger_node;
+
+    fn_triggers->cnt = 0;
+    if (fn_tab[A_IDX_FN_TRIGGERS] != 0) {
+        /* http */
+        if (fn_tab[A_IDX_FN_HTTP_TRIGGER] != 0) {
+            trigger_node = &nodes[fn_tab[A_IDX_FN_HTTP_TRIGGER]];
+            kv_idx = trigger_node->map.kv_idx;
+            kv_cnt = trigger_node->map.kv_cnt;
+
+            for (int i = 0; i < kv_cnt; ++i) {
+                kv = &kv_pairs[kv_idx + i];
+                kv_val_node = &nodes[kv->node_idx];
+                kv_key = strtab + kv->key_offset;
+
+                if (strcmp(kv_key, "path") == 0) {
+                    kv_val = strtab + kv_val_node->str.offset;
+                    fn_triggers->entries[fn_triggers->cnt].http_trigger.path = strdup(kv_val);
+                }
+
+                if (strcmp(kv_key, "method") == 0) {
+                    kv_val = strtab + kv_val_node->str.offset;
+                    fn_triggers->entries[fn_triggers->cnt].http_trigger.method = aura_fn_http_method_get(kv_val)->value;
+                }
+            }
+            fn_triggers->cnt++;
+        }
+
+        /* Cron trigger */
+        if (fn_tab[A_IDX_FN_CRON_TRIGGER] != 0) {
+            trigger_node = &nodes[fn_tab[A_IDX_FN_CRON_TRIGGER]];
+            kv_idx = trigger_node->map.kv_idx;
+            kv_cnt = trigger_node->map.kv_cnt;
+
+            for (int i = 0; i < kv_cnt; ++i) {
+                kv = &kv_pairs[kv_idx + i];
+                kv_val_node = &nodes[kv->node_idx];
+                kv_key = strtab + kv->key_offset;
+
+                if (strcmp(kv_key, "schedule") == 0) {
+                    kv_val = strtab + kv_val_node->str.offset;
+                    snprintf(fn_triggers->entries[fn_triggers->cnt].cron_trigger.schedule, 8, "%s", kv_val);
+                }
+            }
+            fn_triggers->cnt++;
+        }
+    }
+}
+
+int aura_fn_fetch_trigger(AURA_DBHANDLE db, struct aura_fn_triggers *fn_triggers,
+                          const char *name, const char *version, int *error) {
+    char buf[2046];
+    struct aura_iovec key;
+    struct aura_db_rec data_out;
+    int res;
+
+    memset(buf, 0, sizeof(buf));
+    snprintf(
+      buf,
+      sizeof(buf),
+      "%s:%s:%s:%s",
+      A_DB_FN_KEY_PREFIX,
+      name,
+      version,
+      A_DB_FN_META_SUFFIX);
+
+    key.base = buf;
+    key.len = strlen(buf);
+
+    aura_db_fetch(db, A_NS_FN, A_FN_META_SCHEMA_ID, &key, &data_out);
+    if (res < 0 || res == A_DB_REC_NOT_FOUND) {
+        *error = res;
+        return -1;
+    }
+
+    a_fn_triggers_parse(data_out.data.base, fn_triggers);
+
+    return 0;
+}
+
+int aura_fn_fetch_trigger_brokered(struct aura_mem_ctx *mc, struct aura_fn_triggers *fn_triggers,
+                                   const char *name, const char *version, int *error, int dmn_sock_fd) {
+    struct aura_iovec key, data_out;
+    char buf[2046];
+    int rv;
+
+    memset(buf, 0, sizeof(buf));
+    snprintf(buf, sizeof(buf), "%s:%s", name, version);
+    key.base = buf;
+    key.len = strlen(buf);
+
+    rv = aura_db_brokered_fetch(mc, A_NS_FN, A_FN_META_SCHEMA_ID, &key, &data_out, dmn_sock_fd);
+    if (rv < 0) {
+        *error = rv;
+        return -1;
+    }
+
+    a_fn_triggers_parse(data_out.base, fn_triggers);
+
+    return 0;
+}
+
 /**
  * Adds a new function to the app function list
  * If function list record does not exist, create
@@ -180,29 +296,7 @@ int aura_fn_list_add_fn(AURA_DBHANDLE db, struct aura_mem_ctx *mc, struct aura_f
             memcpy(new_fn->fn_version, fn_meta->version, strlen(fn_meta->version));
         new_fn->fn_id = fn_meta->fn_id;
         new_fn->timestamp_ms = fn_meta->fn_id;
-
-        int i = 0;
-        while (i < A_FN_MAX_TRIGGERS) {
-            if (fn_meta->http_trigger.path.base) {
-                new_fn->triggers[i].http_trigger.path = aura_strdup(mc, fn_meta->http_trigger.path.base);
-                new_fn->triggers->http_trigger.method = (uint8_t)fn_meta->http_trigger.http_method->value;
-                new_fn->triggers->trigger = A_TRIGGER_HTTP;
-
-                ++i;
-                continue;
-            }
-
-            if (fn_meta->cron_trigger.cron_schedule) {
-                memcpy(new_fn->triggers[i].cron_trigger.schedule, fn_meta->cron_trigger.cron_schedule, 8);
-                new_fn->triggers[i].trigger = A_TRIGGER_CRON;
-
-                ++i;
-                continue;
-            }
-
-            ++i;
-            continue;
-        }
+        new_fn->http = fn_meta->http_trigger.path.base ? true : false;
 
         if (aura_db_insert(
               db,
@@ -248,29 +342,6 @@ int aura_fn_list_add_fn(AURA_DBHANDLE db, struct aura_mem_ctx *mc, struct aura_f
     new_fn->fn_id = fn_meta->fn_id;
     new_fn->timestamp_ms = fn_meta->fn_id;
 
-    int i = 0;
-    while (i < A_FN_MAX_TRIGGERS) {
-        if (fn_meta->http_trigger.path.base) {
-            new_fn->triggers[i].http_trigger.path = aura_strdup(mc, fn_meta->http_trigger.path.base);
-            new_fn->triggers->http_trigger.method = (uint8_t)fn_meta->http_trigger.http_method->value;
-            new_fn->triggers->trigger = A_TRIGGER_HTTP;
-
-            ++i;
-            continue;
-        }
-
-        if (fn_meta->cron_trigger.cron_schedule) {
-            memcpy(new_fn->triggers[i].cron_trigger.schedule, fn_meta->cron_trigger.cron_schedule, 8);
-            new_fn->triggers[i].trigger = A_TRIGGER_CRON;
-
-            ++i;
-            continue;
-        }
-
-        ++i;
-        continue;
-    }
-
     fns_ptr->func_cnt++;
 
     if (aura_db_insert(
@@ -291,19 +362,21 @@ int aura_fn_list_add_fn(AURA_DBHANDLE db, struct aura_mem_ctx *mc, struct aura_f
 }
 
 /* Destroy a deleted function tag */
-void a_fn_tag_destroy(struct aura_fn_tag *del_tag) {
-    for (int i = 0; i < A_FN_MAX_TRIGGERS; ++i) {
-        switch (del_tag->triggers[i].trigger) {
-        case A_TRIGGER_HTTP:
-            aura_free(del_tag->triggers[i].http_trigger.path);
-            break;
+void aura_fn_tag_destroy(struct aura_fn_tag *del_tag) {
+    if (del_tag->fn_triggers.cnt > 0) {
+        for (int i = 0; i < del_tag->fn_triggers.cnt; ++i) {
+            switch (del_tag->fn_triggers.entries[i].trigger) {
+            case A_FN_TRIGGER_HTTP:
+                aura_free(del_tag->fn_triggers.entries[i].http_trigger.path);
+                break;
 
-        case A_TRIGGER_CRON:
-            aura_free(del_tag->triggers[i].cron_trigger.schedule);
-            break;
+            case A_FN_TRIGGER_CRON:
+                aura_free(del_tag->fn_triggers.entries[i].cron_trigger.schedule);
+                break;
 
-        default:
-            break;
+            default:
+                break;
+            }
         }
     }
 }
@@ -336,7 +409,7 @@ int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
             tag_arr = (struct aura_fn_tag *)((char *)(fn_list) + sizeof(*fn_list));
             /* Tag to delete */
             del_tag = &fn_list->func_tags[i];
-            a_fn_tag_destroy(del_tag);
+            aura_fn_tag_destroy(del_tag);
 
             /* Update fn count */
             --(fn_list->func_cnt);
@@ -398,40 +471,41 @@ int aura_fn_meta_parse(void *meta, struct aura_fn_meta *fn_meta) {
     /* Fn name */
     if (fn_tab[A_IDX_FN_NAME] != 0) {
         node = &nodes[fn_tab[A_IDX_FN_NAME]];
-        fn_meta->name = strdup(strtab + node->str_offset);
+        fn_meta->name = strdup(strtab + node->str.offset);
     }
 
     /* Description */
     if (fn_tab[A_IDX_FN_DESCRIPTION] != 0) {
         node = &nodes[fn_tab[A_IDX_FN_DESCRIPTION]];
-        fn_meta->description = strdup(strtab + node->str_offset);
+        fn_meta->description = strdup(strtab + node->str.offset);
     }
 
     /* Version */
     if (fn_tab[A_IDX_FN_VERSION] != 0) {
         node = &nodes[fn_tab[A_IDX_FN_VERSION]];
-        fn_meta->version = strdup(strtab + node->str_offset);
+        fn_meta->version = strdup(strtab + node->str.offset);
     }
 
     /* FN ID */
     if (fn_tab[A_IDX_FN_ID] != 0) {
         const char *fn_id;
         node = &nodes[fn_tab[A_IDX_FN_ID]];
-        fn_id = strtab + node->str_offset;
+        fn_id = strtab + node->str.offset;
         if (aura_scan_str(fn_id, "%lu" SCNu64, &fn_meta->fn_id) < 0)
             goto exception;
+        app_debug(true, 0, "fn_id ------------------->>>>>>>> %lu", fn_meta->fn_id);
     }
 
     /* Entry */
     if (fn_tab[A_IDX_FN_ENTRY_POINT] != 0) {
         node = &nodes[fn_tab[A_IDX_FN_ENTRY_POINT]];
-        fn_meta->entry_point = strdup(strtab + node->str_offset);
+        fn_meta->entry_point = strdup(strtab + node->str.offset);
     }
 
     /* Host */
     if (fn_tab[A_IDX_FN_HOST] != 0) {
         node = &nodes[fn_tab[A_IDX_FN_HOST]];
-        fn_meta->host = strdup(strtab + node->str_offset);
+        fn_meta->host = strdup(strtab + node->str.offset);
     }
 
     /* FN triggers */
@@ -439,7 +513,7 @@ int aura_fn_meta_parse(void *meta, struct aura_fn_meta *fn_meta) {
     const st_aura_blob_node *cron_trigger_retry_node;
 
     if (fn_tab[A_IDX_FN_TRIGGERS] != 0) {
-        fn_triggers_node = &nodes[fn_tab[A_IDX_FN_TRIGGERS]];
+        // fn_triggers_node = &nodes[fn_tab[A_IDX_FN_TRIGGERS]];
         /* http */
         if (fn_tab[A_IDX_FN_HTTP_TRIGGER] != 0) {
             http_trigger_node = &nodes[fn_tab[A_IDX_FN_HTTP_TRIGGER]];
@@ -452,13 +526,13 @@ int aura_fn_meta_parse(void *meta, struct aura_fn_meta *fn_meta) {
                 kv_key = strtab + kv->key_offset;
 
                 if (strcmp(kv_key, "path") == 0) {
-                    kv_val = strtab + kv_val_node->str_offset;
+                    kv_val = strtab + kv_val_node->str.offset;
                     fn_meta->http_trigger.path.base = strdup(kv_val);
                     fn_meta->http_trigger.path.len = strlen(kv_val);
                 }
 
                 if (strcmp(kv_key, "method") == 0) {
-                    kv_val = strtab + kv_val_node->str_offset;
+                    kv_val = strtab + kv_val_node->str.offset;
                     fn_meta->http_trigger.http_method = aura_fn_http_method_get(kv_val);
                     if (!fn_meta->http_trigger.http_method) {
                         goto exception;
@@ -483,18 +557,18 @@ int aura_fn_meta_parse(void *meta, struct aura_fn_meta *fn_meta) {
                 kv_key = strtab + kv->key_offset;
 
                 if (strcmp(kv_key, "schedule") == 0) {
-                    kv_val = strtab + kv_val_node->str_offset;
+                    kv_val = strtab + kv_val_node->str.offset;
                     fn_meta->cron_trigger.cron_schedule = strdup(kv_val);
                 }
 
                 if (strcmp(kv_key, "jitter_seconds") == 0) {
-                    kv_val = strtab + kv_val_node->str_offset;
+                    kv_val = strtab + kv_val_node->str.offset;
                     if (aura_scan_str(kv_val, "%d" SCNu64, &fn_meta->cron_trigger.jitter_seconds) < 0)
                         goto exception;
                 }
 
                 if (strcmp(kv_key, "misfire_policy") == 0) {
-                    kv_val = strtab + kv_val_node->str_offset;
+                    kv_val = strtab + kv_val_node->str.offset;
                     fn_meta->cron_trigger.misfire_policy = aura_fn_cron_misfire_policy_get(kv_val);
                     if (!fn_meta->cron_trigger.misfire_policy)
                         goto exception;
@@ -518,7 +592,7 @@ int aura_fn_meta_parse(void *meta, struct aura_fn_meta *fn_meta) {
                 kv_key = strtab + kv->key_offset;
 
                 if (strcmp(kv_key, "topic") == 0) {
-                    kv_val = strtab + kv_val_node->str_offset;
+                    kv_val = strtab + kv_val_node->str.offset;
                 }
             }
         }
@@ -537,19 +611,19 @@ int aura_fn_meta_parse(void *meta, struct aura_fn_meta *fn_meta) {
             kv_key = strtab + kv->key_offset;
 
             if (strcmp(kv_key, "soft") == 0) {
-                kv_val = strtab + kv_val_node->str_offset;
+                kv_val = strtab + kv_val_node->str.offset;
                 if (aura_scan_str(kv_val, "%u" SCNu32, &fn_meta->fn_resources.memory_limit_mb_soft) < 0)
                     goto exception;
             }
 
             if (strcmp(kv_key, "hard") == 0) {
-                kv_val = strtab + kv_val_node->str_offset;
+                kv_val = strtab + kv_val_node->str.offset;
                 if (aura_scan_str(kv_val, "%u" SCNu32, &fn_meta->fn_resources.memory_limit_mb_hard) < 0)
                     goto exception;
             }
 
             if (strcmp(kv_key, "oom_policy") == 0) {
-                kv_val = strtab + kv_val_node->str_offset;
+                kv_val = strtab + kv_val_node->str.offset;
                 fn_meta->fn_resources.oom_policy = aura_fn_oom_policy_get(kv_val);
                 if (!fn_meta->fn_resources.oom_policy)
                     goto exception;
@@ -610,7 +684,7 @@ int aura_fn_config_parse(void *config, struct aura_fn_config *fn_config) {
             kv_key = strtab + kv->key_offset;
             kv_val_node = &nodes[kv->node_idx];
 
-            fn_config->envs[i].base = strdup(strtab + kv_val_node->str_offset);
+            fn_config->envs[i].base = strdup(strtab + kv_val_node->str.offset);
             fn_config->envs[i].len = strlen(fn_config->envs[i].base);
             env_cnt++;
         }
@@ -625,7 +699,7 @@ int aura_fn_config_parse(void *config, struct aura_fn_config *fn_config) {
 
         if (fn_tab[A_IDX_FN_MIN_INSTANCES] != 0) {
             min_instance_node = &nodes[fn_tab[A_IDX_FN_MIN_INSTANCES]];
-            instances = strtab + min_instance_node->str_offset;
+            instances = strtab + min_instance_node->str.offset;
             if (aura_scan_str(instances, "%d" SCNu32, &fn_config->fn_concurrency.min_instances) < 0) {
                 goto exception;
             }
@@ -633,14 +707,14 @@ int aura_fn_config_parse(void *config, struct aura_fn_config *fn_config) {
 
         if (fn_tab[A_IDX_FN_MAX_INSTANCES] != 0) {
             max_instance_node = &nodes[fn_tab[A_IDX_FN_MAX_INSTANCES]];
-            instances = strtab + max_instance_node->str_offset;
+            instances = strtab + max_instance_node->str.offset;
             if (aura_scan_str(instances, "%d" SCNu32, &fn_config->fn_concurrency.max_instances) < 0)
                 goto exception;
         }
 
         if (fn_tab[A_IDX_FN_PREWARM] != 0) {
             max_instance_node = &nodes[fn_tab[A_IDX_FN_PREWARM]];
-            instances = strtab + max_instance_node->str_offset;
+            instances = strtab + max_instance_node->str.offset;
             if (aura_scan_str(instances, "%d" SCNu32, &fn_config->fn_concurrency.pre_warm_on_deploy) < 0)
                 goto exception;
         }
@@ -999,28 +1073,23 @@ int aura_fn_registry_init(struct aura_fn_registry *r, struct aura_mem_ctx *mc, u
         return -1;
 }
 
-int aura_fn_cache_init(struct aura_lru_cache *cache, struct aura_slab_cache *sc,
-                       struct aura_mem_ctx *mc) {
-    char *cache_name = aura_strdup(mc, "function cache");
-
-    if (aura_lru_cache_init(
-          cache,
-          cache_name,
-          sc,
-          A_FN_MAX_REGISTRY_CNT,
-          sc->obj_size,
-          offsetof(struct aura_fn, lc_entry)) < 0) {
-        aura_free(cache_name);
-        return -1;
-    }
-
-    return -1;
+int aura_fn_cache_init(struct aura_lru_cache *cache, struct aura_mem_ctx *mc) {
+    return aura_lru_cache_init(
+      cache,
+      mc,
+      "function cache",
+      A_FN_SLAB_CACHE_ID,
+      A_FN_MAX_REGISTRY_CNT,
+      sizeof(struct aura_fn),
+      offsetof(struct aura_fn, lc_entry));
 }
 
 struct aura_fn_registry_ent *aura_fn_load_fn_registry_entry(struct aura_fn_registry *r,
-                                                            struct aura_fn_tag *fn_tag,
-                                                            uint32_t index) {
-    struct aura_fn_registry_ent *e = &r->entries[index];
+                                                            struct aura_fn_tag *fn_tag) {
+    if (r->cnt >= A_FN_MAX_REGISTRY_CNT)
+        return NULL;
+
+    struct aura_fn_registry_ent *e = &r->entries[r->cnt++];
     struct aura_rh_map_key key;
 
     e->fn = NULL;
@@ -1033,32 +1102,27 @@ struct aura_fn_registry_ent *aura_fn_load_fn_registry_entry(struct aura_fn_regis
     return e;
 }
 
-struct aura_fn *aura_fn_load_brokered(struct aura_mem_ctx *mc, char *fn_name,
-                                      char *fn_version, int sock_fd) {
-    struct aura_fn *fn;
+int aura_fn_load_brokered(struct aura_mem_ctx *mc, struct aura_fn *fn,
+                          char *fn_name, char *fn_version, int sock_fd) {
+    // struct aura_fn *fn;
     struct aura_iovec key, data_out;
-    char buf[2000];
+    char buf[2046];
     int res, error;
 
-    fn = aura_alloc(mc, sizeof(*fn));
-    if (!fn)
-        return NULL;
-    /* Check if fn available */
-    /* @todo, check and respect function state and policy */
+    /* @todo: Check if fn available for execution: state and policy */
 
     /* Meta */
     memset(buf, 0, sizeof(buf));
-    memset(fn, 0, sizeof(*fn));
     snprintf(buf, sizeof(buf), "%s:%s", fn_name, fn_version);
     key.base = buf;
     key.len = strlen(buf);
     res = aura_db_brokered_fetch(mc, A_NS_FN, A_FN_META_SCHEMA_ID, &key, &data_out, sock_fd);
     if (res < 0) {
-        return NULL;
+        return -1;
     }
 
     if (aura_fn_meta_parse(data_out.base, &fn->meta) < 0) {
-        return NULL;
+        return -1;
     }
     aura_free(data_out.base);
 
@@ -1069,18 +1133,18 @@ struct aura_fn *aura_fn_load_brokered(struct aura_mem_ctx *mc, char *fn_name,
     key.len = strlen(buf);
     res = aura_db_brokered_fetch(mc, A_NS_FN, A_FN_CONF_SCHEMA_ID, &key, &data_out, sock_fd);
     if (res < 0) {
-        return NULL;
+        return -1;
     }
 
     if (aura_fn_config_parse(data_out.base, &fn->config) < 0) {
-        return NULL;
+        return -1;
     }
     aura_free(data_out.base);
 
     /* Stats */
     struct aura_fn_stat *s = aura_fn_stat_fetch_brokered(mc, fn_name, fn_version, sock_fd);
     if (!s)
-        return NULL;
+        return -1;
 
     memcpy(&fn->stats, s, sizeof(fn->stats));
     aura_free(s);
@@ -1092,7 +1156,7 @@ struct aura_fn *aura_fn_load_brokered(struct aura_mem_ctx *mc, char *fn_name,
     key.len = strlen(buf);
     res = aura_db_brokered_fetch(mc, A_NS_FN, A_FN_STATE_SCHEMA_ID, &key, &data_out, sock_fd);
     if (res < 0) {
-        return NULL;
+        return -1;
     }
 
     memcpy(&fn->state, data_out.base, sizeof(fn->state));
@@ -1105,7 +1169,7 @@ struct aura_fn *aura_fn_load_brokered(struct aura_mem_ctx *mc, char *fn_name,
     key.len = strlen(buf);
     res = aura_db_brokered_fetch(mc, A_NS_FN, A_FN_CODE_SCHEMA_ID, &key, &data_out, sock_fd);
     if (res < 0) {
-        return NULL;
+        return -1;
     }
 
     /* transfer ownership of function */
@@ -1113,7 +1177,7 @@ struct aura_fn *aura_fn_load_brokered(struct aura_mem_ctx *mc, char *fn_name,
     fn->fn_code_len = data_out.len;
     fn->backend = 1; /* JS backend */
 
-    return fn;
+    return 0;
 }
 
 struct aura_fn_stat *aura_fn_stat_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_version) {
@@ -1138,7 +1202,7 @@ struct aura_fn_stat *aura_fn_stat_fetch_brokered(struct aura_mem_ctx *mc, char *
                                                  char *fn_version, int dmn_fd) {
     struct aura_fn_stat *fn_stat;
     struct aura_iovec key, data_out;
-    char buf[2000];
+    char buf[2046];
     int res;
 
     memset(buf, 0, sizeof(buf));
@@ -1197,4 +1261,27 @@ void aura_fn_stat_dump(struct aura_fn_stat *stats) {
     app_debug(true, 0, "    Total failures: %lu", stats->failures);
     app_debug(true, 0, "    Latency: %lu", stats->latency_ns);
     app_debug(true, 0, "    Last execution: %lu", stats->last_execution);
+}
+
+void aura_fn_dump_fn_tag(struct aura_fn_tag *tag) {
+    app_debug(true, 0, "AURA FN TAG");
+    app_debug(true, 0, "    FN Id=%zu", tag->fn_id);
+    app_debug(true, 0, "    FN Name=%s", tag->fn_name);
+    app_debug(true, 0, "    FN Version=%s", tag->fn_version);
+    app_debug(true, 0, "    Deployed at: %zu", tag->timestamp_ms);
+
+    if (tag->fn_triggers.cnt > 0) {
+        app_debug(true, 0, "    Triggers");
+        for (int i = 0; i < tag->fn_triggers.cnt; ++i) {
+            switch (tag->fn_triggers.entries[i].trigger) {
+            case A_FN_TRIGGER_HTTP:
+                app_debug(true, 0, "    Http Trigger");
+                app_debug(true, 0, "        Path=%s", tag->fn_triggers.entries[i].http_trigger.path);
+                app_debug(true, 0, "        Method=%s", tag->fn_triggers.entries[i].http_trigger.path);
+                break;
+            }
+        }
+    } else {
+        app_debug(true, 0, "     No func triggers registered");
+    }
 }

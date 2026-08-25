@@ -126,12 +126,14 @@ uint32_t aura_build_blob_from_rax(aura_rax_tree_t *t, st_aura_b_builder *b, stru
                 yn = &node_arr[stack->ns.node_pair[j].node_off];
 
                 if (yn->type == A_YAML_SCALAR) {
-                    if (yn->val_type == A_YAML_NUM)
-                        val_off = aura_blob_b_add_num(b, yn->uint_val, A_BLOB_NODE_INT);
+                    if (yn->val_type == A_YAML_INT)
+                        val_off = aura_blob_b_add_int(b, yn->int_val, A_BLOB_NODE_INT);
+                    else if (yn->val_type == A_YAML_UINT)
+                        val_off = aura_blob_b_add_uint(b, yn->uint_val, A_BLOB_NODE_UINT);
                     else if (yn->val_type == A_YAML_BOOL)
-                        val_off = aura_blob_b_add_num(b, yn->bool_val, A_BLOB_NODE_BOOL);
+                        val_off = aura_blob_b_add_int(b, yn->bool_val, A_BLOB_NODE_BOOL);
                     else if (yn->val_type == A_YAML_STRING)
-                        val_off = aura_blob_b_add_str(b, yn->str_val);
+                        val_off = aura_blob_b_add_str(b, yn->str_val, strlen(yn->str_val));
 
                     /* 0 idx is preserved */
                     if (yn->tab_entry != 0) {

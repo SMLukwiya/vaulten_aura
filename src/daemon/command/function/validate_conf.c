@@ -10,6 +10,8 @@
 #include <stdio.h>
 #include <strings.h>
 
+static bool fn_id_set = false;
+
 /**
  * Expects field name, value expected and value parsed in that order
  */
@@ -178,17 +180,6 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
         return;
     }
 
-    /* Insert FN ID manually */
-    if (usr_data->extract && !p->in_panic) {
-        uint64_t fn_id = aura_now_ms(CLOCK_MONOTONIC);
-
-        node_off = a_get_node_off(p, evt);
-        yml_node = &usr_data->node_vec.entries[node_off];
-        a_init_yaml_node(yml_node, A_YAML_SCALAR, "id", A_YAML_NUM, A_IDX_FN_ID);
-        yml_node->uint_val = fn_id;
-        a_parse_tree_insert(p, evt, yn, node_off);
-    }
-
     /* FN entry point */
     if (strcmp(yn->key, "entrypoint") == 0) {
         int entry_fd;
@@ -226,8 +217,23 @@ void a_fn_validate_function(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
             yml_node->str_val = strdup(yn->str_val);
             a_parse_tree_insert(p, evt, yn, node_off);
         }
-        return;
     }
+
+    /* Insert FN ID manually as last field */
+    if (usr_data->extract && !p->in_panic && !fn_id_set) {
+        uint64_t fn_id = aura_now_ms(CLOCK_REALTIME);
+
+        node_off = a_get_node_off(p, evt);
+        yml_node = &usr_data->node_vec.entries[node_off];
+        a_init_yaml_node(yml_node, A_YAML_SCALAR, "id", A_YAML_UINT, A_IDX_FN_ID);
+        yml_node->uint_val = fn_id;
+
+        /* Modify path for tree insertion */
+        yn->full_path = "function.id";
+        a_parse_tree_insert(p, evt, yn, node_off);
+        fn_id_set = true;
+    }
+    return;
 }
 
 /* ENV */
@@ -400,7 +406,7 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
             yml_node = &usr_data->node_vec.entries[node_off];
             a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NONE, A_IDX_FN_HTTP_TRIGGER);
             a_parse_tree_insert(p, evt, yn, node_off);
-            usr_data->trigger_type = A_TRIGGER_HTTP;
+            usr_data->trigger_type = A_FN_TRIGGER_HTTP;
         }
         return;
     }
@@ -409,7 +415,7 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
     if (strcmp(yn->key, "path") == 0) {
         a_ensure_node_is_scalar(p, evt, yn);
 
-        if (usr_data->trigger_type != A_TRIGGER_HTTP) {
+        if (usr_data->trigger_type != A_FN_TRIGGER_HTTP) {
             YAML_ADD_ERROR(p, evt, "Invalid %p, path must be under HTTP trigger type.", yn->full_path);
             return;
         }
@@ -429,7 +435,7 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
         aura_fn_http_method_t method;
         a_ensure_node_is_scalar(p, evt, yn);
 
-        if (usr_data->trigger_type != A_TRIGGER_HTTP) {
+        if (usr_data->trigger_type != A_FN_TRIGGER_HTTP) {
             YAML_ADD_ERROR(p, evt, "Invalid %p, method must be under HTTP trigger type.", yn->full_path);
             return;
         }
@@ -442,7 +448,7 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
             yml_node = &usr_data->node_vec.entries[node_off];
-            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NUM, A_IDX_FN_NONE);
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_INT, A_IDX_FN_NONE);
             yml_node->int_val = method;
             a_parse_tree_insert(p, evt, yn, node_off);
         }
@@ -458,7 +464,7 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
             yml_node = &usr_data->node_vec.entries[node_off];
             a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NONE, A_IDX_FN_CRON_TRIGGER);
             a_parse_tree_insert(p, evt, yn, node_off);
-            usr_data->trigger_type = A_TRIGGER_CRON;
+            usr_data->trigger_type = A_FN_TRIGGER_CRON;
         }
         return;
     }
@@ -467,7 +473,7 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
     if (strcmp(yn->key, "schedule") == 0) {
         a_ensure_node_is_scalar(p, evt, yn);
 
-        if (usr_data->trigger_type != A_TRIGGER_CRON) {
+        if (usr_data->trigger_type != A_FN_TRIGGER_CRON) {
             YAML_ADD_ERROR(p, evt, "Invalid %s", yn->full_path);
             return;
         }
@@ -487,7 +493,7 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
         int32_t seconds;
         a_ensure_node_is_scalar(p, evt, yn);
 
-        if (usr_data->trigger_type != A_TRIGGER_CRON) {
+        if (usr_data->trigger_type != A_FN_TRIGGER_CRON) {
             YAML_ADD_ERROR(p, evt, "Invalid %s", yn->full_path);
             return;
         }
@@ -500,7 +506,7 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
             yml_node = &usr_data->node_vec.entries[node_off];
-            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NUM, A_IDX_FN_NONE);
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_INT, A_IDX_FN_NONE);
             yml_node->int_val = seconds;
             a_parse_tree_insert(p, evt, yn, node_off);
         }
@@ -513,7 +519,7 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
         a_ensure_node_is_scalar(p, evt, yn);
 
-        if (usr_data->trigger_type != A_TRIGGER_CRON) {
+        if (usr_data->trigger_type != A_FN_TRIGGER_CRON) {
             YAML_ADD_ERROR(p, evt, "Invalid %s", yn->full_path);
             return;
         }
@@ -526,7 +532,7 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
             yml_node = &usr_data->node_vec.entries[node_off];
-            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NUM, A_IDX_FN_NONE);
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_INT, A_IDX_FN_NONE);
             yml_node->int_val = policy;
             a_parse_tree_insert(p, evt, yn, node_off);
         }
@@ -537,7 +543,7 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
     if (strcmp(yn->key, "retries") == 0) {
         a_ensure_node_is_mapping(p, evt, yn);
 
-        if (usr_data->trigger_type != A_TRIGGER_CRON) {
+        if (usr_data->trigger_type != A_FN_TRIGGER_CRON) {
             YAML_ADD_ERROR(p, evt, "Invalid %s", yn->full_path);
             return;
         }
@@ -620,7 +626,7 @@ void a_fn_validate_concurrency(struct aura_yml_conf_parser *p, yaml_event_t *evt
               yml_node,
               yn->type,
               yn->key,
-              A_YAML_NUM,
+              A_YAML_INT,
               is_max ? A_IDX_FN_MAX_INSTANCES : A_IDX_FN_MIN_INSTANCES);
             yml_node->int_val = instances;
             a_parse_tree_insert(p, evt, yn, node_off);
@@ -741,7 +747,7 @@ void a_fn_validate_resource(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
             yml_node = &usr_data->node_vec.entries[node_off];
-            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NUM, is_soft ? A_IDX_FN_SOFT_MEM : A_IDX_FN_HARD_MEM);
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_INT, is_soft ? A_IDX_FN_SOFT_MEM : A_IDX_FN_HARD_MEM);
             yml_node->int_val = value;
             a_parse_tree_insert(p, evt, yn, node_off);
         }
@@ -761,7 +767,7 @@ void a_fn_validate_resource(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
         if (usr_data->extract && !p->in_panic) {
             node_off = a_get_node_off(p, evt);
             yml_node = &usr_data->node_vec.entries[node_off];
-            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_NUM, A_IDX_FN_OOM_POLICY);
+            a_init_yaml_node(yml_node, yn->type, yn->key, A_YAML_INT, A_IDX_FN_OOM_POLICY);
             yml_node->int_val = policy;
             a_parse_tree_insert(p, evt, yn, node_off);
         }

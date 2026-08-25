@@ -32,6 +32,9 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/memory/lru_cache.c
     ${vaulten_aura_SOURCE_DIR}/lib/timer/timer.c
     ${vaulten_aura_SOURCE_DIR}/lib/stream/lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/event_ctx/context.c
+    ${vaulten_aura_SOURCE_DIR}/lib/event_ctx/http.c
+    ${vaulten_aura_SOURCE_DIR}/lib/event_ctx/cron.c
 )
 
 add_executable(aura_daemon

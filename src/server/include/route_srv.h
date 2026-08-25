@@ -13,8 +13,6 @@ struct aura_router;
 
 /* Route structure */
 struct aura_route {
-    // struct aura_fn *fn;
-    // struct aura_work_queue *wq;
     struct aura_router *router; /* router to which route belongs */
     void *bpf_program;
     uint32_t flag; /* config flags, only http2 enabled now */

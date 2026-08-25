@@ -22,7 +22,7 @@
 #define A_FN_VERSION_MAX_LEN 32
 #define A_FN_DEFAULT_VERSION "1.0.0"
 #define A_FN_MAX_REGISTRY_CNT 32
-#define A_FN_MAX_TRIGGERS 16
+#define A_FN_MAX_TRIGGERS 8
 
 /* Namespace prefixes */
 #define A_DB_FN_KEY_PREFIX "fn"
@@ -138,9 +138,9 @@ extern const struct aura_fn_runtime runtimes[];
 
 /* Triggers */
 typedef enum {
-    A_TRIGGER_HTTP = 1,
-    A_TRIGGER_CRON,
-    A_TRIGGER_QUEUE
+    A_FN_TRIGGER_HTTP = 1,
+    A_FN_TRIGGER_CRON,
+    A_FN_TRIGGER_QUEUE
 } aura_trigger_t;
 
 struct aura_fn_trigger {
@@ -518,8 +518,7 @@ struct aura_fn_stat {
  */
 struct aura_fn_stat_wrapper {
     struct aura_fn_stat *fn_stat;
-    char *fn_name;
-    char *fn_version;
+    struct aura_fn_tag *fn_tag;
     struct aura_heap_ent hp_ent;
 };
 
@@ -533,8 +532,8 @@ enum {
 struct fn_tag_trigger {
     union {
         struct {
-            char *path;
             uint8_t method;
+            char *path;
         } http_trigger;
         struct {
             char schedule[8];
@@ -543,6 +542,12 @@ struct fn_tag_trigger {
     uint8_t trigger;
 } __attribute__((packed));
 
+struct aura_fn_triggers {
+    struct fn_tag_trigger entries[8]; /* Function triggers */
+    uint8_t cnt;                      /* Trigger count */
+    uint8_t cap;
+};
+
 /**
  * Function structure used in function list structure.
  * It would be nice to be able to represent functions
@@ -550,11 +555,12 @@ struct fn_tag_trigger {
  * representation.
  */
 struct aura_fn_tag {
-    char fn_name[A_FN_NAME_MAX_LEN];                   /* Function name */
-    uint8_t fn_version[A_FN_VERSION_MAX_LEN];          /* Function version */
-    uint64_t fn_id;                                    /* Function ID */
-    uint64_t timestamp_ms;                             /* Deployment time */
-    struct fn_tag_trigger triggers[A_FN_MAX_TRIGGERS]; /* Function triggers */
+    uint8_t fn_name[A_FN_NAME_MAX_LEN];       /* Function name */
+    uint8_t fn_version[A_FN_VERSION_MAX_LEN]; /* Function version */
+    uint64_t fn_id;                           /* Function ID */
+    uint64_t timestamp_ms;                    /* Deployment time */
+    struct aura_fn_triggers fn_triggers;      /* Fn triggers loaded on demand and not saved as part of fn_tag */
+    bool http;                                /* If function is http triggered, use by the server  */
 };
 
 /** System functions structure */
@@ -575,6 +581,7 @@ struct aura_fn_registry_ent {
 struct aura_fn_registry {
     struct aura_fn_registry_ent entries[A_FN_MAX_REGISTRY_CNT];
     struct aura_rh_map hashmap; /* Quick fn lookup */
+    uint64_t cnt;
 };
 
 /** Function state */
@@ -740,23 +747,23 @@ static inline const struct aura_fn_oom_policy *aura_fn_oom_policy_get(const char
  * internal fields over to the cache slot
  * represented by lru_entry.
  */
-static inline void aura_fn_cache_load(struct aura_lru_entry *e, struct aura_fn *fn) {
-    uint64_t fn_size = offsetof(struct aura_fn, lc_entry);
-    void *slot = aura_lru_cache_entry(e, struct aura_fn, lc_entry);
-    /**
-     * lru entry is the last member of
-     * the fn struct. fn_size should there
-     * represent the length excluding the last
-     * member "lc_entry". We only copy the fn part.
-     */
-    memcpy(slot, fn, fn_size);
+// static inline void aura_fn_cache_load(struct aura_lru_entry *e, struct aura_fn *fn) {
+//     uint64_t fn_size = offsetof(struct aura_fn, lc_entry);
+//     void *slot = aura_lru_cache_entry(e, struct aura_fn, lc_entry);
+//     /**
+//      * lru entry is the last member of
+//      * the fn struct. fn_size should there
+//      * represent the length excluding the last
+//      * member "lc_entry". We only copy the fn part.
+//      */
+//     memcpy(slot, fn, fn_size);
 
-    /**
-     * zero out the fn incase we call delete fn after.
-     * So we can preserve what we just transfere over.
-     */
-    memset(fn, 0, sizeof(*fn));
-}
+//     /**
+//      * zero out the fn since we just transfer fields over.
+//      * This was deleting the function does invalidate the fields.
+//      */
+//     memset(fn, 0, sizeof(*fn));
+// }
 
 /* Create function backing cache */
 static inline struct aura_slab_cache *aura_fn_slab_cache_create(struct aura_mem_ctx *mc) {
@@ -800,7 +807,7 @@ static inline void aura_fn_get_name_and_version(struct iovec *fn, char *fn_name,
          * found after the sep(:).
          */
         *sep = '\0';
-        func_vlen = ((char *)fn->iov_base + fn->iov_len) - sep;
+        func_vlen = ((char *)fn->iov_base + fn->iov_len) - (sep + 1);
         memcpy(fn_version, sep + 1, func_vlen);
 
         /* account for version and separator */
@@ -874,20 +881,20 @@ struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_mem_ctx *mc, char *fn
 int aura_fn_registry_init(struct aura_fn_registry *r, struct aura_mem_ctx *mc, uint32_t max_size);
 
 /* Initialize fn cache */
-int aura_fn_cache_init(struct aura_lru_cache *cache, struct aura_slab_cache *sc,
-                       struct aura_mem_ctx *mc);
+int aura_fn_cache_init(struct aura_lru_cache *cache, struct aura_mem_ctx *mc);
 
 /* Load function registry */
 struct aura_fn_registry_ent *aura_fn_load_fn_registry_entry(struct aura_fn_registry *r,
-                                                            struct aura_fn_tag *fn_tag,
-                                                            uint32_t index);
+                                                            struct aura_fn_tag *fn_tag);
 
 /* */
 struct aura_fn_stat *aura_fn_stat_fetch_brokered(struct aura_mem_ctx *mc, char *fn_name,
                                                  char *fn_version, int dmn_fd);
 
 /* */
-struct aura_fn *aura_fn_load_brokered(struct aura_mem_ctx *mc, char *fn_name, char *fn_version, int sock_fd);
+// struct aura_fn *aura_fn_load_brokered(struct aura_mem_ctx *mc, char *fn_name, char *fn_version, int sock_fd);
+int aura_fn_load_brokered(struct aura_mem_ctx *mc, struct aura_fn *fn,
+                          char *fn_name, char *fn_version, int sock_fd);
 
 /** Fetch function stats */
 struct aura_fn_stat *aura_fn_stat_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_version);
@@ -901,6 +908,15 @@ int aura_fn_queue_init(struct aura_fn_queue *q, struct aura_worker_pool *glob_po
 /* Destroy function structure */
 void aura_fn_destroy(struct aura_fn *fn);
 
+/* Destroy a function tag */
+void aura_fn_tag_destroy(struct aura_fn_tag *fn_tag);
+
+int aura_fn_fetch_trigger(AURA_DBHANDLE db, struct aura_fn_triggers *fn_triggers,
+                          const char *name, const char *version, int *error);
+
+int aura_fn_fetch_trigger_brokered(struct aura_mem_ctx *mc, struct aura_fn_triggers *fn_triggers,
+                                   const char *name, const char *version, int *error, int dmn_sock_fd);
+
 /* Dump fn metadata */
 void aura_fn_meta_dump(struct aura_fn_meta *fn_meta);
 
@@ -910,4 +926,6 @@ void aura_fn_config_dump(struct aura_fn_config *fn_conf);
 /* Dump function stats */
 void aura_fn_stat_dump(struct aura_fn_stat *stats);
 
+/* Dunp function tag */
+void aura_fn_dump_fn_tag(struct aura_fn_tag *tag);
 #endif
