@@ -115,15 +115,15 @@ struct aura_conn {
     struct aura_conn_prot_ops *prot_ops; /* Protocol ops to manage underlying protocol */
     struct aura_srv_host_conf *host;     /* host configuration */
     a_transport_protocol prot_type;
-    aura_conn_state_t state; /* connection state */
-    struct aura_conn_sentinel sen;
+    aura_conn_state_t state;       /* connection state */
+    struct aura_conn_sentinel sen; /* Sentinel to control conn sanity */
 
-    ptls_log_conn_state_t ptls_log_state; /* Ptls logging state */
-    struct aura_sliding_buf residual_buf; /* Store bytes when sock write chokes on current tick */
-    struct aura_sliding_buf plain_read_buf;
+    ptls_log_conn_state_t ptls_log_state;   /* Ptls logging state */
+    struct aura_sliding_buf residual_buf;   /* Store bytes when sock write chokes on current tick */
+    struct aura_sliding_buf plain_read_buf; /* Decoded byte buffer */
 
-    struct aura_list_head c_list; /* for keeping track in queue */
-    struct aura_list_head tasks;  /* List of tasks queue for execution */
+    struct aura_list_head c_list; /* for keeping track in global conn queue */
+    struct aura_list_head tasks;  /* @todo: may not need this. List of tasks queue for execution */
 
     struct aura_timer_node timer;         /* Timer node attached to the conn */
     struct aura_conn_deadlines deadlines; /* Deadlines applicable to connection */
@@ -132,7 +132,7 @@ struct aura_conn {
     struct aura_iovec server_name;
     struct aura_dp_pipeline_hook *in_hooks; /* Inbound hooks */
     uint8_t in_hooks_cnt;                   /* Hooks count */
-    bool is_server;                         /* Handling client connection */
+    bool is_server;                         /* Not client connection */
     bool is_secure;                         /* Encrypted enabled connection */
 };
 

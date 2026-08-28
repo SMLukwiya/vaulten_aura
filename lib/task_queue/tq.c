@@ -4,7 +4,7 @@
 int aura_task_queue_init(struct aura_task_queue *tq, uint32_t flags, int max_conc) {
     memset(tq, 0, sizeof(*tq));
 
-    if (pthread_mutext_init(&tq->lock, NULL) != 0)
+    if (pthread_mutex_init(&tq->lock, NULL) != 0)
         return -1;
 
     aura_list_head_init(&tq->fn_queues);
@@ -16,16 +16,16 @@ int aura_task_queue_init(struct aura_task_queue *tq, uint32_t flags, int max_con
     return 0;
 }
 
-int aura_worker_pool_init(struct aura_worker_pool *worker_pool, timer_cb idle_worker_cb) {
-    uint64_t idle_worker_deadline = aura_now_ms(CLOCK_MONOTONIC) + a_time_s_to_ms(5);
+void aura_task_queue_destroy(struct aura_task_queue *tq) {
+    pthread_mutex_destroy(&tq->lock);
+}
+
+int aura_worker_pool_init(struct aura_worker_pool *worker_pool) {
     memset(worker_pool, 0, sizeof(*worker_pool));
 
     if (pthread_mutex_init(&worker_pool->lock, NULL) != 0)
         return -1;
 
-    aura_timer_node_init(&worker_pool->idle_time, idle_worker_cb, idle_worker_deadline, NULL);
-
-    aura_list_head_init(&worker_pool->idle_list);
     aura_list_head_init(&worker_pool->idle_list);
     aura_list_head_init(&worker_pool->workers);
 

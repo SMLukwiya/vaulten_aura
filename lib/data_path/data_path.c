@@ -24,11 +24,9 @@ int aura_dp_pipeline_execute(struct aura_dp_msg *msg) {
 
         case A_DP_HOOK_WAIT:
         case A_DP_HOOK_DONE:
+        case A_DP_HOOK_ERR:
             /* Early exit */
             return rv;
-
-        case A_DP_HOOK_ERR:
-            return -1;
 
         default:
             break;

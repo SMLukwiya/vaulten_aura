@@ -1,20 +1,21 @@
 #ifndef AURA_DMN_H
 #define AURA_DMN_H
 
+#include <fcntl.h>
+#include <poll.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+
 #include "db/db.h"
 #include "dense_pool/static.h"
 #include "error_lib.h"
 #include "event_ctx/context.h"
 #include "fn/lib.h"
-#include "mem.h"
+#include "memory/lru_cache.h"
+#include "memory/mem.h"
 #include "time_lib.h"
 #include "types_lib.h"
 #include "user/user.h"
-
-#include <fcntl.h>
-#include <poll.h>
-#include <sys/stat.h>
-#include <sys/types.h>
 
 #define A_SOCK_FILE_FD_IDX 0
 #define A_SOCK_PAIR_FD_IDX 1
@@ -48,6 +49,7 @@ struct aura_dmn_glob_conf {
     struct aura_pollfd_dense_pool pollfd_pool;     /* Daemon polling structure */
     struct aura_user_rec user;                     /* Daemon user */
     struct aura_dmn_conf admin_conf;
+    struct aura_lru_cache fn_cache; /* Function cache */
     int unix_sock_fd;
     int server_pid;               /* server process id */
     int server_fd;                /* server socket fd from socket_pair */

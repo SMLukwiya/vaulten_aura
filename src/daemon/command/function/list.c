@@ -14,7 +14,7 @@ void aura_dmn_fn_list(struct iovec *key, int cli_fd, void *arg) {
 
     fn_state = key->iov_base;
 
-    fn_list = aura_fn_list_fetch(db, &error);
+    fn_list = aura_fn_list_fetch(&gc->mc, db, -1, &error);
     if (!fn_list) {
         if (error < 0) {
             evt.error_code = A_FN_ERROR_GENERIC;

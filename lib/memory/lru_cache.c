@@ -169,7 +169,7 @@ static struct aura_lru_entry *a_lru_cache_prepare_for_action(struct aura_lru_cac
     return e;
 }
 
-struct aura_lru_entry *aura_lru_cache_get(struct aura_lru_cache *lc, uint64_t entry_nr) {
+struct aura_lru_entry *aura_lru_cache_get_slot(struct aura_lru_cache *lc, uint64_t entry_nr) {
     struct aura_lru_entry *e;
 
     if (aura_bitmap_test_bit(A_LC_WAITING, (uint64_t *)&lc->flags)) {

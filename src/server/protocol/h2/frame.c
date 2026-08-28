@@ -335,9 +335,9 @@ int aura_h2_parse_frame_header(struct aura_h2_in_frame *in_frame, const uint8_t 
     in_frame->frame_hdr_read = true;
     in_frame->expected_bytes = A_H2_FRAME_HEADER_SIZE + in_frame->frame.len;
 
-    if (in_len >= (in_frame->frame.len + A_H2_FRAME_HEADER_SIZE)) {
-        // return A_H2_FRAME_INCOMPLETE;
-    }
+    // if (in_len >= (in_frame->frame.len + A_H2_FRAME_HEADER_SIZE)) {
+    // return A_H2_FRAME_INCOMPLETE;
+    // }
 
     return A_H2_ERR_NONE;
 }

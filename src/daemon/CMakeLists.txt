@@ -35,6 +35,7 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/event_ctx/context.c
     ${vaulten_aura_SOURCE_DIR}/lib/event_ctx/http.c
     ${vaulten_aura_SOURCE_DIR}/lib/event_ctx/cron.c
+    ${vaulten_aura_SOURCE_DIR}/lib/task_queue/tq.c
 )
 
 add_executable(aura_daemon

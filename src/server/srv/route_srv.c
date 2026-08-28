@@ -51,40 +51,40 @@ static inline struct aura_route *a_router_get_slot(struct aura_route_pool *pool)
     return &pool->routes[pool->cnt++];
 }
 
-int aura_route_add(struct aura_router *router, struct aura_fn *fn) {
+int aura_route_add(struct aura_router *router, struct aura_fn_registry_ent *ent) {
     aura_rax_node_t *n;
     struct aura_route *new_route;
     char *pattern;
     uint64_t pattern_len;
     bool res;
 
-    pattern = fn->meta.http_trigger.path.base;
-    pattern_len = fn->meta.http_trigger.path.len;
-    /* check for existent route */
-    n = aura_rax_lookup(&router->r_tree, pattern, pattern_len);
-    if (n) {
-        /* route already exists in router */
-        errno = EEXIST;
-        return -1;
-    }
+    // pattern = ent->fn_tag.fn_triggers.entries fn->meta.http_trigger.path.base;
+    // pattern_len = fn->meta.http_trigger.path.len;
+    // /* check for existent route */
+    // n = aura_rax_lookup(&router->r_tree, pattern, pattern_len);
+    // if (n) {
+    //     /* route already exists in router */
+    //     errno = EEXIST;
+    //     return -1;
+    // }
 
-    new_route = a_router_get_slot(&router->route_pool);
-    if (!new_route)
-        return -1;
-    memset(new_route, 0, sizeof(*new_route));
+    // new_route = a_router_get_slot(&router->route_pool);
+    // if (!new_route)
+    //     return -1;
+    // memset(new_route, 0, sizeof(*new_route));
 
-    new_route->router = router;
-    snprintf(new_route->url, sizeof(new_route->url), "%s", fn->meta.host);
-    if (pattern[0] != '/') {
-        /** @todo: complete */
-    }
+    // new_route->router = router;
+    // snprintf(new_route->url, sizeof(new_route->url), "%s", fn->meta.host);
+    // if (pattern[0] != '/') {
+    //     /** @todo: complete */
+    // }
 
-    strncat(new_route->url + strlen(new_route->url), pattern, sizeof(new_route->url) - strlen(new_route->url) - 1);
-    res = aura_rax_insert(&router->r_tree, pattern, pattern_len, A_RAX_NODE_TYPE_SPARSE, a_rax_data_init_ptr(new_route));
-    if (!res) {
-        a_route_destroy(new_route);
-        return -1;
-    }
+    // strncat(new_route->url + strlen(new_route->url), pattern, sizeof(new_route->url) - strlen(new_route->url) - 1);
+    // res = aura_rax_insert(&router->r_tree, pattern, pattern_len, A_RAX_NODE_TYPE_SPARSE, a_rax_data_init_ptr(new_route));
+    // if (!res) {
+    //     a_route_destroy(new_route);
+    //     return -1;
+    // }
 
     return 0;
 }

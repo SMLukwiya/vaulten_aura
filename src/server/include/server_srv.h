@@ -114,10 +114,10 @@ struct aura_srv_global_ctx {
     struct aura_mem_ctx mem_ctx;
     struct aura_iovec user;
     struct aura_task_queue tq;
-    struct aura_worker_pool *worker_pool;
-    struct aura_fn_registry fn_registry;
-    struct aura_lru_cache fn_cache;
-    time_t boot_time; /* server boot time */
+    struct aura_worker_pool worker_pool; /* Worket pool */
+    struct aura_fn_registry fn_registry; /* Fn Registry */
+    struct aura_lru_cache fn_cache;      /* Fn cache */
+    time_t boot_time;                    /* server boot time */
 };
 
 /**

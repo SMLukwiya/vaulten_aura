@@ -129,6 +129,7 @@ struct aura_conn *aura_conn_create(struct aura_srv_ctx *s_ctx, bool is_server,
         *ptls_get_data_ptr(conn->tls_ctx.ptls) = conn;
         aura_conn_transition_state(conn, A_CONN_STATE_HANDSHAKE);
         aura_list_add_tail(&s_ctx->queues.handshake, &conn->c_list);
+        aura_conn_attach_inbound_hooks(conn, AURA_HANDSHAKE_PIPELINE, ARR_CNT(AURA_HANDSHAKE_PIPELINE));
         // aura_conn_transition_state_handler(conn, aura_conn_handle_handshake);
     } else {
         // aura_conn_transition_state(conn, A_CONN_STATE_READ_REQ);
@@ -503,7 +504,7 @@ static inline int a_conn_handshake_complete(struct aura_conn *conn) {
     aura_conn_attach_inbound_hooks(conn, PRODUCTION_INBOUND_PIPELINE, ARR_CNT(PRODUCTION_INBOUND_PIPELINE));
     const char *prot = ptls_get_negotiated_protocol(conn->tls_ctx.ptls);
     if (strncasecmp(prot, "h2", sizeof("h2") - 1) == 0) {
-        conn->in_hooks = AURA_HANDSHAKE_PIPELINE;
+        // conn->in_hooks = AURA_HANDSHAKE_PIPELINE;
         aura_conn_prot_attach_ops(conn, A_PROTOCOL_TCP);
         if (conn->prot_ops->init(conn) < 0)
             return -1;

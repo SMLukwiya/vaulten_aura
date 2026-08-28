@@ -34,6 +34,7 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/memory/lru_cache.c
     ${vaulten_aura_SOURCE_DIR}/lib/request/req.c
     ${vaulten_aura_SOURCE_DIR}/lib/stream/lib_v1.c
+    ${vaulten_aura_SOURCE_DIR}/lib/task_queue/tq.c
 )
 
 add_executable(aura_server

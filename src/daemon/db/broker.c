@@ -1,9 +1,9 @@
-#include "db/broker.h"
-#include "fn/lib.h"
+#include "db_broker.h"
 
-int aura_dmn_db_req(struct iovec *data, int cli_fd, AURA_DBHANDLE db) {
+int aura_dmn_db_req(struct iovec *data, int cli_fd, struct aura_dmn_glob_conf *gc) {
     struct aura_db_brokered_request *request;
     struct aura_msg_hdr msg_hdr;
+    AURA_DBHANDLE db = gc->db_handle;
     size_t len;
     int error, res;
     char *end;
@@ -30,40 +30,32 @@ int aura_dmn_db_req(struct iovec *data, int cli_fd, AURA_DBHANDLE db) {
     if (request->namespace == A_NS_FN) {
         switch (request->schema_id) {
         case A_FN_CODE_SCHEMA_ID:
-            struct aura_iovec code = aura_fn_code_fetch(db, fn_name, fn_version);
-            if (!code.base) {
-                res = aura_resp_send(cli_fd, NULL, 0);
-                return res;
-            }
+            struct aura_iovec code = aura_fn_code_fetch(&gc->mc, fn_name, fn_version, db, -1);
+            // if (!code.base) {
+            //     res = aura_resp_send(cli_fd, NULL, 0);
+            //     return res;
+            // }
 
             res = aura_resp_send(cli_fd, code.base, code.len);
             aura_free(code.base);
             break;
 
         case A_FN_META_SCHEMA_ID:
-            struct aura_iovec meta = aura_fn_meta_fetch(db, fn_name, fn_version);
-            if (!meta.base) {
-                res = aura_resp_send(cli_fd, NULL, 0);
-                return res;
-            }
+            struct aura_iovec meta = aura_fn_meta_fetch(&gc->mc, fn_name, fn_version, db, -1);
 
             res = aura_resp_send(cli_fd, meta.base, meta.len);
             aura_free(meta.base);
             break;
 
         case A_FN_CONF_SCHEMA_ID:
-            struct aura_iovec config = aura_fn_config_fetch(db, fn_name, fn_version);
-            if (!config.base) {
-                res = aura_resp_send(cli_fd, NULL, 0);
-                return res;
-            }
+            struct aura_iovec config = aura_fn_config_fetch(&gc->mc, fn_name, fn_version, db, -1);
 
             res = aura_resp_send(cli_fd, config.base, config.len);
             aura_free(config.base);
             break;
 
         case A_FN_STAT_DELTA_SCHEMA_ID:
-            struct aura_fn_stat *stat = aura_fn_stat_fetch(db, fn_name, fn_version);
+            struct aura_fn_stat *stat = aura_fn_stat_fetch(&gc->mc, fn_name, fn_version, db, -1);
             if (!stat) {
                 res = aura_resp_send(cli_fd, NULL, 0);
                 return res;
@@ -80,7 +72,7 @@ int aura_dmn_db_req(struct iovec *data, int cli_fd, AURA_DBHANDLE db) {
             struct aura_fn_list *fns;
 
             error = 0;
-            fns = aura_fn_list_fetch(db, &error);
+            fns = aura_fn_list_fetch(&gc->mc, db, -1, &error);
             if (error < 0 || error == A_DB_REC_NOT_FOUND) {
                 res = aura_resp_send(cli_fd, NULL, 0);
                 return res;
@@ -92,7 +84,7 @@ int aura_dmn_db_req(struct iovec *data, int cli_fd, AURA_DBHANDLE db) {
             break;
 
         case A_FN_STATE_SCHEMA_ID:
-            struct aura_iovec state = aura_fn_state_fetch(db, fn_name, fn_version);
+            struct aura_iovec state = aura_fn_state_fetch(&gc->mc, fn_name, fn_version, db, -1);
             if (!state.base) {
                 res = aura_resp_send(cli_fd, NULL, 0);
                 return res;

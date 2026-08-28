@@ -682,10 +682,10 @@ int a_srv_begin_headers(struct aura_h2_server_conn *c, struct aura_h2_in_frame *
         }
 
         if (!aura_h2_srv_conn_new_streams_allowed(c)) {
-            s_iov = aura_h2_get_sched_iov(&c->core.scheduler, A_H2_SCHED_URGENT);
-            if (!s_iov) {
-                /* @todo: close connection */
-            }
+            // s_iov = aura_h2_get_sched_iov(&c->core.scheduler, A_H2_SCHED_URGENT);
+            // if (!s_iov) {
+            //     /* @todo: close connection */
+            // }
             if (aura_h2_conn_enqueue_rst_frame(&c->core, frame->stream_id, A_H2_REFUSED_STREAM_ERR) < 0) {
                 return A_H2_INTERNAL_ERR;
             }
@@ -726,10 +726,10 @@ int a_srv_begin_headers(struct aura_h2_server_conn *c, struct aura_h2_in_frame *
         /** @todo: push promise not supported */
         *stream = aura_h2_conn_find_stream(&c->core, frame->stream_id);
         if (!(*stream)) {
-            s_iov = aura_h2_get_sched_iov(&c->core.scheduler, A_H2_SCHED_URGENT);
-            if (!s_iov) {
-                /* @todo: close connection */
-            }
+            // s_iov = aura_h2_get_sched_iov(&c->core.scheduler, A_H2_SCHED_URGENT);
+            // if (!s_iov) {
+            //     /* @todo: close connection */
+            // }
 
             if (aura_h2_conn_enqueue_rst_frame(&c->core, frame->stream_id, A_H2_STREAM_CLOSED_ERR) < 0) {
                 return A_H2_INTERNAL_ERR;
@@ -1024,7 +1024,7 @@ static int a_srv_process_header(struct aura_h2_server_conn *c, struct aura_h2_in
     if (rv != A_H2_ERR_NONE)
         return rv;
 
-    return rv = aura_h2_srv_process_request(c, stream);
+    return aura_h2_srv_process_request(c, stream);
 
 goaway:
     aura_h2_conn_enqueue_goaway(&c->core, c->core.local_goaway_stream_id, rv, reason);
@@ -1305,8 +1305,10 @@ int aura_h2_srv_process(struct aura_h2_server_conn *c, struct aura_sliding_buf *
             break;
 
         default:
+            rv = A_H2_PROTOCOL_ERR;
             break;
         }
+
         // rv = c->state_handler(c, buf);
         rv = aura_h2_get_app_error(rv);
         switch (rv) {

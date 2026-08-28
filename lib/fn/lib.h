@@ -11,7 +11,9 @@
 #include "error_lib.h"
 #include "hashmap/map.h"
 #include "heap/lib.h"
+#include "http_lib.h"
 #include "memory/lru_cache.h"
+#include "protocol.h"
 #include "radix/tree.h"
 #include "task_queue/tq.h"
 #include "time_lib.h"
@@ -64,16 +66,6 @@ static struct aura_iovec a_function_list_key = {
 
 #define MAX_CIRCUIT_BREAKER_TRIGGERS 3
 
-#define aura_fn_async_op_wait(done) \
-    while (!done)                   \
-        ;
-
-struct aura_fn_cb_data {
-    uint64_t job_id;
-    const char *fn_name;
-    uint32_t fn_version;
-};
-
 typedef enum {
     A_FN_DEPLOY = 1U < 1,
     A_FN_DELETE = 1U < 2,
@@ -106,7 +98,9 @@ enum a_fn_node_idx {
     A_IDX_FN_NETWORKING,
 };
 
-/*--------------*/
+/**
+ * Config parser structure
+ */
 struct aura_yml_fn_data_ctx {
     int dir_fd; /* function directory fd */
     bool seen_aura_version;
@@ -124,17 +118,16 @@ struct aura_yml_fn_data_ctx {
 
 /* Runtime */
 typedef enum {
-    JIT = 1,
-    NATIVE,
-    WASM
+    A_JS = 1,
+    A_NATIVE,
+    A_WASM
 } aura_runtime_t;
 
-struct aura_fn_runtime {
-    const char *str;
-    aura_runtime_t value;
+static const char *aura_fn_runtime_str[] = {
+  "js",
+  "native",
+  "wasm",
 };
-
-extern const struct aura_fn_runtime runtimes[];
 
 /* Triggers */
 typedef enum {
@@ -143,163 +136,138 @@ typedef enum {
     A_FN_TRIGGER_QUEUE
 } aura_trigger_t;
 
-struct aura_fn_trigger {
-    const char *str;
-    aura_trigger_t value;
-};
-
-extern const struct aura_fn_trigger trigger_types[];
-
-/* HTTP */
-typedef enum {
-    GET = 1,
-    POST,
-    PUT,
-    PATCH,
-    DELETE,
-    HEAD
-} aura_fn_http_method_t;
-
-struct aura_fn_http_method {
-    const char *str;
-    aura_fn_http_method_t value;
-};
-
-extern const struct aura_fn_http_method http_methods[];
+// static const char *aura_fn_trigger_str[] = {
+//   "http",
+//   "cron",
+//   "queue",
+// };
 
 /* Cron */
 /* Cron misfire policy */
 typedef enum {
-    FIRE_NOW = 1, /* Execute missed jobs immediately when possible */
-    IGNORE,       /* Drop missed execution and wait for next schedule */
-    RESCHEDULE    /* Run the job at the next possible time while maintaining original schedule */
+    A_CRON_MISFIRE_INVALID,
+    A_CRON_FIRE_NOW,  /* Execute missed jobs immediately when possible */
+    A_CRON_IGNORE,    /* Drop missed execution and wait for next schedule */
+    A_CRON_RESCHEDULE /* Run the job at the next possible time while maintaining original schedule */
 } aura_fn_cron_misfire_policy_t;
 
-struct aura_fn_cron_misfire_policy {
-    const char *str;
-    aura_fn_cron_misfire_policy_t value;
+static const char *aura_fn_cron_misfire_policy_str[] = {
+  "fire now",
+  "ignore",
+  "reschedule",
 };
 
-extern const struct aura_fn_cron_misfire_policy misfire_policies[];
+static inline aura_fn_cron_misfire_policy_t aura_fn_cron_misfire_pol_get(const char *str, uint64_t len) {
+    if (strncmp(str, "fire now", len) == 0)
+        return A_CRON_FIRE_NOW;
+    else if (strncmp(str, "ignore", len) == 0)
+        return A_CRON_IGNORE;
+    else if (strncmp(str, "reschedule", len) == 0)
+        return A_CRON_RESCHEDULE;
+    else
+        return A_CRON_MISFIRE_INVALID;
+}
 
 /* Cron backoff */
 typedef enum {
-    BACKOFF_NONE,
-    BACKOFF_FIXED,
-    BACKOFF_EXPONENTIAL
+    A_CRON_RETRY_BACKOFF_NONE,
+    A_CRON_RETRY_BACKOFF_FIXED,
+    A_CRON_RETRY_BACKOFF_EXPONENTIAL
 } aura_fn_backoff_strategy_t;
 
-struct aura_fn_backoff {
-    const char *str;
-    aura_fn_backoff_strategy_t value;
+static const char *aura_fn_backoff_strategy_str[] = {
+  "no backoff",
+  "backoff fixed",
+  "backoff exponential",
 };
-
-extern const struct aura_fn_backoff backoff_opt[];
 
 /* Log level */
 typedef enum {
-    TRACE = 1,
-    INFO,
-    DEBUG,
-    WARN,
-    ERROR
+    A_LOG_LVL_TRACE = 1,
+    A_LOG_LVL_INFO,
+    A_LOG_LVL_DEBUG,
+    A_LOG_LVL_WARN,
+    A_LOG_LVL_ERROR
 } aura_fn_log_level_t;
 
-struct aura_fn_log_level {
-    const char *str;
-    aura_fn_log_level_t value;
+static const char *aura_fn_log_level_str[] = {
+  "trace",
+  "info",
+  "debug",
+  "warn",
+  "error",
 };
-
-extern const struct aura_fn_log_level log_levels[];
 
 /* Resources OOM policy */
 typedef enum {
-    KILL = 1,
-    SNAPSHOT_THEN_KILL,
-    THROTTLE
+    A_OOM_POL_INVALID,
+    A_OOM_POL_KILL,
+    A_OOM_POL_SNAPSHOT_THEN_KILL,
+    A_OOM_POL_THROTTLE
 } aura_fn_oom_policy_t;
 
-struct aura_fn_oom_policy {
-    const char *str;
-    aura_fn_oom_policy_t value;
+static const char *aura_fn_oom_policy_str[] = {
+  "kill",
+  "snapshot and kill",
+  "throttle",
 };
 
-extern const struct aura_fn_oom_policy oom_policies[];
+static inline aura_fn_oom_policy_t aura_fn_oom_policy_get(const char *str, uint64_t len) {
+    if (strncmp(str, "kill", len) == 0)
+        return A_OOM_POL_KILL;
+    else if (strncmp(str, "snapshot and kill", len) == 0)
+        return A_OOM_POL_SNAPSHOT_THEN_KILL;
+    else if (strncmp(str, "throttle", len) == 0)
+        return A_OOM_POL_THROTTLE;
+    else
+        return A_OOM_POL_INVALID;
+}
 
 /**
  * Controls for logging, tracing, and custom metrics.
  */
 typedef enum {
-    PII_DEFAULT = 1,
-    REDACT_STRICT,
-    REDACT_NONE
+    A_LOG_REDACT_PII_DEFAULT = 1,
+    A_LOG_REDACT_STRICT,
+    A_LOG_REDACT_NONE
 } aura_fn_log_redact_level_t;
 
-struct aura_fn_log_redact_level {
-    const char *str;
-    aura_fn_log_redact_level_t value;
+static const char *aura_fn_log_redact_lvl_str[] = {
+  "pii default",
+  "redact strict",
+  "redact none",
 };
-
-extern const struct aura_fn_log_redact_level log_redact_levels[];
 
 /** Deployment strategy */
 typedef enum {
-    CANARY = 1,
-    BLUE_GREEN,
-    ROLLING
+    A_DEPLOY_CANARY = 1,
+    A_DEPLOY_BLUE_GREEN,
+    A_DEPLOY_ROLLING
 } aura_fn_deployment_strategy_t;
 
-struct aura_fn_deployment_strategy {
-    const char *str;
-    aura_fn_deployment_strategy_t value;
+static const char *aura_fn_deployment_strategy_str[] = {
+  "canary",
+  "blue green",
+  "rolling",
 };
-
-extern const struct aura_fn_deployment_strategy deploy_strategies[];
 
 typedef enum {
     BLUE = 1,
     GREEN
 } aura_fn_blue_green_strategy_t;
 
-struct aura_fn_blue_green {
-    const char *str;
-    aura_fn_blue_green_strategy_t value;
-};
-
 /** Network policy */
 typedef enum {
-    ALLOW_ALL = 1,
-    DENY_ALL,
-    WHITELIST
+    A_NETWORK_POL_ALLOW_ALL = 1,
+    A_NETWORK_POL_DENY_ALL,
+    A_NETWORK_POL_WHITELIST
 } aura_network_policy_t;
 
-struct aura_fn_network_policy {
-    const char *str;
-    aura_network_policy_t value;
-};
-
-extern const struct aura_fn_network_policy network_policies[];
-
-/** Network protocol */
 typedef enum {
-    TCP = 1,
-    UDP
-} aura_protocol_t;
-
-struct aura_fn_protocol {
-    const char *str;
-    aura_protocol_t value;
-};
-
-typedef enum {
-    TLS_1_3
-} aura_tls_version_t;
-
-typedef enum {
-    NONE,
-    JWT,
-    MTLS,
-    CUSTOM
+    A_FN_AUTH_NONE,
+    A_FN_AUTH_JWT,
+    A_FN_AUTH_MTLS,
+    A_FN_AUTH_CUSTOM
 } aura_auth_t;
 
 /* Fn concurrency structure */
@@ -312,14 +280,14 @@ struct aura_fn_concurrency {
 };
 
 struct aura_fn_resources {
-    uint32_t memory_limit_mb_soft;        /* Soft memory limit MBs */
-    uint32_t memory_limit_mb_hard;        /* Hard memory limit MBs */
+    uint32_t mem_limit_mb_soft;           /* Soft memory limit MBs */
+    uint32_t mem_limit_mb_hard;           /* Hard memory limit MBs */
     uint32_t cpu_shares;                  /* Relative CPU share compared to other functions. */
     uint32_t timeout;                     /* The max execution time for a single invocation of the function in ms. */
     uint32_t cpu_burst_credit;            /* Internal: function can exceed their cpu limits based on good behaviour */
     uint32_t io_net_egress_bytes_per_sec; /* Internal: Amount of data leaving the network because of this function */
     uint32_t socket_max;                  /* Internal: */
-    const struct aura_fn_oom_policy *oom_policy;
+    uint8_t oom_policy;
 };
 
 /**
@@ -327,34 +295,32 @@ struct aura_fn_resources {
  */
 struct aura_fn_ingress {
     char **ip_whitelist; /* A list of IP addresses or CIDR blocks allowed to invoke the function. */
-    size_t whitelsit_len;
-    aura_network_policy_t policy; /* The default inbound network policy. */
+    uint8_t list_len;    /* White list length */
+    uint8_t policy;      /* The default inbound network policy. */
 };
 
-struct aura_fn_egress_connection {
+struct aura_fn_egress_conn {
     const char *host;
-    uint16_t port;
-    aura_protocol_t protocol;
-    aura_tls_version_t prot_version;
-    bool secure;
     uint32_t idle_ttl;
     uint32_t max_per_origin;
+    uint16_t port;
+    bool secure;
+    uint8_t protocol;
 };
 
 struct aura_fn_egress {
-    struct aura_fn_egress_connection **hosts; /* A list of IP addresses or CIDR blocks allowed to invoke the function. */
-    size_t whitelist_len;
-    aura_network_policy_t policy; /* The default outbound network policy. */
+    struct aura_fn_egress_conn **hosts; /* A list of IP addresses or CIDR blocks allowed to invoke the function. */
+    uint8_t policy;                     /* The default outbound network policy. */
+    uint8_t whitelist_len;
 };
 
 struct aura_fn_logging {
-    char *destination;         /* The URL or identifier of the external logging service. */
-    aura_fn_log_level_t level; /* The minimum logging level to output. */
-    aura_fn_log_redact_level_t log_redact;
+    char *destination; /* The URL or identifier of the external logging service. */
+    uint8_t level;     /* The minimum logging level to output. */
+    uint8_t log_redact;
 };
 
 struct aura_fn_tracing {
-    bool enabled;    /* Distributed tracing for the function. */
     int sample_rate; /* The rate at which to sample traces (0.0 to 1.0). */
     /**
      * INTERNAL
@@ -362,6 +328,7 @@ struct aura_fn_tracing {
      * while only sampling the 'sample_rate' requests below it.
      */
     uint32_t tail_sampling_target_ms;
+    bool enabled; /* Distributed tracing for the function. */
 };
 
 struct aura_fn_observability {
@@ -371,12 +338,12 @@ struct aura_fn_observability {
 };
 
 struct aura_fn_deployment {
-    aura_fn_deployment_strategy_t strategy;
     union {
         uint8_t percentage;
+        uint8_t primary;
         uint32_t batch;
-        aura_fn_blue_green_strategy_t primary;
     };
+    uint8_t strategy;
 };
 
 struct aura_fn_success_rules {
@@ -394,8 +361,6 @@ struct aura_fn_success_ctx {
 /* ---------- RELIABILITY ---------- */
 /* Fn retry structure */
 struct aura_fn_retry {
-    uint32_t attempts;
-    aura_fn_backoff_strategy_t poilcy;
     char **retry_on;   /* condition to re-run job, e.g, 5xx error */
     char *dead_letter; /* Internal: Seperate queue for failed messages */
     /* Internal: Execute the function a certain number of times within a time window */
@@ -403,77 +368,51 @@ struct aura_fn_retry {
         int count;
         struct aura_time_window window;
     } wind_exec;
+    uint16_t attempts;
+    uint8_t poilcy;
 };
 
 /* ---------- TRIGGERS ---------- */
 /* Http trigger structure */
 struct aura_fn_http_trigger {
-    const struct aura_fn_http_method *http_method;
     struct aura_iovec path;
-    const char *auth;
+    uint8_t method;
+    uint8_t auth;
 };
 
 /* Crons trigger structure */
 struct aura_fn_cron_trigger {
-    const char *cron_schedule;
-    uint32_t jitter_seconds; /* A random delay in seconds to add to the cron schedule to prevent stampeding */
-    const struct aura_fn_cron_misfire_policy *misfire_policy;
-    struct aura_fn_retry retry;
+    char cron_schedule[13];     /* The schedule time */
+    struct aura_fn_retry retry; /* Retry policies */
+    uint32_t jitter_seconds;    /* A random delay in seconds to add to the cron schedule to prevent stampeding */
+    uint8_t misfire_policy;     /* Misfire policy */
 };
 
-/* ---------- PROFILES ---------- */
-enum {
-    LATENCY_OPTIMIZED,
-    THROUGHPUT_OPTIMIZED
+/* Fn tag trigger structure */
+struct fn_trigger {
+    union {
+        struct aura_fn_http_trigger http;
+        struct aura_fn_cron_trigger cron;
+    };
+    uint8_t trigger;
+} __attribute__((packed));
+
+struct aura_fn_triggers {
+    struct fn_trigger entries[A_FN_MAX_TRIGGERS]; /* Function triggers */
+    uint8_t cnt;                                  /* Trigger count */
+    uint8_t cap;
 };
-
-/*
-profile: latency-optimized
-placement:
-  warm_pool: { min_ready_workers: 2, prewarm_on_deploy: true, prewarm_on_spike: true }
-resources:
-  cpu_quota_ms_per_sec: 120
-  cpu_burst_credits: 300
-  memory: { soft: 256MiB, hard: 384MiB, oom_policy: throttle }
-codegen:
-  jit: { tiered: true, optimize_after_calls: 500, code_cache_limit: 64MiB, publish_batch_ms: 10 }
-networking:
-  connection_pool: { http2: true, idle_ttl: 15s, max_per_origin: 64 }
-observability:
-  tracing_sample: 0.1
-  tail_sampling_target_p99_ms: 120
-reliability:
-  retries: { policy: exponential, attempts: 4, base: 150ms, jitter: full, retry_on: ["5xx","connect_timeout"] }
-*/
-
-/*
-profile: throughput-optimized
-placement:
-  warm_pool: { min_ready_workers: 0, prewarm_on_deploy: false, prewarm_on_spike: true }
-resources:
-  cpu_quota_ms_per_sec: 80
-  cpu_burst_credits: 800
-  memory: { soft: 384MiB, hard: 512MiB, oom_policy: kill }
-codegen:
-  jit: { tiered: true, optimize_after_calls: 2000, code_cache_limit: 128MiB, publish_batch_ms: 25 }
-networking:
-  connection_pool: { http2: true, idle_ttl: 45s, max_per_origin: 256 }
-observability:
-  tracing_sample: 0.02
-  tail_sampling_target_p99_ms: 250
-reliability:
-  retries: { policy: exponential, attempts: 2, base: 300ms, jitter: half, retry_on: ["5xx"] }
-*/
 
 /* Function meta structure */
 struct aura_fn_meta {
+    uint64_t fn_id;
     const char *name;
     const char *description;
-    uint64_t fn_id;
     const char *version;
     const char *prev_version;
     const char *host;
     const char *entry_point;
+    struct aura_fn_triggers triggers;
     struct aura_fn_http_trigger http_trigger;
     struct aura_fn_cron_trigger cron_trigger;
     struct aura_fn_resources fn_resources;
@@ -481,6 +420,7 @@ struct aura_fn_meta {
         struct aura_fn_ingress inbound;
         struct aura_fn_egress outbound;
     } networking;
+    uint64_t timestamp_ms; /* Deployment time */
     // storage
     // success_criteria
 };
@@ -488,7 +428,7 @@ struct aura_fn_meta {
 /* Function config structure */
 struct aura_fn_config {
     struct aura_iovec *envs;
-    size_t env_cnt;
+    uint32_t env_cnt;
     struct aura_fn_concurrency fn_concurrency;
     struct aura_fn_observability fn_observability;
     // placement
@@ -528,26 +468,6 @@ enum {
     A_FN_LOADING,
 };
 
-/* Fn tag trigger structure */
-struct fn_tag_trigger {
-    union {
-        struct {
-            uint8_t method;
-            char *path;
-        } http_trigger;
-        struct {
-            char schedule[8];
-        } cron_trigger;
-    };
-    uint8_t trigger;
-} __attribute__((packed));
-
-struct aura_fn_triggers {
-    struct fn_tag_trigger entries[8]; /* Function triggers */
-    uint8_t cnt;                      /* Trigger count */
-    uint8_t cap;
-};
-
 /**
  * Function structure used in function list structure.
  * It would be nice to be able to represent functions
@@ -559,8 +479,8 @@ struct aura_fn_tag {
     uint8_t fn_version[A_FN_VERSION_MAX_LEN]; /* Function version */
     uint64_t fn_id;                           /* Function ID */
     uint64_t timestamp_ms;                    /* Deployment time */
-    struct aura_fn_triggers fn_triggers;      /* Fn triggers loaded on demand and not saved as part of fn_tag */
-    bool http;                                /* If function is http triggered, use by the server  */
+    // struct aura_fn_triggers fn_triggers;      /* Fn triggers loaded on demand and not saved as part of fn_tag */
+    bool http; /* If function is http triggered, use by the server  */
 };
 
 /** System functions structure */
@@ -574,6 +494,7 @@ struct aura_fn_registry_ent {
     struct aura_fn_tag fn_tag;
     struct aura_fn *fn;
     struct aura_fn_queue fn_queue;
+    void *opaque; /* Function data(http) */
     uint8_t load_state;
 };
 
@@ -602,11 +523,6 @@ struct aura_fn {
     uint8_t backend;
     /* LRU cache entry */
     struct aura_lru_entry lc_entry;
-};
-
-struct aura_fn_tls_version {
-    const char *str;
-    aura_tls_version_t value;
 };
 
 /* Fn event structure */
@@ -679,91 +595,6 @@ struct aura_rollback_detector {
     uint64_t medium_window_ms; // trend analysis (maybe 5 mins)
     uint64_t long_window_ms;   // 1 hour for baseline comparison
 };
-
-/** Get the numeric value of the method str */
-static inline const struct aura_fn_http_method *aura_fn_http_method_get(const char *str) {
-    int val;
-
-    if (aura_scan_str(str, "%u" SCNu32, &val) < 0)
-        return NULL;
-
-    switch (val) {
-    case GET:
-        return &http_methods[GET - 1];
-    case POST:
-        return &http_methods[POST - 1];
-    case PUT:
-        return &http_methods[PUT - 1];
-    case PATCH:
-        return &http_methods[PATCH - 1];
-    case DELETE:
-        return &http_methods[DELETE - 1];
-    case HEAD:
-        return &http_methods[HEAD - 1];
-    default:
-        return NULL;
-    }
-}
-
-/** Get the numeric value of the policy str */
-static inline const struct aura_fn_cron_misfire_policy *aura_fn_cron_misfire_policy_get(const char *str) {
-    int val;
-
-    if (aura_scan_str(str, "%u" SCNu32, &val) < 0)
-        return NULL;
-
-    switch (val) {
-    case FIRE_NOW:
-        return &misfire_policies[FIRE_NOW - 1];
-    case IGNORE:
-        return &misfire_policies[IGNORE - 1];
-    case RESCHEDULE:
-        return &misfire_policies[RESCHEDULE - 1];
-    default:
-        return NULL;
-    }
-}
-
-static inline const struct aura_fn_oom_policy *aura_fn_oom_policy_get(const char *str) {
-    int val;
-
-    if (aura_scan_str(str, "%u" SCNu32, &val) < 0)
-        return NULL;
-
-    switch (val) {
-    case KILL:
-        return &oom_policies[KILL - 1];
-    case SNAPSHOT_THEN_KILL:
-        return &oom_policies[SNAPSHOT_THEN_KILL - 1];
-    case THROTTLE:
-        return &oom_policies[THROTTLE - 1];
-    default:
-        return NULL;
-    }
-}
-
-/**
- * copy function transfering ownership of
- * internal fields over to the cache slot
- * represented by lru_entry.
- */
-// static inline void aura_fn_cache_load(struct aura_lru_entry *e, struct aura_fn *fn) {
-//     uint64_t fn_size = offsetof(struct aura_fn, lc_entry);
-//     void *slot = aura_lru_cache_entry(e, struct aura_fn, lc_entry);
-//     /**
-//      * lru entry is the last member of
-//      * the fn struct. fn_size should there
-//      * represent the length excluding the last
-//      * member "lc_entry". We only copy the fn part.
-//      */
-//     memcpy(slot, fn, fn_size);
-
-//     /**
-//      * zero out the fn since we just transfer fields over.
-//      * This was deleting the function does invalidate the fields.
-//      */
-//     memset(fn, 0, sizeof(*fn));
-// }
 
 /* Create function backing cache */
 static inline struct aura_slab_cache *aura_fn_slab_cache_create(struct aura_mem_ctx *mc) {
@@ -850,32 +681,51 @@ struct aura_fn_tag *aura_fn_tag_fetch(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
                                       int *error);
 
 /** Get the list of functions deployed in the system */
-struct aura_fn_list *aura_fn_list_fetch(AURA_DBHANDLE db, int *error);
+struct aura_fn_list *aura_fn_list_fetch(struct aura_mem_ctx *mc, AURA_DBHANDLE db,
+                                        int dmn_sock_fd, int *error);
 
 /** Add a new function to the list of deployed functions */
 int aura_fn_list_add_fn(AURA_DBHANDLE db, struct aura_mem_ctx *mc, struct aura_fn_meta *fn_meta);
-
-/** Brokered fetch for the list of deployed functions */
-struct aura_fn_list *aura_fn_list_fetch_brokered(struct aura_mem_ctx *mc, int dmn_sock_fd, int *error);
 
 /** Remove a function from the list of deployed functions */
 int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
                         char *fn_name, char *fn_version);
 
 /* Get function meta */
-struct aura_iovec aura_fn_meta_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_version);
+struct aura_iovec aura_fn_meta_fetch(struct aura_mem_ctx *mc, char *name,
+                                     char *version, AURA_DBHANDLE db, int sock_fd);
+
+/**/
+int aura_fn_meta_load(struct aura_fn *fn, struct aura_mem_ctx *mc, char *name,
+                      char *version, AURA_DBHANDLE db, int sock_fd);
 
 /* Get function config */
-struct aura_iovec aura_fn_config_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_version);
+struct aura_iovec aura_fn_config_fetch(struct aura_mem_ctx *mc, char *name,
+                                       char *version, AURA_DBHANDLE db, int sock_fd);
+
+/**/
+int aura_fn_config_load(struct aura_fn *fn, struct aura_mem_ctx *mc, char *name,
+                        char *version, AURA_DBHANDLE db, int sock_fd);
 
 /* Get function code */
-struct aura_iovec aura_fn_code_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_version);
+struct aura_iovec aura_fn_code_fetch(struct aura_mem_ctx *mc, char *name, char *version,
+                                     AURA_DBHANDLE db, int dmn_sock_fd);
+
+/**/
+int aura_fn_code_load(struct aura_fn *fn, struct aura_mem_ctx *mc, char *name,
+                      char *version, AURA_DBHANDLE db, int dmn_sock_fd);
 
 /* Get function state*/
-struct aura_iovec aura_fn_state_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_version);
+struct aura_iovec aura_fn_state_fetch(struct aura_mem_ctx *mc, char *name, char *version,
+                                      AURA_DBHANDLE db, int dmn_sock_fd);
+
+/**/
+int aura_fn_state_load(struct aura_fn *fn, struct aura_mem_ctx *mc, char *name,
+                       char *version, AURA_DBHANDLE db, int dmn_sock_fd);
 
 /* Get a function's complete structure */
-struct aura_fn *aura_fn_load(AURA_DBHANDLE db, struct aura_mem_ctx *mc, char *fn_name, char *fn_version);
+int aura_fn_load(struct aura_fn *fn, struct aura_mem_ctx *mc, char *name,
+                 char *version, AURA_DBHANDLE db, int dmn_sock_fd);
 
 /* Initialize function registry */
 int aura_fn_registry_init(struct aura_fn_registry *r, struct aura_mem_ctx *mc, uint32_t max_size);
@@ -887,17 +737,13 @@ int aura_fn_cache_init(struct aura_lru_cache *cache, struct aura_mem_ctx *mc);
 struct aura_fn_registry_ent *aura_fn_load_fn_registry_entry(struct aura_fn_registry *r,
                                                             struct aura_fn_tag *fn_tag);
 
-/* */
-struct aura_fn_stat *aura_fn_stat_fetch_brokered(struct aura_mem_ctx *mc, char *fn_name,
-                                                 char *fn_version, int dmn_fd);
-
-/* */
-// struct aura_fn *aura_fn_load_brokered(struct aura_mem_ctx *mc, char *fn_name, char *fn_version, int sock_fd);
-int aura_fn_load_brokered(struct aura_mem_ctx *mc, struct aura_fn *fn,
-                          char *fn_name, char *fn_version, int sock_fd);
-
 /** Fetch function stats */
-struct aura_fn_stat *aura_fn_stat_fetch(AURA_DBHANDLE db, char *fn_name, char *fn_version);
+struct aura_fn_stat *aura_fn_stat_fetch(struct aura_mem_ctx *mc, char *fn_name, char *fn_version,
+                                        AURA_DBHANDLE db, int dmn_sock_fd);
+
+/**/
+int aura_fn_stat_load(struct aura_fn *fn, struct aura_mem_ctx *mc, char *name,
+                      char *version, AURA_DBHANDLE db, int dmn_sock_fd);
 
 /* Compare function stats */
 int aura_fn_stat_compare(struct aura_heap_ent *s1, struct aura_heap_ent *s2);
@@ -907,15 +753,6 @@ int aura_fn_queue_init(struct aura_fn_queue *q, struct aura_worker_pool *glob_po
 
 /* Destroy function structure */
 void aura_fn_destroy(struct aura_fn *fn);
-
-/* Destroy a function tag */
-void aura_fn_tag_destroy(struct aura_fn_tag *fn_tag);
-
-int aura_fn_fetch_trigger(AURA_DBHANDLE db, struct aura_fn_triggers *fn_triggers,
-                          const char *name, const char *version, int *error);
-
-int aura_fn_fetch_trigger_brokered(struct aura_mem_ctx *mc, struct aura_fn_triggers *fn_triggers,
-                                   const char *name, const char *version, int *error, int dmn_sock_fd);
 
 /* Dump fn metadata */
 void aura_fn_meta_dump(struct aura_fn_meta *fn_meta);
@@ -928,4 +765,49 @@ void aura_fn_stat_dump(struct aura_fn_stat *stats);
 
 /* Dunp function tag */
 void aura_fn_dump_fn_tag(struct aura_fn_tag *tag);
+
+/* ---------- PROFILES ---------- */
+enum {
+    LATENCY_OPTIMIZED,
+    THROUGHPUT_OPTIMIZED
+};
+
+/*
+profile: latency-optimized
+placement:
+  warm_pool: { min_ready_workers: 2, prewarm_on_deploy: true, prewarm_on_spike: true }
+resources:
+  cpu_quota_ms_per_sec: 120
+  cpu_burst_credits: 300
+  memory: { soft: 256MiB, hard: 384MiB, oom_policy: throttle }
+codegen:
+  jit: { tiered: true, optimize_after_calls: 500, code_cache_limit: 64MiB, publish_batch_ms: 10 }
+networking:
+  connection_pool: { http2: true, idle_ttl: 15s, max_per_origin: 64 }
+observability:
+  tracing_sample: 0.1
+  tail_sampling_target_p99_ms: 120
+reliability:
+  retries: { policy: exponential, attempts: 4, base: 150ms, jitter: full, retry_on: ["5xx","connect_timeout"] }
+*/
+
+/*
+profile: throughput-optimized
+placement:
+  warm_pool: { min_ready_workers: 0, prewarm_on_deploy: false, prewarm_on_spike: true }
+resources:
+  cpu_quota_ms_per_sec: 80
+  cpu_burst_credits: 800
+  memory: { soft: 384MiB, hard: 512MiB, oom_policy: kill }
+codegen:
+  jit: { tiered: true, optimize_after_calls: 2000, code_cache_limit: 128MiB, publish_batch_ms: 25 }
+networking:
+  connection_pool: { http2: true, idle_ttl: 45s, max_per_origin: 256 }
+observability:
+  tracing_sample: 0.02
+  tail_sampling_target_p99_ms: 250
+reliability:
+  retries: { policy: exponential, attempts: 2, base: 300ms, jitter: half, retry_on: ["5xx"] }
+*/
+
 #endif

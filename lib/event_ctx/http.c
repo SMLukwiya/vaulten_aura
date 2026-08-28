@@ -28,8 +28,8 @@ void aura_http_destroy(struct aura_evt_src *evt_src) {
 
 int aura_http_bind(struct aura_evt_src *evt_src, struct aura_fn_registry_ent *fn_ent, int trigger_idx) {
     if (aura_rax_insert(&evt_src->http_src.routes,
-                        fn_ent->fn_tag.fn_triggers.entries[trigger_idx].http_trigger.path,
-                        strlen(fn_ent->fn_tag.fn_triggers.entries[trigger_idx].http_trigger.path),
+                        fn_ent->fn->meta.triggers.entries[trigger_idx].http.path.base,
+                        fn_ent->fn->meta.triggers.entries[trigger_idx].http.path.len,
                         A_RAX_NODE_TYPE_SPARSE,
                         a_rax_data_init_ptr(fn_ent)) == false)
         return -1;
@@ -39,8 +39,8 @@ int aura_http_bind(struct aura_evt_src *evt_src, struct aura_fn_registry_ent *fn
 
 int aura_http_unbind(struct aura_evt_src *evt_src, struct aura_fn_registry_ent *fn_ent, int trigger_idx) {
     if (aura_rax_remove(&evt_src->http_src.routes,
-                        fn_ent->fn_tag.fn_triggers.entries[trigger_idx].http_trigger.path,
-                        strlen(fn_ent->fn_tag.fn_triggers.entries[trigger_idx].http_trigger.path),
+                        fn_ent->fn->meta.triggers.entries[trigger_idx].http.path.base,
+                        fn_ent->fn->meta.triggers.entries[trigger_idx].http.path.len,
                         NULL) == false)
         return -1;
 }

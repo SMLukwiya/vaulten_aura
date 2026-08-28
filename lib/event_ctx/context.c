@@ -13,6 +13,7 @@ int aura_event_registry_add(struct aura_evt_src_registry *reg, aura_evt_src_t ty
     memset(evt_src, 0, sizeof(*evt_src));
     snprintf(evt_src->name, A_EVT_SRC_NAME_MAX_LEN, "%s", aura_evt_src_str_name[type]);
     evt_src->flags = flags;
+    evt_src->type = type;
 
     switch (type) {
     case A_EVT_SRC_HTTP:

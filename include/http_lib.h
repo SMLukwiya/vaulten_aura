@@ -12,7 +12,7 @@ typedef enum {
     A_HTTP_HEAD,
 } aura_http_method;
 
-static const char *a_http_methods_str[] = {
+static const char *aura_http_methods_str[] = {
   "NONE",
   "GET",
   "POST",
@@ -21,6 +21,23 @@ static const char *a_http_methods_str[] = {
   "PATCH",
   "HEAD",
 };
+
+static inline aura_http_method aura_http_method_get_method_t(const char *method, uint64_t len) {
+    if (strncmp(method, "GET", len) == 0)
+        return A_HTTP_GET;
+    else if (strncmp(method, "POST", len) == 0)
+        return A_HTTP_POST;
+    else if (strncmp(method, "PUT", len) == 0)
+        return A_HTTP_PUT;
+    else if (strncmp(method, "DELETE", len) == 0)
+        return A_HTTP_DELETE;
+    else if (strncmp(method, "PATCH", len) == 0)
+        return A_HTTP_PATCH;
+    else if (strncmp(method, "HEAD", len) == 0)
+        return A_HTTP_HEAD;
+    else
+        return A_HTTP_NONE;
+}
 
 /* Scheme */
 typedef enum {

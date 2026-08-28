@@ -77,8 +77,10 @@ struct aura_h2_sched_iov *aura_h2_get_sched_iov(struct aura_h2_sched2 *sched, ui
           sched->queues.urg_ctr_spill_bitmap,
           0,
           A_H2_SCHED_SPILL_URG_CTRL_RING_SZ);
-        if (idx != A_H2_SCHED_SPILL_URG_CTRL_RING_SZ)
+        if (idx != A_H2_SCHED_SPILL_URG_CTRL_RING_SZ) {
+            aura_bitmap_set_bit(idx, sched->queues.urg_ctr_spill_bitmap);
             s_iov = &sched->queues.urg_ctrl_spill[idx];
+        }
     }
 
     return s_iov;

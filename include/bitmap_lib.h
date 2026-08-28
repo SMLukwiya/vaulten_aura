@@ -145,6 +145,7 @@ static inline uint64_t aura_bitmap_find_next_bit(uint64_t *addr, uint64_t offset
     return val ? a_ctz64(val) : size;
 }
 
+/* Find next empty bit in some defined array of bits */
 static inline uint64_t aura_bitmap_find_next_empty_bit(uint64_t *addr, uint64_t offset, uint64_t size) {
     uint64_t val;
 

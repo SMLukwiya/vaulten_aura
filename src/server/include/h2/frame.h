@@ -165,10 +165,10 @@ struct aura_h2_in_frame {
         struct aura_h2_window_update_payload wind_update_payload;
         struct aura_h2_cont_payload cont_payload;
         struct aura_h2_priority prio_payload;
-    };
-    uint32_t expected_bytes;
-    uint8_t pad_len;
-    bool frame_hdr_read;
+    }; /* Parsed frame data representation */
+    uint32_t expected_bytes; /* Total bytes expected */
+    uint8_t pad_len;         /* Padding length */
+    bool frame_hdr_read;     /* Has the frame header been read and parsed */
 };
 
 static inline bool aura_h2_frame_is_complete(struct aura_h2_in_frame *in_frame, uint32_t len) {
@@ -193,6 +193,7 @@ void aura_dump_h2_settings(struct aura_h2_settings *s);
  * type of frame
  */
 int aura_h2_parse_frame_payload(struct aura_h2_in_frame *in_frame);
+
 /**
  * Parse the fixed 9 bytes
  * of the frame header
@@ -200,14 +201,16 @@ int aura_h2_parse_frame_payload(struct aura_h2_in_frame *in_frame);
 int aura_h2_parse_frame_header(struct aura_h2_in_frame *in_frame, const uint8_t *src,
                                size_t src_len, size_t max_frame_size);
 
+/* Encode control frame */
 uint8_t *aura_h2_encode_ctrl_frame(struct aura_sliding_buf *buf, uint8_t type, uint8_t flags,
                                    uint32_t stream_id, uint32_t frame_len, const uint8_t *payload,
                                    uint32_t payload_len);
 
-/** */
+/** Encode header frame */
 int aura_h2_encode_hdr_frame(struct aura_sliding_buf *buf, uint32_t stream_id, uint8_t type,
                              uint8_t flags, const uint8_t *payload, uint32_t payload_len);
 
+/* Encode data frame */
 int aura_h2_encode_data_frame(struct aura_sliding_buf *buf, uint32_t stream_id, uint8_t flags,
                               const uint8_t *payload, uint32_t payload_len, uint8_t pad_len);
 

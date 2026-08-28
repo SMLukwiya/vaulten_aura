@@ -55,6 +55,6 @@ void aura_lru_cache_destroy(struct aura_lru_cache *lc);
 
 struct aura_lru_entry *aura_lru_cache_find(struct aura_lru_cache *lc, uint64_t entry_nr);
 
-struct aura_lru_entry *aura_lru_cache_get(struct aura_lru_cache *lc, uint64_t entry_nr);
+struct aura_lru_entry *aura_lru_cache_get_slot(struct aura_lru_cache *lc, uint64_t entry_nr);
 
 #endif

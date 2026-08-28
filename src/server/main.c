@@ -1315,7 +1315,6 @@ static int a_server_ctx_init(struct aura_srv_global_ctx *gc, struct aura_srv_ctx
     }
 
     /* Add dmn fd to epoll */
-    app_debug(true, 0, "a_server_ctx_init dmn_peer=%p, fd=%d", ctx->dmn_peer, dmn_fd);
     if (aura_evt_loop_add(ctx->evt_loop, dmn_fd, (void *)ctx->dmn_peer, AURA_EVENT_READ) < 0) {
         sys_debug(true, errno, "a_server_ctx_init: evt loop add dmn fd err");
         return -1;
@@ -1347,12 +1346,9 @@ void a_load_fn_destructor(const void *stat) {
     if (!stat)
         return;
     _stat = (struct aura_fn_stat_wrapper *)stat;
-    if (_stat->fn_tag)
-        aura_fn_tag_destroy(_stat->fn_tag);
 
     if (_stat->fn_stat)
         aura_free((void *)_stat->fn_stat);
-    // aura_free((void *)_stat->fn_name);
     aura_free(_stat);
 }
 
@@ -1370,6 +1366,7 @@ static int a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd) 
     struct aura_fn *fn;
     struct aura_srv_host_conf *host;
     struct aura_fn_tag *fn_tag;
+    struct aura_lru_entry *fn_e;
     int rv, error, j;
     bool least_active_changed;
 
@@ -1385,7 +1382,7 @@ static int a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd) 
         return -1;
     }
 
-    fn_list = aura_fn_list_fetch_brokered(mc, dmn_sock_fd, &error);
+    fn_list = aura_fn_list_fetch(mc, NULL, dmn_sock_fd, &error);
     /* No functions deployed yet! */
     if (!fn_list) {
         /* Fatal error */
@@ -1403,31 +1400,37 @@ static int a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd) 
             fn_tag = &fn_list->func_tags[i];
             /* If not http triggered, skip */
             if (!fn_tag->http) {
-                aura_fn_tag_destroy(fn_tag);
                 continue;
             }
 
-            if (aura_fn_fetch_trigger_brokered(&gc->mem_ctx, &fn_tag->fn_triggers, fn_tag->fn_name, fn_tag->fn_version, &error, dmn_sock_fd) < 0) {
+            /* Load fetched function into cache */
+            fn_e = aura_lru_cache_get_slot(&gc->fn_cache, fn_tag->fn_id);
+            if (!fn_e)
                 return -1;
-            }
+
+            fn = aura_lru_cache_entry(fn_e, struct aura_fn, lc_entry);
+            if (aura_fn_meta_load(fn, &gc->mem_ctx, fn_tag->fn_name, fn_tag->fn_version, NULL, dmn_sock_fd) < 0)
+                return -1;
 
             /* Load HTTP functions to registry */
             ent = aura_fn_load_fn_registry_entry(&gc->fn_registry, fn_tag);
             /* Function registry is full, abandon */
             if (!ent) {
-                aura_fn_tag_destroy(fn_tag);
                 aura_free((void *)fn_list);
+                aura_fn_destroy(fn);
                 aura_heap_destroy(hp);
                 return 0;
             }
+            ent->fn = fn;
 
             /**
              * Load the top k functions using their stats
              */
-            fn_stat = aura_fn_stat_fetch_brokered(
+            fn_stat = aura_fn_stat_fetch(
               mc,
               fn_tag->fn_name,
               fn_tag->fn_version,
+              NULL,
               dmn_sock_fd);
             A_BUG_ON_2(!fn_stat, true);
 
@@ -1480,25 +1483,18 @@ static int a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd) 
         void *cache;
         aura_heap_for_each(hp, hp_ent) {
             aux_stat = aura_container_of(hp_ent, struct aura_fn_stat_wrapper, hp_ent);
+            fn_tag = aux_stat->fn_tag;
+            fn_e = aura_lru_cache_find(&gc->fn_cache, fn_tag->fn_id);
+            A_BUG_ON_2(!fn_e, true);
+            fn = aura_lru_cache_entry(fn_e, struct aura_fn, lc_entry);
 
-            /* Load fetched function into cache */
-            fn_e = aura_lru_cache_get(&gc->fn_cache, aux_stat->fn_tag->fn_id);
-            if (fn_e) {
-                fn = aura_lru_cache_entry(fn_e, struct aura_fn, lc_entry);
+            if (aura_fn_load(fn, &gc->mem_ctx, fn_tag->fn_name, fn_tag->fn_version, NULL, dmn_sock_fd) < 0)
+                return -1;
 
-                rv = aura_fn_load_brokered(
-                  mc,
-                  fn,
-                  aux_stat->fn_tag->fn_name,
-                  aux_stat->fn_tag->fn_version,
-                  dmn_sock_fd);
-                A_BUG_ON_2(rv == -1, true);
-
-                /* Update the function registry fn load state */
-                for (int i = 0; i < gc->fn_registry.cnt; ++i) {
-                    if (gc->fn_registry.entries[i].fn_tag.fn_id == fn->meta.fn_id) {
-                        gc->fn_registry.entries[i].load_state = A_FN_LOADED;
-                    }
+            /* Update the function registry fn load state */
+            for (int i = 0; i < gc->fn_registry.cnt; ++i) {
+                if (gc->fn_registry.entries[i].fn_tag.fn_id == fn->meta.fn_id) {
+                    gc->fn_registry.entries[i].load_state = A_FN_LOADED;
                 }
             }
 
@@ -1510,7 +1506,7 @@ static int a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd) 
                 continue;
             }
 
-            if (aura_route_add(&host->router, fn) < 0) {
+            if (aura_route_add(&host->router, ent) < 0) {
                 aura_fn_destroy(fn);
                 a_load_fn_destructor(aux_stat);
                 return -1;
@@ -1524,6 +1520,8 @@ static int a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd) 
 
     /* Clean up heap */
     aura_heap_destroy(hp);
+
+    return 0;
 }
 
 /**
@@ -1724,8 +1722,22 @@ static inline int a_glob_conf_init(struct aura_srv_global_ctx *gc) {
     }
 
     /* initialize function registry */
-    if (aura_fn_registry_init(&gc->fn_registry, &gc->mem_ctx, A_FN_MAX_REGISTRY_CNT) < 0)
-        sys_exit(true, errno, "main: fn registry init err");
+    if (aura_fn_registry_init(&gc->fn_registry, &gc->mem_ctx, A_FN_MAX_REGISTRY_CNT) < 0) {
+        sys_debug(true, errno, "main: fn registry init err");
+        return -1;
+    }
+
+    /* Initialize Task queue */
+    if (aura_task_queue_init(&gc->tq, 0, 64) < 0) {
+        sys_debug(true, errno, "main: task queue init err");
+        return -1;
+    }
+
+    /* Initialize worker pool */
+    if (aura_worker_pool_init(&gc->worker_pool) < 0) {
+        sys_debug(true, errno, "main: worker pool init err");
+        return -1;
+    }
 
     return 0;
 }
@@ -1787,7 +1799,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (a_preload_functions(gc, dmn_fd) < 0)
-        sys_exit(true, errno, "main: a_preload_functions");
+        sys_exit(true, errno, "main: a_preload_functions errno");
 
     /**
      * Notify daemon upon successful

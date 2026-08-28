@@ -5,6 +5,7 @@
 #include "header_srv.h"
 #include "http_lib.h"
 #include "radix/tree.h"
+#include "task_queue/tq.h"
 #include "types_lib.h"
 
 #include <strings.h>
@@ -15,8 +16,13 @@ struct aura_router;
 struct aura_route {
     struct aura_router *router; /* router to which route belongs */
     void *bpf_program;
-    uint32_t flag; /* config flags, only http2 enabled now */
+    struct aura_fn_registry_ent *fn_reg_ent; /* Function associated with this route */
+    uint32_t flag;                           /* config flags, only http2 enabled now */
     char url[256];
+};
+
+struct aura_route2 {
+    void *bpf_program;
 };
 
 /* Route pool structure */
@@ -50,7 +56,7 @@ void aura_router_destroy(struct aura_router *router);
  * attaching associates workqueue and function
  * to the route.
  */
-int aura_route_add(struct aura_router *router, struct aura_fn *fn);
+int aura_route_add(struct aura_router *router, struct aura_fn_registry_ent *ent);
 
 /**
  * Free a route and resources

@@ -269,7 +269,8 @@ int aura_dmn_start_server(struct aura_msg *msg, int cli_fd, void *_conf) {
             case A_MSG_CMD_EXECUTE:
                 /* server db request */
                 if (res_msg.hdr.cmd_type == A_CMD_DB_FETCH_REQUEST) {
-                    if (aura_dmn_db_req(&res_msg.data, sock_fds[0], gc->db_handle) < 0) {
+                    // if (aura_dmn_db_req(&res_msg.data, sock_fds[0], gc->db_handle) < 0) {
+                    if (aura_dmn_db_req(&res_msg.data, sock_fds[0], gc) < 0) {
                         ret_val = -1;
                         goto err_ipc_wait;
                     }

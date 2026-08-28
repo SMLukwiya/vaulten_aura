@@ -15,10 +15,11 @@ enum a_worker_flags {
 };
 
 struct aura_worker {
-    pthread_t thread;                /* Thread to worker is attached to */
-    pthread_key_t thread_key;        /* Thread key */
-    struct aura_list_head pool_node; /* node in worker pool */
-    void *runtime_ctx;               /* Worker's runtime context */
+    pthread_t thread;                 /* Thread to worker is attached to */
+    pthread_key_t thread_key;         /* Thread key */
+    struct aura_list_head pool_node;  /* node in worker pool */
+    void *runtime_ctx;                /* Worker's runtime context */
+    struct aura_timer_node idle_time; /* Worker idle timeout */
     uint8_t flags;
     /* stats */
 };
@@ -27,11 +28,11 @@ struct aura_fn_queue {
     struct aura_fn *fn;
     struct aura_worker_pool *glob_pool; /* Global worker pool */
     pthread_mutex_t lock;
-    struct aura_list_head exec_slots;
-    struct aura_list_head fn_node;   /* node on tq->fn_queues */
-    struct aura_list_head task_list; /* Pending task list */
-    uint32_t nr_exec_slots;          /* Execution slots count (qjs specific) */
-    uint32_t nr_active;              /* Nr of active fn invocations */
+    struct aura_list_head exec_slots; /* Execution context */
+    struct aura_list_head fn_node;    /* node on tq->fn_queues */
+    struct aura_list_head task_list;  /* Pending task list */
+    uint32_t nr_exec_slots;           /* Execution slots count (qjs specific) */
+    uint32_t nr_active;               /* Nr of active fn invocations */
     uint32_t work_started;
     uint32_t work_completed;
     bool paused; /* execution paused */
@@ -50,8 +51,7 @@ struct aura_worker_pool {
     int max_workers;
     int min_workers;
     struct aura_list_head idle_list;   /* Idle workers list */
-    struct aura_list_head workers;     /* actual workers */
-    struct aura_timer_node idle_time;  /* Worker idle timeout */
+    struct aura_list_head workers;     /* active workers */
     struct aura_list_head hashmap[64]; /* Hash map of active workers */
 };
 
@@ -67,15 +67,16 @@ struct aura_task_queue {
     uint32_t flags;
 };
 
-/**/
+/* Initialize the task queue */
 int aura_task_queue_init(struct aura_task_queue *tq, uint32_t flags, int max_conc);
 
-/* Initialize worker pool */
-int aura_worker_pool_init(struct aura_worker_pool *worker_pool);
-
-/**/
+/* Destroy task queue */
 void aura_task_queue_destroy(struct aura_task_queue *tq);
 
+/* Initialize worker pool */
+int aura_worker_pool_init(struct aura_worker_pool *wp);
+
+/**/
 int aura_task_queue_enqueue(struct aura_task_queue *tq, struct aura_task *task);
 
 /**/

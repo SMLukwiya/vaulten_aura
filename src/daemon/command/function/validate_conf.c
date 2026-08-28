@@ -311,52 +311,52 @@ void a_fn_validate_env(struct aura_yml_conf_parser *p, yaml_event_t *evt, struct
     }
 }
 
-bool aura_fn_validate_http_method(const char *method, aura_fn_http_method_t *value) {
-    *value = 0;
+// bool aura_fn_validate_http_method(const char *method, aura_fn_http_method_t *value) {
+//     *value = 0;
 
-    if (strcasecmp(method, "GET") == 0) {
-        *value = GET;
-        return true;
-    }
+//     if (strcasecmp(method, "GET") == 0) {
+//         *value = GET;
+//         return true;
+//     }
 
-    if (strcasecmp(method, "POST") == 0) {
-        *value = POST;
-        return true;
-    }
+//     if (strcasecmp(method, "POST") == 0) {
+//         *value = POST;
+//         return true;
+//     }
 
-    if (strcasecmp(method, "PUT") == 0) {
-        *value = PUT;
-        return true;
-    }
+//     if (strcasecmp(method, "PUT") == 0) {
+//         *value = PUT;
+//         return true;
+//     }
 
-    if (strcasecmp(method, "DELETE") == 0) {
-        *value = DELETE;
-        return true;
-    }
+//     if (strcasecmp(method, "DELETE") == 0) {
+//         *value = DELETE;
+//         return true;
+//     }
 
-    if (strcasecmp(method, "HEAD") == 0) {
-        *value = HEAD;
-        return true;
-    }
+//     if (strcasecmp(method, "HEAD") == 0) {
+//         *value = HEAD;
+//         return true;
+//     }
 
-    return false;
-}
+//     return false;
+// }
 
 bool aura_fn_validate_misfire_policy(const char *policy, aura_fn_cron_misfire_policy_t *value) {
     *value = 0;
 
     if (strcmp(policy, "ignore") == 0) {
-        *value = IGNORE;
+        *value = A_CRON_IGNORE;
         return true;
     }
 
     if (strcmp(policy, "fire_now") == 0) {
-        *value = FIRE_NOW;
+        *value = A_CRON_FIRE_NOW;
         return true;
     }
 
     if (strcmp(policy, "reschedule") == 0) {
-        *value = RESCHEDULE;
+        *value = A_CRON_RESCHEDULE;
         return true;
     }
 
@@ -432,7 +432,8 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
 
     /* http method */
     if (strcmp(yn->key, "method") == 0) {
-        aura_fn_http_method_t method;
+        // aura_fn_http_method_t method;
+        aura_http_method method;
         a_ensure_node_is_scalar(p, evt, yn);
 
         if (usr_data->trigger_type != A_FN_TRIGGER_HTTP) {
@@ -440,7 +441,9 @@ void a_fn_validate_triggers(struct aura_yml_conf_parser *p, yaml_event_t *evt, s
             return;
         }
 
-        if (!aura_fn_validate_http_method(yn->str_val, &method)) {
+        // if (!aura_fn_validate_http_method(yn->str_val, &method)) {
+        method = aura_http_method_get_method_t(yn->str_val, strlen(yn->str_val));
+        if (method == A_HTTP_NONE) {
             YAML_ADD_ERROR(p, evt, "Invalid HTTP method %s", yn->str_val);
             return;
         }
@@ -661,17 +664,17 @@ void a_fn_validate_concurrency(struct aura_yml_conf_parser *p, yaml_event_t *evt
 
 bool aura_fn_validate_oom_policy(const char *policy, int *value) {
     if (strcmp(policy, "throttle") == 0) {
-        *value = THROTTLE;
+        *value = A_OOM_POL_THROTTLE;
         return true;
     }
 
     if (strcmp(policy, "kill") == 0) {
-        *value = KILL;
+        *value = A_OOM_POL_KILL;
         return true;
     }
 
     if (strcmp(policy, "snaphost_then_kill") == 0) {
-        *value = SNAPSHOT_THEN_KILL;
+        *value = A_OOM_POL_SNAPSHOT_THEN_KILL;
         return true;
     }
 

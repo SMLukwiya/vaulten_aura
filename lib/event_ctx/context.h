@@ -54,20 +54,6 @@ struct aura_cron_evt_src {
     struct aura_timer_wheel wheel;
 };
 
-struct aura_evt_trigger {
-    uint64_t fn_id;
-    int trigger_type;
-    union {
-        struct {
-            char *path;
-            int method;
-        } http_config;
-        struct {
-            char *schedule;
-        } cron_config;
-    };
-};
-
 /* Event source structure */
 struct aura_evt_src {
     char name[A_EVT_SRC_NAME_MAX_LEN];

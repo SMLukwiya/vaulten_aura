@@ -374,7 +374,7 @@ static JSValue a_js_req_method_get(JSContext *ctx, JSValueConst this_val) {
     struct aura_exec_ctx *ec = JS_GetContextOpaque(ctx);
     A_BUG_ON_2(!ec, true);
     Request *req = ec->event.request;
-    const char *method_str = a_http_methods_str[req->method];
+    const char *method_str = aura_http_methods_str[req->method];
 
     return JS_NewString(ctx, method_str);
 }

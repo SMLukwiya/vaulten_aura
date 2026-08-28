@@ -4,6 +4,7 @@
 
 #include <limits.h>
 #include <signal.h>
+#include <string.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
 
@@ -156,7 +157,7 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
             return 0;
 
         case A_CMD_DB_FETCH_REQUEST:
-            aura_dmn_db_req(&msg->data, cli_fd, ((struct aura_dmn_glob_conf *)arg)->db_handle);
+            aura_dmn_db_req(&msg->data, cli_fd, (struct aura_dmn_glob_conf *)arg);
             return 0;
 
         case A_CMD_DB_INSERT_REQUEST:
@@ -264,9 +265,11 @@ static int a_dmn_load_fn_registry(struct aura_dmn_glob_conf *gc) {
     struct aura_fn_registry_ent *ent;
     struct aura_evt_src *evt_src;
     struct aura_fn_tag *fn_tag;
+    struct aura_fn *fn;
+    struct aura_lru_entry *fn_lru_e;
     int error;
 
-    fn_list = aura_fn_list_fetch(gc->db_handle, &error);
+    fn_list = aura_fn_list_fetch(&gc->mc, gc->db_handle, -1, &error);
     if (!fn_list) {
         if (error < 0)
             return -1;
@@ -275,22 +278,30 @@ static int a_dmn_load_fn_registry(struct aura_dmn_glob_conf *gc) {
 
     for (int i = 0; i < fn_list->func_cnt && i < A_FN_MAX_REGISTRY_CNT; ++i) {
         fn_tag = &fn_list->func_tags[i];
-        if (aura_fn_fetch_trigger(gc->db_handle, &fn_tag->fn_triggers, fn_tag->fn_name, fn_tag->fn_version, &error) < 0) {
-            aura_fn_tag_destroy(fn_tag);
-            aura_free(fn_list);
+
+        fn_lru_e = aura_lru_cache_get_slot(&gc->fn_cache, fn_tag->fn_id);
+        if (!fn_lru_e)
+            return -1;
+
+        fn = aura_lru_cache_entry(fn_lru_e, struct aura_fn, lc_entry);
+        memset(fn, 0, offsetof(struct aura_fn, lc_entry));
+
+        if (aura_fn_meta_load(fn, &gc->mc, fn_tag->fn_name, fn_tag->fn_version, gc->db_handle, -1) < 0) {
+            aura_free((void *)fn_list);
             return -1;
         }
 
         ent = aura_fn_load_fn_registry_entry(&gc->fn_registry, fn_tag);
         /* Function registry is full, abandon effort */
         if (!ent) {
-            aura_fn_tag_destroy(fn_tag);
+            aura_fn_destroy(fn);
             aura_free(fn_list);
             return 0;
         }
+        ent->fn = fn;
 
-        for (int j = 0; j < fn_tag->fn_triggers.cnt; ++j) {
-            switch (ent->fn_tag.fn_triggers.entries[j].trigger) {
+        for (int j = 0; j < fn->meta.triggers.cnt; ++j) {
+            switch (fn->meta.triggers.entries[j].trigger) {
             case A_FN_TRIGGER_HTTP:
                 evt_src = aura_evt_src_get(&gc->evt_src_registry, A_EVT_SRC_HTTP);
                 if (evt_src->ops->bind(evt_src, ent, j) < 0) {
@@ -308,8 +319,6 @@ static int a_dmn_load_fn_registry(struct aura_dmn_glob_conf *gc) {
                 break;
             }
         }
-
-        aura_fn_tag_destroy(fn_tag);
     }
 
     aura_free(fn_list);
@@ -360,6 +369,10 @@ int main(int argc, char *argv[]) {
     /* Load native event sources */
     if (a_dmn_load_native_evt_sources(&gc->evt_src_registry) < 0)
         sys_exit(true, errno, "aura_daemon: a_dmn_load_native_evt_sources error:");
+
+    /* Init fn cache */
+    if (aura_fn_cache_init(&gc->fn_cache, &gc->mc) < 0)
+        sys_exit(true, errno, "aura daemon: aura_fn_cache_init error");
 
     /* init function registry */
     if (aura_fn_registry_init(&gc->fn_registry, &gc->mc, A_FN_MAX_REGISTRY_CNT) < 0)
