@@ -4,6 +4,7 @@
 #include "bug_lib.h"
 #include "data_path/data_path.h"
 #include "error_lib.h"
+#include "h2/scheduler.h"
 #include "mem.h"
 #include "picotls.h"
 #include "picotls/certificate_compression.h"
@@ -96,6 +97,7 @@ struct aura_tls_ctx {
     } handshake;
     struct aura_sliding_buf encrypted_read_buf;
     struct aura_sliding_buf encrypted_write_buf;
+    struct aura_sliding_buf *scratch_buf;
     struct {
         ptls_buffer_t w_buf;
         bool in_flight;
@@ -107,16 +109,17 @@ struct aura_tls_ctx {
 /**
  * Decrypt received bytes using ptls negotiated parameters
  */
-int aura_tls_input_decode(ptls_t *ptls, struct aura_sliding_buf *in_buf, struct aura_sliding_buf *out_buf);
-int aura_tls_input_decode2(ptls_t *ptls, struct aura_sliding_buf *buf);
+int aura_tls_input_decode(ptls_t *ptls, struct aura_sliding_buf *buf, bool *close_notify);
 
 /**
  * Encrypt given bytes using ptls for wire transfer
  */
-ssize_t aura_tls_input_encode(struct aura_tls_ctx *tls_ctx, struct aura_list_head *head);
-ssize_t aura_tls_encode(struct aura_tls_ctx *tls, uint8_t *data, size_t len,
-                        int type, uint32_t stream_id, bool end_stream);
+int64_t aura_tls_encode(struct aura_tls_ctx *tls, struct aura_mem_ctx *mc,
+                        struct aura_h2_sched_iov *s_iov, bool *done, bool final);
 
 void aura_tls_free(struct aura_tls_ctx *tls_ctx);
+
+/* Send tls notify to the client */
+int aura_tls_send_close_notify(ptls_t *ptls, int sock_fd);
 
 #endif

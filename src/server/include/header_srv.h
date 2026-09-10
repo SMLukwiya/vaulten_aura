@@ -36,13 +36,20 @@ struct aura_header_field {
     uint8_t flags;
 };
 
-struct aura_header_vector2 {
+struct aura_header_vector {
     struct aura_basic_header *entries;
     size_t cnt;
     size_t cap;
 };
 
-int aura_add_header(struct aura_mem_ctx *mc, struct aura_header_vector2 *hdrs, struct aura_header_field *nv);
+struct aura_header_vector2 {
+    struct aura_header_field *entries;
+    uint32_t cnt;
+    uint32_t cap;
+};
+
+int aura_header_add_header_field(struct aura_mem_ctx *mc, struct aura_header_vector *hdrs,
+                                 struct aura_header_field *nv);
 
 bool aura_header_name_valid(const char *s);
 

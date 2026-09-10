@@ -53,6 +53,7 @@ SSL_CTX *a_create_ssl_ctx(const char *cert_file, const char *keypair_file) {
     SSL_CTX_set_mode(ctx, SSL_MODE_AUTO_RETRY);
 
     const unsigned char alpn[] = {2, 'h', '2'};
+    SSL_CTX_set_alpn_protos(ctx, alpn, sizeof(alpn));
     SSL_CTX_set_alpn_select_cb(ctx, a_select_alpn_cb, NULL);
     return ctx;
 }
@@ -92,7 +93,7 @@ void submit_response(nghttp2_session *session, int32_t stream_id) {
     nghttp2_submit_response2(session, stream_id, headers, 2, &data_prd);
 }
 
-int a_on_frame_recv(nghttp2_session *session, const nghttp2_frame *frame, void *user_data) {
+int a_on_frame_recv_cb(nghttp2_session *session, const nghttp2_frame *frame, void *user_data) {
     if (frame->hd.type == NGHTTP2_HEADERS && frame->headers.cat == NGHTTP2_HCAT_REQUEST) {
         int32_t stream_id = frame->hd.stream_id;
         printf("Received request on stream %d\n", stream_id);
@@ -156,7 +157,7 @@ int main(int argc, char **argv) {
         nghttp2_session_callbacks *callbacks;
         nghttp2_session_callbacks_new(&callbacks);
         nghttp2_session_callbacks_set_send_callback2(callbacks, a_send_cb);
-        nghttp2_session_callbacks_set_on_frame_recv_callback(callbacks, a_on_frame_recv);
+        nghttp2_session_callbacks_set_on_frame_recv_callback(callbacks, a_on_frame_recv_cb);
 
         nghttp2_session *session;
         nghttp2_session_server_new2(&session, callbacks, ssl, NULL);

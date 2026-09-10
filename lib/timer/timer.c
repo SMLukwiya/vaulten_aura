@@ -105,8 +105,6 @@ static inline int a_timer_detach_if_pending(struct aura_timer_wheel *tw, struct 
 }
 
 void aura_timer_node_deadline_forward(struct aura_deadline *dl, uint64_t deadline) {
-    uint64_t now = aura_now_ms(CLOCK_MONOTONIC);
-
     if (a_time_before_eq(deadline, dl->at))
         return;
 

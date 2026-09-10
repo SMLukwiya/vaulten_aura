@@ -3,6 +3,7 @@
 #include "bug_lib.h"
 #include "h2/hpack.h"
 #include "h2/server.h"
+#include "h2/session.h"
 #include "server_srv.h"
 #include "string_lib.h"
 #include "time_lib.h"
@@ -41,13 +42,14 @@ struct aura_h2_stream *aura_h2_stream_open(struct aura_h2_core *core, struct aur
         return NULL;
     }
 
-    if (aura_sliding_buf_init(&s->sync, mc, 0, A_SLIDING_BUF_FL_NONE) < 0) {
-        aura_slab_free(s);
+    s->out_buf = aura_sliding_buf_create(mc, 0, A_SLIDING_BUF_FL_SHARED);
+    if (!s->out_buf) {
+        aura_free(s);
         return NULL;
     }
 
     if (aura_sliding_buf_init(&s->data, mc, 0, A_SLIDING_BUF_FL_NONE) < 0) {
-        aura_sliding_buf_destroy(&s->sync);
+        aura_sliding_buf_destroy(s->out_buf);
         aura_slab_free(s);
         return NULL;
     }
@@ -62,16 +64,6 @@ void aura_set_priority(struct aura_h2_stream *s, struct aura_h2_priority *p) {
     /* Not supported */
     return;
 }
-
-/**
- *
- */
-static void request_write_and_close() {}
-
-/**
- *
- */
-static void send_refused_stream() {}
 
 /** */
 static int aura_h2_stream_push_promise_send(struct aura_h2_core *h2_ctx, struct aura_h2_stream *stream) {
@@ -107,14 +99,32 @@ bool aura_h2_stream_can_send(struct aura_h2_stream *s, bool is_server) {
 }
 
 void aura_h2_stream_destroy(struct aura_h2_stream *s, bool server) {
+    struct aura_rh_map_key key;
+
     if (!s)
         return;
 
-    s->user_data_dtor(s->user_data);
+    app_debug(true, 0, ">>>> aura_h2_stream_destroy");
+
+    /* Remove from core stream map */
+    aura_rh_map_key_init(&key, (uint64_t)s->stream_id, sizeof(uint64_t), A_RH_KEY_U64);
+    aura_rh_map_del(&s->h2_c->stream_map, &key, NULL);
+
+    /* @todo: check if only server stream */
+    if (aura_h2_stream_is_even_numbered(s->stream_id))
+        aura_h2_stream_release_staging_bit_pos(&s->h2_c->staging_bitmap, s->staging_bit_pos);
+
+    /* Remove from scheduler visibility */
+    if (s->queued)
+        aura_h2_conn_sched_detach_stream(s->h2_c, s);
+
     aura_route_req_destroy(&s->req);
     aura_route_response_destroy(&s->res);
 
-    aura_sliding_buf_destroy(&s->sync);
+    if (s->user_data_dtor)
+        s->user_data_dtor(s->user_data);
+
+    aura_sliding_buf_destroy(s->out_buf);
     aura_sliding_buf_destroy(&s->data);
 
     aura_slab_free(s);
@@ -124,7 +134,7 @@ void aura_h2_stream_dump(struct aura_h2_stream *stream) {
     app_debug(true, 0, "AURA H2 STREAM");
     app_debug(true, 0, "    stream id: %u", stream->stream_id);
     app_debug(true, 0, "    strean state: %d", stream->state);
-    app_debug(true, 0, "    stream header buf size: %lu", aura_sliding_buf_read_len(&stream->sync));
+    app_debug(true, 0, "    stream header buf size: %lu", aura_sliding_buf_read_len(stream->out_buf));
 }
 
 int aura_h2_stream_claim_rt_request(struct aura_mem_ctx *mc, struct aura_h2_stream *stream, _Request *req) {

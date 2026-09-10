@@ -11,7 +11,7 @@ typedef struct aura_js_request {
     struct aura_iovec url;
     struct aura_url parsed_url;
     struct aura_iovec scheme;
-    struct aura_header_vector2 headers;
+    struct aura_header_vector headers;
     const uint8_t *body;
     size_t body_len;
 } _Request;
@@ -19,7 +19,7 @@ typedef struct aura_js_request {
 /* JS response object */
 typedef struct aura_js_response {
     uint16_t status;
-    struct aura_header_vector2 headers;
+    struct aura_header_vector headers;
     const uint8_t *body;
     size_t body_len;
     bool ok;

@@ -72,7 +72,7 @@ int aura_h2_client_request_send(struct aura_h2_core *h2_c, struct aura_h2_stream
         /* defer sending END_STREAM until final headers block */
         flags |= (end_stream && (flags & A_H2_FRAME_FLAG_END_HEADERS)) ? A_H2_FRAME_FLAG_END_STREAM : 0;
         rv = aura_h2_encode_hdr_frame(
-          &stream->sync,
+          stream->out_buf,
           stream->stream_id,
           type, flags,
           src_in + offset,
@@ -96,7 +96,7 @@ int aura_h2_client_request_send(struct aura_h2_core *h2_c, struct aura_h2_stream
         while (len > 0) {
             chunk = a_min(len, h2_c->peer_settings.max_frame_size);
             flags |= (len == chunk && end_stream) ? A_H2_FRAME_FLAG_END_STREAM : 0;
-            if (aura_h2_encode_data_frame(&stream->sync, stream->stream_id, flags, src_in + offset, chunk, 0) < 0)
+            if (aura_h2_encode_data_frame(stream->out_buf, stream->stream_id, flags, src_in + offset, chunk, 0) < 0)
                 return -1;
 
             offset += chunk;
@@ -644,7 +644,7 @@ void aura_cli_handle_conn_failure(struct aura_conn *conn) {
         a_list_dequeue(p_req, &conn->srv_ctx->req_coord.head, p_list);
         aura_list_move(&fail_list, &p_req->p_list);
     }
-    // a_list_for_each_safe_to_delete(p_req, next_req, &conn->srv_ctx->req_coord.head, p_list) {
+    // aura_list_for_each_safe_to_delete(p_req, next_req, &conn->srv_ctx->req_coord.head, p_list) {
     //     if (p_req->associated_handler == conn) {
     //         aura_list_delete(p_req);
     //         aura_list_add_tail(&fail_list, &p_req->p_list);

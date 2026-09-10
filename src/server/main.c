@@ -305,10 +305,11 @@ identity_found:
     /* ALNP */
     if (hello_params->negotiated_protocols.count != 0) {
         for (size_t i = 0; i < hello_params->negotiated_protocols.count; ++i) {
+            /* only set for 'h2' */
             return ptls_set_negotiated_protocol(tls_conn, "h2", sizeof("h2") - 1);
         }
     }
-    return PTLS_ALERT_PROTOCOL_VERSION; /* not h2 */
+    return 0;
 }
 
 /**
@@ -1249,7 +1250,7 @@ static int a_setup_configs(struct aura_srv_global_ctx *gc, void *config) {
                 return -1;
             }
             /* set server context */
-            host_conf->router.srv_ctx = gc->srv_ctx;
+            // host_conf->router.srv_ctx = gc->srv_ctx;
 
             /* add host + conf to listener sni map */
             if (!aura_rax_insert(&lc->sni, hostname, strlen(hostname), A_RAX_NODE_TYPE_SPARSE, a_rax_data_init_ptr(host_conf))) {
@@ -1322,6 +1323,8 @@ static int a_server_ctx_init(struct aura_srv_global_ctx *gc, struct aura_srv_ctx
 
     aura_timer_wheel_init(&ctx->timer_wheel);
 
+    aura_srv_opt_init(&ctx->optimizer);
+
     aura_list_head_init(&ctx->queues.handshake);
     aura_list_head_init(&ctx->queues.active);
     aura_list_head_init(&ctx->queues.reap);
@@ -1352,6 +1355,22 @@ void a_load_fn_destructor(const void *stat) {
     aura_free(_stat);
 }
 
+static struct aura_route2 *a_http_fn_create_opaque(struct aura_mem_ctx *mc) {
+    struct aura_route2 *route_info = aura_alloc(mc, sizeof(*route_info));
+    if (!route_info) {
+        return NULL;
+    }
+
+    route_info->bpf_program = NULL;
+
+    return route_info;
+}
+
+static void a_http_opaque_destructor(void *opaque) {
+    struct aura_route2 *route_info = opaque;
+    aura_free(opaque);
+}
+
 /**
  * Load top k busy functions
  */
@@ -1368,15 +1387,15 @@ static int a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd) 
     struct aura_fn_tag *fn_tag;
     struct aura_lru_entry *fn_e;
     int rv, error, j;
-    bool least_active_changed;
+    bool least_active_changed, fn_cache_slot_used = true;
 
-    hp = aura_alloc(&gc->mem_ctx, sizeof(*hp));
+    hp = aura_alloc(mc, sizeof(*hp));
     if (!hp) {
         sys_debug(true, errno, "a_preload_functions error : heap alloc");
         return -1;
     }
 
-    if (aura_heap_init(hp, &gc->mem_ctx, A_MAX_PRELOAD_FN_CNT, aura_fn_stat_compare, A_HP_TYPE_MAX_HEAP) < 0) {
+    if (aura_heap_init(hp, mc, A_MAX_PRELOAD_FN_CNT, aura_fn_stat_compare, A_HP_TYPE_MAX_HEAP) < 0) {
         sys_debug(true, errno, "a_preload_functions error : aura_heap_init");
         aura_heap_destroy(hp);
         return -1;
@@ -1403,14 +1422,32 @@ static int a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd) 
                 continue;
             }
 
-            /* Load fetched function into cache */
-            fn_e = aura_lru_cache_get_slot(&gc->fn_cache, fn_tag->fn_id);
-            if (!fn_e)
-                return -1;
+            /**
+             * Load fetched function into cache
+             * Since we only want to load functions that can be
+             * invoked, see below. We are not sure if this current
+             * cache slot would actually be used. If not used, we
+             * can keep it for the next function.
+             */
+            if (fn_cache_slot_used) {
+                fn_e = aura_lru_cache_get_slot(&gc->fn_cache, fn_tag->fn_id);
+                if (!fn_e)
+                    return -1;
+                fn_cache_slot_used = false;
+            }
 
             fn = aura_lru_cache_entry(fn_e, struct aura_fn, lc_entry);
-            if (aura_fn_meta_load(fn, &gc->mem_ctx, fn_tag->fn_name, fn_tag->fn_version, NULL, dmn_sock_fd) < 0)
+            memset(fn, 0, offsetof(struct aura_fn, lc_entry));
+            if (aura_fn_meta_load(fn, mc, fn_tag->fn_name, fn_tag->fn_version, NULL, dmn_sock_fd) < 0)
                 return -1;
+
+            /* only load functions which can be invoked(reachable from the outside) */
+            host = a_find_host(gc, fn->meta.host);
+            if (!host) {
+                aura_fn_destroy(fn);
+                continue;
+            }
+            fn_cache_slot_used = true;
 
             /* Load HTTP functions to registry */
             ent = aura_fn_load_fn_registry_entry(&gc->fn_registry, fn_tag);
@@ -1419,9 +1456,27 @@ static int a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd) 
                 aura_free((void *)fn_list);
                 aura_fn_destroy(fn);
                 aura_heap_destroy(hp);
+                aura_lru_cache_del(&gc->fn_cache, fn_e);
                 return 0;
             }
             ent->fn = fn;
+            struct aura_route2 *route_info = a_http_fn_create_opaque(mc);
+            if (!route_info) {
+                sys_debug(true, 0, "function loading: route_info err");
+                return -1;
+            }
+
+            aura_fn_set_opaque(ent, (void *)route_info, a_http_opaque_destructor);
+
+            for (int i = 0; i < fn->meta.triggers.cnt; ++i) {
+                if (fn->meta.triggers.entries[i].trigger == A_FN_TRIGGER_HTTP) {
+                    if (host->evt_src.ops->bind(&host->evt_src, ent, i) < 0) {
+                        sys_debug(true, 0, "function loading: http evt src bind error");
+                        return -1;
+                    }
+                    break;
+                }
+            }
 
             /**
              * Load the top k functions using their stats
@@ -1496,20 +1551,6 @@ static int a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd) 
                 if (gc->fn_registry.entries[i].fn_tag.fn_id == fn->meta.fn_id) {
                     gc->fn_registry.entries[i].load_state = A_FN_LOADED;
                 }
-            }
-
-            /* only load functions which can be reachable from the outside */
-            host = a_find_host(gc, fn->meta.host);
-            if (!host) {
-                aura_fn_destroy(fn);
-                a_load_fn_destructor(aux_stat);
-                continue;
-            }
-
-            if (aura_route_add(&host->router, ent) < 0) {
-                aura_fn_destroy(fn);
-                a_load_fn_destructor(aux_stat);
-                return -1;
             }
 
             a_load_fn_destructor(aux_stat);

@@ -17,8 +17,11 @@
 
 int aura_lock_file(int, int, int, off_t, int, off_t);
 int aura_get_absolute_path(const char *path, char *resolved_path);
-bool aura_open_file(char *filename, int *fd);
+bool aura_open_file(const char *filename, int *fd);
 uint8_t *aura_load_file(int fd, size_t *len);
+
+/**/
+uint8_t *aura_load_file2(const char *filename, uint64_t *len);
 
 /* Get current file directory */
 int aura_get_dir_from_file_path(const char *fp, char *buf, size_t len);

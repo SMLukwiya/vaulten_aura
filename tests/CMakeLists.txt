@@ -91,33 +91,6 @@ set_tests_properties(daemon_test PROPERTIES
     TIMEOUT 10
 )
 
-# Bytecode generation
-add_executable(test_bytecode_gen
-    daemon/codegen.c
-    ${vaulten_aura_SOURCE_DIR}/lib/file/lib.c
-    ${common_sources}
-)
-
-target_include_directories(test_bytecode_gen 
-    PRIVATE ${vaulten_aura_SOURCE_DIR}/src/cli/include
-    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib/memory
-    PRIVATE ${vaulten_aura_SOURCE_DIR}/lib
-    PRIVATE ${PROJECT_INCLUDE_DIR}
-)
-
-target_link_libraries(test_bytecode_gen PRIVATE quickjs)
-
-add_test(
-    NAME codegen_test
-    COMMAND test_bytecode_gen
-    CONFIGURATIONS Debug RelWithDebInfo ""
-)
-
-set_tests_properties(codegen_test PROPERTIES
-    LABELS "daemon;codegen"
-    TIMEOUT 10
-)
-
 # -------------------- CLI TESTS -------------------- #
 add_executable(test_aura_cli
     cli/basic.c

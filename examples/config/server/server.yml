@@ -30,8 +30,8 @@ listeners:
 
 tls:
   identities:
-    - cert_file: ./examples/config/cert_chain.pem
-      key_file: ./examples/config/aura_leaf_keypair.pem
+    - cert_file: ./examples/config/server/server.crt
+      key_file: ./examples/config/server/server.key
       tag: default
   cipher_suites:
     - TLS_AES_256_GCM_SHA384

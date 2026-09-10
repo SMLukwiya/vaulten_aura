@@ -4,6 +4,7 @@
 #define _XOPEN_SOURCE 700
 #endif
 #include "utils_lib.h"
+#include <syslog.h>
 
 int aura_set_fd_flag(int fd, int flag) {
     int val;
@@ -102,4 +103,77 @@ int aura_install_signal_handler(int signo, void (*handler)(int signo)) {
     action.sa_flags = 0;
     sigemptyset(&action.sa_mask);
     return sigaction(signo, &action, NULL);
+}
+
+void aura_hex_dump(const void *addr, size_t len) {
+    const unsigned char *buf = (const unsigned char *)addr;
+
+    for (size_t i = 0; i < len; i += 16) {
+        printf("%08zx  ", i);
+
+        for (size_t j = 0; j < 8; j++) {
+            if (i + j < len)
+                printf("%02x ", buf[i + j]);
+            else
+                printf("   ");
+        }
+
+        printf(" ");
+
+        for (size_t j = 8; j < 16; j++) {
+            if (i + j < len)
+                printf("%02x ", buf[i + j]);
+            else
+                printf("   ");
+        }
+
+        printf(" |");
+        for (size_t j = 0; j < 16 && (i + j) < len; j++) {
+            unsigned char c = buf[i + j];
+            printf("%c", isprint(c) ? c : '.');
+        }
+        printf("|\n");
+    }
+}
+
+void aura_hex_dump_syslog(int priority, const char *prefix, const void *addr, size_t len) {
+    const unsigned char *buf = (const unsigned char *)addr;
+    char line_buf[128];
+
+    for (size_t i = 0; i < len; i += 16) {
+        int off = 0;
+
+        /* Prefix Bytes(0-7) */
+        off += snprintf(line_buf + off, sizeof(line_buf) - off, "%s [%08zx]  ", prefix ? prefix : "HEX", i);
+
+        /* First quad word */
+        for (size_t j = 0; j < 8; j++) {
+            if (i + j < len)
+                off += snprintf(line_buf + off, sizeof(line_buf) - off, "%02x ", buf[i + j]);
+            else
+                off += snprintf(line_buf + off, sizeof(line_buf) - off, "   ");
+        }
+
+        /* quad word space separator */
+        off += snprintf(line_buf + off, sizeof(line_buf) - off, " ");
+
+        /* Second quad word (Bytes 8-15) */
+        for (size_t j = 8; j < 16; j++) {
+            if (i + j < len)
+                off += snprintf(line_buf + off, sizeof(line_buf) - off, "%02x ", buf[i + j]);
+            else
+                off += snprintf(line_buf + off, sizeof(line_buf) - off, "   ");
+        }
+
+        // 4. Print Printable ASCII
+        off += snprintf(line_buf + off, sizeof(line_buf) - off, " |");
+        for (size_t j = 0; j < 16 && (i + j) < len; j++) {
+            unsigned char c = buf[i + j];
+            off += snprintf(line_buf + off, sizeof(line_buf) - off, "%c", isprint(c) ? c : '.');
+        }
+        off += snprintf(line_buf + off, sizeof(line_buf) - off, "|");
+
+        // 5. Emit the single complete line to syslog (DO NOT include '\n')
+        syslog(priority, "%s", line_buf);
+    }
 }

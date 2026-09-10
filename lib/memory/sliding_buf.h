@@ -21,9 +21,10 @@
 /* Sliding buffer structure */
 struct aura_sliding_buf {
     struct aura_mem_ctx *mc;
-    uint32_t cap;   /* capacity of buffer */
-    uint32_t start; /* read offset */
-    uint32_t end;   /* write offset */
+    uint32_t cap;    /* capacity of buffer */
+    uint32_t usable; /* usable cap (excludes align) */
+    uint32_t start;  /* read offset */
+    uint32_t end;    /* write offset */
     union {
         struct {
             struct aura_list_head link; /* Link to buffer list */
@@ -39,7 +40,7 @@ typedef enum {
     A_SLIDING_BUF_FL_NONE = 0,
     A_SLIDING_BUF_FL_INITIALIZED = 1,      /* Buffer initialized */
     A_SLIDING_BUF_FL_INLINED = 1 << 1,     /* Embedded as part of a parent structure */
-    A_SLIDING_BUG_FL_SHARED = 1 << 2,      /* Shared via ref counting */
+    A_SLIDING_BUF_FL_SHARED = 1 << 2,      /* Shared via ref counting */
     A_SLIDING_BUF_FL_MOVABLE = 1 << 3,     /* can move across structures */
     A_SLIDING_BUF_FL_FIXED = 1 << 4,       /* Size is fixed */
     A_SLIDING_BUF_FL_COMPACTABLE = 1 << 5, /* Data can be compacted without losing meaning */
@@ -48,7 +49,7 @@ typedef enum {
 
 /* Get buffer actual capacity */
 static inline uint32_t aura_sliding_buf_cap(struct aura_sliding_buf *buf) {
-    return buf->cap;
+    return buf->usable;
 }
 
 /* Get available buffer space for read action */
@@ -58,7 +59,7 @@ static inline uint32_t aura_sliding_buf_read_len(const struct aura_sliding_buf *
 
 /* Get available buffer space for write function */
 static inline uint32_t aura_sliding_buf_write_len(const struct aura_sliding_buf *buf) {
-    return buf->cap - buf->end;
+    return buf->usable - buf->end;
 }
 
 static inline bool aura_sliding_buf_is_empty(const struct aura_sliding_buf *buf) {
@@ -66,7 +67,7 @@ static inline bool aura_sliding_buf_is_empty(const struct aura_sliding_buf *buf)
 }
 
 static inline bool aura_sliding_buf_is_full(const struct aura_sliding_buf *buf) {
-    return buf->end == buf->cap;
+    return buf->end == buf->usable;
 }
 
 /* Get read location in buffer for the next read action */
@@ -87,6 +88,14 @@ static inline void aura_sliding_buf_reset(struct aura_sliding_buf *buf) {
 /* Is buffer initialized */
 static inline bool aura_sliding_buf_is_initialized(struct aura_sliding_buf *buf) {
     return (buf->flags & A_SLIDING_BUF_FL_INITIALIZED);
+}
+
+/* Reference buffer */
+static inline void aura_sliding_buf_reference(struct aura_sliding_buf *buf) {
+    if (!(buf->flags & A_SLIDING_BUF_FL_SHARED))
+        return;
+
+    buf->allocated.ref_cnt++;
 }
 
 /**
@@ -142,8 +151,10 @@ int64_t aura_sliding_buf_move(struct aura_sliding_buf *dest, struct aura_sliding
  * Make a copy of @orig into @copy
  * @copy must be a new instance of
  * sliding buf structure
+ * Returns -1 if not data was copied, otherwise
+ * returns 0 indicating everything was copied.
  */
-int64_t aura_sliding_buf_copy(struct aura_sliding_buf *copy, struct aura_sliding_buf *orig);
+int64_t aura_sliding_buf_copy(struct aura_sliding_buf *dest, struct aura_sliding_buf *src);
 
 /**
  * Read '@len' data from the buf and adjust

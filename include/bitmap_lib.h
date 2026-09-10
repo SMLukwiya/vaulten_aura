@@ -152,7 +152,7 @@ static inline uint64_t aura_bitmap_find_next_empty_bit(uint64_t *addr, uint64_t 
     if (offset >= size)
         return size;
 
-    /* check if any bit is set */
+    /* check if all bits are set */
     val = *addr & A_BITMAP_GENMASK(size - 1, offset);
     return ~val ? a_ctz64(~val) : size;
 }

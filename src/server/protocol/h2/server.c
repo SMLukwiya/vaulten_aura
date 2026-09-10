@@ -3,6 +3,7 @@
 #include "connection.h"
 #include "error_lib.h"
 #include "executors/js/quickjs/bindings.h"
+#include "fn/lib.h"
 #include "h2/hpack.h"
 #include "h2/scheduler.h"
 #include "h2/sentinel.h"
@@ -43,12 +44,36 @@ static bool aura_h2_srv_can_transmit(void *payload) {
     struct aura_h2_stream_desc *stream_desc;
     uint32_t wind_sz;
 
-    stream_desc = aura_h2_conn_stream_desc_get(s_iov->h2_c, s_iov->stream_desc_idx);
-    wind_sz = aura_h2_stream_desc_can_proceed(stream_desc, s_iov->stream_id);
-    if (wind_sz > 0)
-        s_iov->allowed_len = wind_sz;
+    app_debug(true, 0, ">>>> aura_h2_srv_can_transmit");
+    aura_h2_sched_iov_dump(s_iov);
 
-    return wind_sz > 0;
+    /* both header and body are present */
+    switch (s_iov->type) {
+    case A_H2_SCHED_RESPONSE:
+        s_iov->allowed_len = s_iov->header_len;
+        stream_desc = aura_h2_conn_stream_desc_get(s_iov->h2_c, s_iov->stream_desc_idx);
+        wind_sz = aura_h2_stream_desc_can_proceed(stream_desc, s_iov->stream_id);
+        if (wind_sz > 0)
+            s_iov->allowed_len += a_min(wind_sz, s_iov->data_len);
+
+        return true;
+
+    case A_H2_SCHED_DATA:
+        stream_desc = aura_h2_conn_stream_desc_get(s_iov->h2_c, s_iov->stream_desc_idx);
+        wind_sz = aura_h2_stream_desc_can_proceed(stream_desc, s_iov->stream_id);
+        if (wind_sz > 0)
+            s_iov->allowed_len = wind_sz;
+
+        return wind_sz > 0;
+
+    case A_H2_SCHED_HDR:
+        s_iov->allowed_len = s_iov->header_len;
+        return true;
+
+    default:
+        s_iov->allowed_len = s_iov->data_len;
+        return true;
+    }
 }
 
 /**
@@ -58,20 +83,30 @@ static int inline a_h2_srv_trigger_flush(struct aura_h2_core *h2_c, struct aura_
     struct aura_h2_server_conn *c;
     struct aura_conn *p_conn;
     uint8_t *read_ptr;
-    size_t read_len;
-    ssize_t bytes_written;
+    uint64_t read_len;
+    int64_t bytes_written;
 
     read_ptr = aura_sliding_buf_read_ptr(buf);
     read_len = aura_sliding_buf_read_len(buf);
+    app_debug(true, 0, ">>>> a_h2_srv_trigger_flush len=%lu", read_len);
     if (read_len > 0) {
         c = aura_container_of(h2_c, struct aura_h2_server_conn, core);
-        p_conn = c->conn;
-        bytes_written = p_conn->ops->on_write(read_ptr, read_len);
+        p_conn = aura_container_of(c, struct aura_conn, h2_server);
+        bytes_written = aura_write(p_conn->sock.sock_fd, read_ptr, read_len);
         if (bytes_written != read_len) {
-            if (bytes_written > 0)
+            if (bytes_written > 0) {
                 aura_sliding_buf_consume(buf, bytes_written);
+                /**
+                 * Copy the remaining data to the residual buffer,
+                 * which is sent immediately we have a signal to write
+                 */
+                if (aura_sliding_buf_copy(&p_conn->residual_buf, buf) < 0)
+                    return A_FQ_FATAL;
 
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                return A_FQ_STALLED;
+            }
+
+            if (bytes_written == 0)
                 return A_FQ_STALLED;
 
             return A_FQ_FATAL;
@@ -80,7 +115,59 @@ static int inline a_h2_srv_trigger_flush(struct aura_h2_core *h2_c, struct aura_
         aura_sliding_buf_consume(buf, bytes_written);
     }
 
+    app_debug(true, 0, "FINISHED WRITING <<<<<<<<<< fq empty=%d, out_empty=%d, pri_empty=%d, spill_empty=%d", aura_fq_is_empty(h2_c->fq), aura_h2_sched_dense_pool_is_empty(&h2_c->out_frame_pool), aura_h2_sched_pri_slot_empty(&h2_c->scheduler), aura_h2_sched_spill_slot_empty(&h2_c->scheduler));
+
     return A_FQ_OK;
+}
+
+static inline int a_h2_srv_encrypt(struct aura_tls_ctx *tls, struct aura_mem_ctx *mc, struct aura_h2_sched_iov *s_iov, bool final) {
+    bool done;
+    int64_t rv;
+
+    app_debug(true, 0, ">>>> a_h2_srv_encrypt");
+again:
+    done = false;
+    rv = aura_tls_encode(tls, mc, s_iov, &done, final);
+    if (rv < 0) {
+        if (s_iov)
+            aura_h2_sched_iov_destroy(s_iov);
+        return A_FQ_FATAL;
+    }
+    app_debug(true, 0, "a_h2_srv_encrypt rv=%d, done=%d", rv, done);
+
+    /**
+     * This happens when nothing is encoded due to encrypted buffer
+     * being filled up, So we try and write immediately.
+     */
+    if (rv == 0 && !done) {
+        if ((rv = a_h2_srv_trigger_flush(s_iov->h2_c, &tls->encrypted_write_buf)) != A_FQ_OK)
+            return rv;
+
+        /**
+         * If frame could not proceed because
+         * the TLS buffer was full, try again
+         */
+        goto again;
+    }
+
+    if (done) {
+        aura_h2_sched_iov_destroy(s_iov);
+
+        return A_FQ_RELEASED;
+    } else {
+        /**
+         * Only part of the data was encrypted, we update the
+         * len, try and flush again, then repeat the encryption
+         * routine all over again
+         */
+        /* Bytes were sliced, trigger flush  */
+        if ((rv = a_h2_srv_trigger_flush(s_iov->h2_c, &tls->encrypted_write_buf)) != A_FQ_OK)
+            return rv;
+
+        goto again;
+
+        return A_FQ_OK;
+    }
 }
 
 /**
@@ -89,64 +176,19 @@ static int inline a_h2_srv_trigger_flush(struct aura_h2_core *h2_c, struct aura_
 static int aura_h2_srv_encrypt(void *payload) {
     struct aura_h2_sched_iov *s_iov = payload;
     struct aura_h2_server_conn *c;
+    struct aura_conn *conn;
     struct aura_tls_ctx *tls_ctx;
-    bool is_secure, end_stream;
-    size_t len, tls_len, remaining;
-    ssize_t rv;
+    bool done;
+    int64_t rv;
 
     c = aura_container_of(s_iov->h2_c, struct aura_h2_server_conn, core);
-    tls_ctx = &c->conn->tls_ctx;
+    conn = aura_container_of(c, struct aura_conn, h2_server);
+    tls_ctx = &conn->tls_ctx;
 
-    if (c->conn->is_secure) {
-        end_stream = s_iov->end_stream && (s_iov->data_len == s_iov->allowed_len);
-        len = a_min(s_iov->data_len, s_iov->allowed_len);
-
-    again:
-        rv = aura_tls_encode(tls_ctx, s_iov->data, len, s_iov->type, s_iov->stream_id, end_stream);
-        if (rv < 0) {
-            aura_h2_sched_iov_destroy(s_iov);
-            return A_FQ_FATAL;
-        }
-
-        /* Trigger flush */
-        if (rv == 0) {
-            if ((rv = a_h2_srv_trigger_flush(s_iov->h2_c, &tls_ctx->encrypted_write_buf)) != A_FQ_OK)
-                return rv;
-
-            /**
-             * If frame could not proceed because
-             * the TLS buffer was full, try again
-             */
-            goto again;
-        }
-
-        aura_sliding_buf_consume(s_iov->buf, rv);
-        if (s_iov->data_len == rv) {
-            aura_h2_sched_iov_destroy(s_iov);
-            aura_h2_conn_after_frame_sent(s_iov->h2_c, s_iov->stream_id, s_iov->type, len, end_stream);
-
-            return A_FQ_RELEASED;
-        } else {
-            s_iov->data_len -= rv;
-            s_iov->data += rv;
-
-            /**
-             * If everything was flushed and
-             * If only part of the data was sent,
-             * flush and continue encoding the remaining parts
-             */
-            len -= rv;
-            if (len > 0) {
-                /* Bytes were sliced, trigger flush  */
-                if ((rv = a_h2_srv_trigger_flush(s_iov->h2_c, &tls_ctx->encrypted_write_buf)) != A_FQ_OK)
-                    return rv;
-
-                goto again;
-            }
-
-            return A_FQ_OK;
-        }
+    if (conn->is_secure) {
+        return a_h2_srv_encrypt(tls_ctx, conn->mc, s_iov, false);
     } else {
+        /** @todo: send without encryption */
     }
 
     return A_FQ_OK;
@@ -158,14 +200,21 @@ static int aura_h2_srv_encrypt(void *payload) {
  * entries
  */
 static int aura_h2_srv_write_complete(void *payload) {
-    struct aura_h2_sched_iov *s_iov = payload;
+    struct aura_h2_core *h2_c = payload;
     struct aura_h2_server_conn *c;
+    struct aura_conn *conn;
     struct aura_tls_ctx *tls_ctx;
 
-    c = aura_container_of(s_iov->h2_c, struct aura_h2_server_conn, core);
-    tls_ctx = &c->conn->tls_ctx;
+    app_debug(true, 0, ">>>> aura_h2_srv_write_complete");
+    c = aura_container_of(h2_c, struct aura_h2_server_conn, core);
+    conn = aura_container_of(c, struct aura_conn, h2_server);
+    tls_ctx = &conn->tls_ctx;
 
-    return a_h2_srv_trigger_flush(s_iov->h2_c, &tls_ctx->encrypted_write_buf);
+    int64_t rv = a_h2_srv_encrypt(tls_ctx, conn->mc, NULL, true);
+    if (rv == A_FQ_FATAL)
+        return rv;
+
+    return a_h2_srv_trigger_flush(h2_c, &tls_ctx->encrypted_write_buf);
 }
 
 int aura_h2_srv_write(struct aura_h2_server_conn *c) {
@@ -176,30 +225,40 @@ int aura_h2_srv_write(struct aura_h2_server_conn *c) {
     struct aura_h2_send_iov *send_iov;
     int rv;
 
-    p_conn = c->conn;
+    app_debug(true, 0, ">>>> aura_h2_srv_write");
+    p_conn = aura_container_of(c, struct aura_conn, h2_server);
     rv = aura_h2_schedule(&c->core);
+    app_debug(true, 0, "aura_h2_srv_write schedule rv=%d", rv);
 
-    rv = aura_flight_queue_flush(&c->core.fq, aura_h2_srv_can_transmit, aura_h2_srv_encrypt, aura_h2_srv_write_complete);
+    rv = aura_flight_queue_flush(
+      c->core.fq,
+      aura_h2_srv_can_transmit,
+      aura_h2_srv_encrypt,
+      NULL, /* no per item completion function */
+      aura_h2_srv_write_complete);
     switch (rv) {
     case A_FQ_STALLED:
         int r;
         if (aura_evt_loop_modify(p_conn->srv_ctx->evt_loop, p_conn->sock.sock_fd, p_conn, AURA_EVENT_READ | AURA_EVENT_WRITE) < 0) {
             aura_list_move(&p_conn->srv_ctx->queues.reap, &p_conn->c_list);
-            rv = A_H2_IN_PROGRESS_ERR;
+            rv = A_ERR_FATAL;
         }
         break;
 
     case A_FQ_FATAL:
+    case A_FQ_RELEASED:
+    case A_FQ_ABORTED:
         /* Move to closing queue */
         aura_list_move(&p_conn->srv_ctx->queues.reap, &p_conn->c_list);
-        rv = A_H2_INTERNAL_ERR;
+        rv = A_ERR_FATAL;
         break;
 
     case A_FQ_OK:
+    default:
+        rv = A_ERR_NONE;
         break;
     }
 
-    /** @todo: get h2 error representation */
     return rv;
 }
 
@@ -300,15 +359,41 @@ int aura_submit_response(struct aura_h2_server_conn *h2_conn, struct aura_h2_str
     //     return rv;
 }
 
+struct aura_basic_header *a_get_slot(struct aura_h2_stream *stream, struct aura_mem_ctx *mc) {
+
+    if (stream->res.headers.cnt >= stream->res.headers.cap) {
+        stream->res.headers.cap = stream->res.headers.cap == 0 ? 16 : stream->res.headers.cap * 2;
+        stream->res.headers.entries = aura_realloc(mc, stream->res.headers.entries, sizeof(*(stream->res.headers.entries)) * stream->res.headers.cap);
+        if (stream->res.headers.entries == NULL)
+            return NULL;
+    }
+
+    return &stream->res.headers.entries[stream->res.headers.cnt++];
+}
+
 /**
  * Prepare error response for submitting on the wire
  * and call the underlying callback to send the data
  */
-int aura_h2_submit_error_response(struct aura_h2_core *h2_c, struct aura_h2_stream *stream, int status) {
-    struct aura_hpack_static_table_entry *entry;
-    struct aura_http_res res;
+int aura_h2_submit_error_response(struct aura_h2_core *h2_c, struct aura_h2_stream *stream,
+                                  int status, uint8_t *body, uint64_t len) {
+    struct aura_h2_server_conn *c = aura_container_of(h2_c, struct aura_h2_server_conn, core);
+    struct aura_conn *conn = aura_container_of(c, struct aura_conn, h2_server);
 
-    // return aura_submit_response(h2_c, stream, true);
+    stream->res.content_length = SIZE_MAX;
+    if (body) {
+        stream->res.content_length = len;
+        stream->res.body = body;
+    }
+    struct aura_basic_header *slot = a_get_slot(stream, conn->mc);
+    slot->name.len = sizeof("content-type") - 1;
+    slot->name.base = aura_strndup(conn->mc, "content-type", slot->name.len);
+    slot->value.len = sizeof("application/json") - 1;
+    slot->value.base = aura_strndup(conn->mc, "application/json", slot->value.len);
+
+    stream->res.status_code = status;
+    aura_h2_conn_sched_attach_stream(h2_c, stream);
+
     return 0;
 }
 
@@ -326,6 +411,21 @@ int aura_h2_submit_rt_response(struct aura_h2_core *h2_conn, struct aura_h2_stre
 
         // return aura_submit_response(h2_conn, stream, true);
     }
+}
+
+static int a_h2_srv_close_connection(struct aura_h2_server_conn *c, int err, int err_str_idx) {
+    struct aura_conn *conn;
+    struct aura_iovec reason = aura_h2_err_string[err_str_idx];
+
+    int rv = aura_h2_conn_enqueue_goaway(&c->core, c->core.local_goaway_stream_id, err, &reason);
+    if (rv != A_H2_ERR_NONE)
+        return rv;
+
+    aura_h2_conn_transition_state(&c->state, A_H2_CONN_STATE_CLOSING);
+    conn = aura_container_of(c, struct aura_conn, h2_server);
+    aura_conn_transition_state(conn, A_CONN_STATE_CLOSING);
+
+    return A_H2_ERR_NONE;
 }
 
 static int a_setup_server_preface(struct aura_h2_core *h2_c) {
@@ -380,7 +480,7 @@ static int a_setup_server_preface(struct aura_h2_core *h2_c) {
         goto goaway;
     }
 
-    s_iov = aura_h2_get_sched_iov(&h2_c->scheduler, A_H2_SCHED_CONTROL);
+    s_iov = aura_h2_get_sched_iov(h2_c, A_H2_SCHED_CONTROL);
     if (!s_iov) {
         /* @todo: close connection */
     }
@@ -389,6 +489,7 @@ static int a_setup_server_preface(struct aura_h2_core *h2_c) {
     s_iov->data = frame;
     s_iov->data_len = settings_len + wind_len;
     s_iov->buf = &h2_c->scheduler.write_buf;
+    aura_sliding_buf_reference(s_iov->buf);
     s_iov->stream_id = 0;
     s_iov->end_stream = false;
     aura_h2_sched_accum_bytes(&h2_c->scheduler, s_iov);
@@ -402,62 +503,87 @@ goaway:
 
 /**
  * Handle server connection preface
+ * We do not consider h2 established at this point yet.
+ * Simply close connection
  */
 int aura_h2_srv_process_preface(struct aura_h2_server_conn *c, struct aura_sliding_buf *plain_buf) {
     int res, len;
     uint8_t *src;
 
+    app_debug(true, 0, ">>>> aura_h2_srv_process_preface");
     src = aura_sliding_buf_read_ptr(plain_buf);
     len = aura_sliding_buf_read_len(plain_buf);
 
-    if (len < aura_h2_conn_preface.len)
-        return A_H2_FRAME_INCOMPLETE;
+    if (len < aura_h2_conn_preface.len) {
+        /* frame incomplete */
+        return A_ERR_AGAIN;
+    }
+    aura_hex_dump_syslog(LOG_DEBUG, "H2", src, len);
 
-    if (memcmp(aura_h2_conn_preface.base, src, aura_h2_conn_preface.len) != 0)
-        return A_H2_PROTOCOL_ERR;
+    if (memcmp(aura_h2_conn_preface.base, src, aura_h2_conn_preface.len) != 0) {
+        /* protocol error, no goaway, simply close connection */
+        return A_ERR_FATAL;
+    }
 
     aura_sliding_buf_consume(plain_buf, aura_h2_conn_preface.len);
     // encode origin if present
     aura_h2_conn_transition_state(&c->state, A_H2_CONN_STATE_PREFACE_SETTINGS);
-    // aura_h2_conn_transition_state_handler(c->state_handler, a_srv_process_preface_settings);
 
-    return A_H2_ERR_NONE;
+    return A_ERR_NONE;
 }
 
+/**
+ * We do not consider h2 established at this point yet.
+ * Get app error from h2 error and tear down connetion
+ * simply tear down the connection
+ */
 static int a_srv_process_preface_settings(struct aura_h2_server_conn *c, struct aura_sliding_buf *plain_buf) {
     struct aura_h2_in_frame *in_frame = &c->core.in_frame;
     int rv, len, frame_len;
     uint8_t *src;
 
+    app_debug(true, 0, ">>>> a_srv_process_preface_settings");
     src = aura_sliding_buf_read_ptr(plain_buf);
     len = aura_sliding_buf_read_len(plain_buf);
     rv = aura_h2_parse_frame_header(in_frame, src, len, c->core.local_settings.max_frame_size);
     if (rv != A_H2_ERR_NONE)
-        return rv;
+        return aura_h2_get_app_error(rv);
+
+    aura_h2_frame_dump(&in_frame->frame);
 
     if (in_frame->frame.type != A_H2_FRAME_TYPE_SETTINGS)
-        return A_H2_PROTOCOL_ERR;
+        return A_ERR_FATAL;
 
     frame_len = A_H2_FRAME_HEADER_SIZE + in_frame->frame.len;
     rv = aura_h2_conn_process_settings(&c->core, in_frame, true);
     aura_sliding_buf_consume(plain_buf, frame_len);
     if (rv != A_H2_ERR_NONE)
-        return rv;
+        return A_ERR_FATAL;
 
     rv = a_setup_server_preface(&c->core);
     if (rv != A_H2_ERR_NONE)
-        return rv;
+        return A_ERR_FATAL;
 
     aura_h2_conn_transition_state(&c->state, A_H2_CONN_STATE_FRAMES);
-    // aura_h2_conn_transition_state_handler(c->state_handler, aura_h2_srv_process_frame);
 
-    return rv;
+    /**
+     * Beyond this points, h2 errors would be communicated via goaway and resets.
+     * The connection shutdown state would determine if
+     * we would tear down the connection, but we would be returning
+     * ERR NONE for the various scenarios
+     */
+    struct aura_conn *conn = aura_container_of(c, struct aura_conn, h2_server);
+    aura_conn_transition_state(conn, A_CONN_STATE_ACTIVE);
+    aura_h2_frame_reset_inframe(in_frame);
+
+    return A_ERR_NONE;
 }
 
 /**
  *
  */
-static int a_srv_process_push_promise(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame) {
+static int a_srv_process_push_promise(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame,
+                                      struct aura_mem_ctx *mc) {
     return aura_h2_conn_enqueue_goaway(
       &c->core,
       c->core.local_goaway_stream_id,
@@ -491,13 +617,14 @@ uint8_t a_is_header_method_valid(const char *method) {
  * Returns 0 if the parsed authority is among list
  * of allowed authority for a given server, otherwise err;
  */
-static inline int a_header_authority_cb(struct aura_h2_core *h2_c, struct aura_h2_stream *stream,
-                                        const char *name, size_t name_len, const char *value,
-                                        size_t value_len) {
-    app_debug(true, 0, "a_header_authority_cb <<<< value: %s", value);
+static int a_header_authority_cb(struct aura_h2_core *h2_c, struct aura_h2_stream *stream,
+                                 struct aura_iovec *name, struct aura_iovec *value, bool process) {
+    app_debug(true, 0, ">>>> a_header_authority_cb value: %s", value->base);
 
     struct aura_h2_server_conn *c = aura_container_of(h2_c, struct aura_h2_server_conn, core);
-    stream->req.authority.host.base = aura_strndup(c->conn->mc, value, value_len);
+    struct aura_conn *conn = aura_container_of(c, struct aura_conn, h2_server);
+    if (process)
+        stream->req.authority.host.base = aura_strndup(conn->mc, value->base, value->len);
     return A_HPACK_OK;
 }
 
@@ -505,23 +632,23 @@ static inline int a_header_authority_cb(struct aura_h2_core *h2_c, struct aura_h
  * Return 0 if the parsed method is valid and
  * supported by server, otherwise -1;
  */
-static inline int a_header_method_cb(struct aura_h2_core *h2_c, struct aura_h2_stream *stream,
-                                     const char *name, size_t name_len, const char *value,
-                                     size_t val_len) {
+static int a_header_method_cb(struct aura_h2_core *h2_c, struct aura_h2_stream *stream,
+                              struct aura_iovec *name, struct aura_iovec *value, bool process) {
     uint64_t content_len;
     uint8_t method;
 
-    app_debug(true, 0, "a_header_method_cb <<<< value: %s", value);
-    if (strcmp(value, "CONNECT") == 0 || strcmp(value, "TRACE") == 0) {
+    app_debug(true, 0, ">>>> a_header_method_cb value: %s", value->base);
+    if (strcmp(value->base, "CONNECT") == 0 || strcmp(value->base, "TRACE") == 0) {
         /* unsupported methods */
-        return A_HPACK_UNSUPPORTED_METHOD_ERR;
+        return A_HPACK_INVALID_VALUE_ERR;
     }
 
-    method = a_is_header_method_valid(value);
+    method = a_is_header_method_valid(value->base);
     if (method == A_HTTP_NONE)
-        return A_HPACK_INVALID_METHOD_ERR;
+        return A_HPACK_INVALID_VALUE_ERR;
 
-    stream->req.method = method;
+    if (process)
+        stream->req.method = method;
     return A_HPACK_OK;
 }
 
@@ -531,27 +658,45 @@ static inline int a_header_method_cb(struct aura_h2_core *h2_c, struct aura_h2_s
  * return 0 if satisfied, otherwise err
  */
 
-static inline int a_header_path_cb(struct aura_h2_core *h2_c, struct aura_h2_stream *stream,
-                                   const char *name, size_t name_len, const char *val, size_t v_len) {
+static int a_header_path_cb(struct aura_h2_core *h2_c, struct aura_h2_stream *stream,
+                            struct aura_iovec *name, struct aura_iovec *value, bool process) {
     struct aura_srv_host_conf *host;
-    struct aura_route *route;
+    struct aura_fn_registry_ent *fn_ent;
     struct aura_h2_server_conn *c;
+    struct aura_conn *conn;
 
+    app_debug(true, 0, ">>>> a_header_path_cb val=%s, len=%u", value->base, value->len);
     c = aura_container_of(h2_c, struct aura_h2_server_conn, core);
-    host = c->conn->host;
+    conn = aura_container_of(c, struct aura_conn, h2_server);
+    host = conn->host;
     A_BUG_ON_2(!host, true);
-    app_debug(true, 0, "a_header_path_cb <<<< val=%s", val);
 
     /* validate if requested route/fn exists */
-    route = aura_route_match(&host->router, val, v_len, stream->req.method);
-    if (!route) {
-        /* 404 */
-        return A_HPACK_INVALID_PATH_ERR;
-    }
-    stream->req.path.base = aura_strndup(c->conn->mc, val, v_len);
+    if (process) {
+        fn_ent = host->evt_src.ops->find_fn(&host->evt_src, value);
+        stream->req.path.base = aura_strndup(conn->mc, value->base, value->len);
+        app_debug(true, 0, "function entry=%p", fn_ent);
+        if (!fn_ent) {
+            /* 404 */
+            return A_HPACK_INVALID_PATH_ERR;
+        }
 
-    /* set route so we don't have to search again */
-    c->conn->route = route;
+        /* If we already have the method */
+        uint8_t method = stream->req.method;
+        if (method != A_HTTP_NONE) {
+            for (int i = 0; i < fn_ent->fn->meta.triggers.cnt; ++i)
+                if (fn_ent->fn->meta.triggers.entries[i].trigger == A_FN_TRIGGER_HTTP) {
+                    if (fn_ent->fn->meta.triggers.entries[i].http.method != method) {
+                        /* 404 */
+                        return A_HPACK_INVALID_PATH_ERR; /* @todo: perhaps distinguish as seperate internal error */
+                    }
+                    break;
+                }
+        }
+
+        /* set route so we don't have to search again */
+        conn->fn_ent = fn_ent;
+    }
     return A_HPACK_OK;
 }
 
@@ -568,13 +713,15 @@ static a_http_scheme_t a_http_get_scheme(const char *scheme, size_t len) {
  * Returns 0 if parsed scheme is valid and
  * supported, otherwise err
  */
-static inline int a_header_scheme_cb(struct aura_h2_core *h2_conn, struct aura_h2_stream *stream,
-                                     const char *name, size_t name_len, const char *value, size_t val_len) {
+static int a_header_scheme_cb(struct aura_h2_core *h2_c, struct aura_h2_stream *stream,
+                              struct aura_iovec *name, struct aura_iovec *value, bool process) {
     /**/
-    app_debug(true, 0, "a_header_scheme_cb <<<<: %s", value);
-    stream->req.scheme = a_http_get_scheme(value, val_len);
-    if (stream->req.scheme == A_SCHEME_NONE)
-        return A_HPACK_INVALID_SCHEME_ERR;
+    app_debug(true, 0, ">>>> a_header_scheme_cb %s", value->base);
+    if (process) {
+        stream->req.scheme = a_http_get_scheme(value->base, value->len);
+        if (stream->req.scheme == A_SCHEME_NONE)
+            return A_HPACK_INVALID_VALUE_ERR;
+    }
     return A_HPACK_OK;
 }
 
@@ -582,24 +729,24 @@ static inline int a_header_scheme_cb(struct aura_h2_core *h2_conn, struct aura_h
  * Returns 0 if parsed status is valid number,
  * otherwise return err;
  */
-static inline int a_header_status_cb(struct aura_h2_core *h2_conn, struct aura_h2_stream *stream,
-                                     const char *name, size_t name_len, const char *value, size_t val_len) {
+static int a_header_status_cb(struct aura_h2_core *h2_c, struct aura_h2_stream *stream,
+                              struct aura_iovec *name, struct aura_iovec *value, bool process) {
     int status;
     char *c;
 
     if (stream->res.status_code != 0)
-        return A_HPACK_DUPLICATE_STATUS_ERR;
+        return A_HPACK_DUPLICATE_HDR_ERR;
 
     /* parse */
-    if (val_len != 3) {
-        return A_HPACK_INVALID_STATUS_ERR;
+    if (value->len != 3) {
+        return A_HPACK_DUPLICATE_HDR_ERR;
     }
 
-    c = (char *)value;
+    c = value->base;
 #define PARSE_DIGIT(mul, min_digit)               \
     do {                                          \
         if (*c < '0' + (min_digit) || '9' < *c) { \
-            return A_HPACK_INVALID_STATUS_ERR;    \
+            return A_HPACK_DUPLICATE_HDR_ERR;     \
         }                                         \
         status += (*c - '0') * mul;               \
         ++c;                                      \
@@ -617,8 +764,25 @@ static inline int a_header_status_cb(struct aura_h2_core *h2_conn, struct aura_h
 /**
  * Validate content length
  */
-static inline int a_header_content_len_cb(struct aura_h2_core *h2_conn, struct aura_h2_stream *stream,
-                                          const char *name, size_t name_len, const char *value, size_t val_len) {
+static int a_header_content_len_cb(struct aura_h2_core *h2_c, struct aura_h2_stream *stream,
+                                   struct aura_iovec *name, struct aura_iovec *value, bool process) {
+
+    return A_HPACK_OK;
+}
+
+static int a_header_priority_cb(struct aura_h2_core *h2_c, struct aura_h2_stream *stream,
+                                struct aura_iovec *name, struct aura_iovec *value,
+                                bool process) {
+    struct aura_pri_ext prio_ext;
+
+    if (process) {
+        if (aura_h2_parse_http_prio(&prio_ext, value->base, value->len) < 0) {
+            stream->flags |= A_H2_STREAM_FLAG_BAD_PRIO;
+            return A_HPACK_INVALID_HDR_FIELD_ERR;
+        }
+
+        aura_h2_update_stream_priority(h2_c, stream, &prio_ext);
+    }
 
     return A_HPACK_OK;
 }
@@ -626,27 +790,34 @@ static inline int a_header_content_len_cb(struct aura_h2_core *h2_conn, struct a
 /**
  * P
  */
-static int aura_h2_srv_process_request(struct aura_h2_server_conn *c, struct aura_h2_stream *stream) {
-    struct aura_route *route;
+static int aura_h2_srv_process_request(struct aura_h2_server_conn *c, uint32_t stream_id) {
+    struct aura_h2_stream *stream;
+    struct aura_fn_registry_ent *fn_ent;
     struct aura_work_queue *wq;
+    struct aura_conn *conn;
     struct _aura_task *task;
     _Request *req;
     _Response *resp;
     int rv;
 
-    if (stream->state == A_H2_STREAM_STATE_HALF_CLOSED_REMOTE) {
+    stream = aura_h2_conn_find_stream(&c->core, stream_id);
+    if (!stream)
+        return A_H2_ERR_NONE;
+
+    if (stream->state == A_H2_STREAM_STATE_HALF_CLOSED_REMOTE && stream->flags & A_H2_STREAM_FLAG_EXECUTE) {
         /* forward to route handler/path handler */
-        route = c->conn->route;
-        A_BUG_ON_2(!route, true);
+        conn = aura_container_of(c, struct aura_conn, h2_server);
+        fn_ent = conn->fn_ent;
+        A_BUG_ON_2(!fn_ent, true);
 
         /* Create task */
         task = aura_task_create(
           stream,
-          c->conn->mc,
-          c->conn->route->url,
-          c->conn->srv_ctx->next_task_id++,
-          c->conn->conn_id,
-          c->conn->conn_tab_idx,
+          conn->mc,
+          conn->fn_ent->fn->meta.http_trigger.path.base,
+          conn->srv_ctx->next_task_id++,
+          conn->conn_id,
+          conn->conn_tab_idx,
           A_TASK_PROTOCOL_H2);
         if (!task)
             return A_H2_INTERNAL_ERR;
@@ -658,7 +829,7 @@ static int aura_h2_srv_process_request(struct aura_h2_server_conn *c, struct aur
             return A_H2_INTERNAL_ERR;
         }
 
-        stream->flags |= A_H2_STREAM_FLAG_EXECUTE;
+        // stream->flags |= A_H2_STREAM_FLAG_EXECUTE;
     }
 
     return A_H2_ERR_NONE;
@@ -666,15 +837,17 @@ static int aura_h2_srv_process_request(struct aura_h2_server_conn *c, struct aur
 
 /** */
 int a_srv_begin_headers(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame,
-                        struct aura_h2_stream **stream) {
+                        struct aura_h2_stream **stream, struct aura_mem_ctx *mc) {
     const struct aura_iovec *reason;
     struct aura_h2_sched_iov *s_iov;
     struct aura_h2_frame *frame = &in_frame->frame;
-    struct aura_mem_ctx *mc = c->conn->mc;
     bool is_stream_error;
     int rv, err;
 
+    app_debug(true, 0, ">>>> a_srv_begin_headers");
+    aura_h2_frame_dump(frame);
     if (aura_h2_conn_peer_stream_id_new(&c->core, frame->stream_id, true)) {
+        app_debug(true, 0, "a_srv_begin_headers new stream");
         if (aura_h2_stream_is_even_numbered(frame->stream_id)) {
             err = A_H2_PROTOCOL_ERR;
             reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG];
@@ -682,10 +855,6 @@ int a_srv_begin_headers(struct aura_h2_server_conn *c, struct aura_h2_in_frame *
         }
 
         if (!aura_h2_srv_conn_new_streams_allowed(c)) {
-            // s_iov = aura_h2_get_sched_iov(&c->core.scheduler, A_H2_SCHED_URGENT);
-            // if (!s_iov) {
-            //     /* @todo: close connection */
-            // }
             if (aura_h2_conn_enqueue_rst_frame(&c->core, frame->stream_id, A_H2_REFUSED_STREAM_ERR) < 0) {
                 return A_H2_INTERNAL_ERR;
             }
@@ -724,13 +893,9 @@ int a_srv_begin_headers(struct aura_h2_server_conn *c, struct aura_h2_in_frame *
         aura_h2_conn_transition_state(&c->state, A_H2_CONN_STATE_FRAMES);
     } else {
         /** @todo: push promise not supported */
+        app_debug(true, 0, "a_srv_begin_headers existing stream");
         *stream = aura_h2_conn_find_stream(&c->core, frame->stream_id);
         if (!(*stream)) {
-            // s_iov = aura_h2_get_sched_iov(&c->core.scheduler, A_H2_SCHED_URGENT);
-            // if (!s_iov) {
-            //     /* @todo: close connection */
-            // }
-
             if (aura_h2_conn_enqueue_rst_frame(&c->core, frame->stream_id, A_H2_STREAM_CLOSED_ERR) < 0) {
                 return A_H2_INTERNAL_ERR;
             }
@@ -752,7 +917,7 @@ int a_srv_begin_headers(struct aura_h2_server_conn *c, struct aura_h2_in_frame *
                 reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG];
                 goto goaway;
             } else {
-                if (aura_h2_conn_send_stream_error(&c->core, *stream, A_H2_STREAM_CLOSED_ERR, true) < 0)
+                if (aura_h2_conn_close_stream(&c->core, *stream, A_H2_STREAM_CLOSED_ERR, true) < 0)
                     return A_H2_INTERNAL_ERR;
             }
         }
@@ -779,91 +944,95 @@ static int a_srv_process_headers_early_bailout(struct aura_h2_core *h2_c, struct
                                                size_t in_len) {
     struct aura_hpack_decoder *dec = &h2_c->dec;
     struct aura_header_field dec_hdr;
-    const uint8_t *end = src_in + in_len, *name, *value;
-    size_t n_len, v_len;
+    const uint8_t *end = src_in + in_len;
+    struct aura_iovec name, value;
     bool final = stream->flags & A_H2_STREAM_FLAG_HDRS_RECD;
+    struct aura_h2_server_conn *c = aura_container_of(h2_c, struct aura_h2_server_conn, core);
     ssize_t rv;
     int soft_err;
 
+    app_debug(true, 0, "a_srv_process_headers_early_bailout_A");
+
     while (true) {
         rv = aura_hpack_decode(dec, src_in, end, h2_c->intern_tab, &dec_hdr, final);
-        if (rv < A_HPACK_OK) {
+        if (rv != A_HPACK_OK) {
             if (aura_hpack_hdr_err_fatal(rv)) {
                 /* Close connection */
-                // aura_h2_conn_transition_state(h2_c, A_H2_CONN_STATE_CLOSING);
-                // aura_conn_transition_state(h2_c->conn, A_CONN_STATE_CLOSING);
-                aura_h2_conn_enqueue_goaway(
-                  h2_c,
-                  h2_c->local_goaway_stream_id,
-                  rv,
-                  &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG]);
-
-                return rv;
+                return a_h2_srv_close_connection(c, aura_h2_translate_hpack_error(rv), A_H2_ERR_STR_IDX_INVALID_ARG);
             } else {
-                /* Stream error */
+                /**
+                 * stream error.
+                 * we must still process entire header
+                 * to preserve the decoder state across multiple
+                 * streams
+                 */
             }
         }
 
         src_in += rv;
 
         if (dec->flags & A_HDR_FIELD_FLAG_EMIT) {
-            name = dec_hdr.name->data;
-            n_len = dec_hdr.name->len;
+            name.base = (char *)dec_hdr.name->data;
+            name.len = dec_hdr.name->len;
             if (dec_hdr.flags & A_HDR_FIELD_FLAG_VALUE_INTERNED) {
-                value = dec_hdr.value.interned->data;
-                v_len = dec_hdr.value.interned->len;
+                value.base = (char *)dec_hdr.value.interned->data;
+                value.len = dec_hdr.value.interned->len;
             } else {
-                value = dec_hdr.value.raw.str.base;
-                v_len = dec_hdr.value.raw.str.len;
+                value.base = (char *)dec_hdr.value.raw.str.base;
+                value.len = dec_hdr.value.raw.str.len;
             }
 
-            if (aura_hpack_is_pseudo_header(name)) {
+            if (aura_hpack_is_pseudo_header(name.base)) {
+                if (dec->regular_hdr_field_seen)
+                    /** @todo: better error perhaps  */
+                    aura_hpack_set_decoder_soft_err(dec, A_HPACK_INVALID_HDR_FIELD_ERR);
+
                 switch (dec_hdr.token) {
                 case A_TOKEN_METHOD:
                     /* Duplicate */
                     if (dec->pseudo_flags & A_H2_PSEUDO_HDR_METHOD) {
-                        aura_hpack_set_decoder_soft_err(dec, A_HPACK_DUPLICATE_METHOD_ERR);
+                        aura_hpack_set_decoder_soft_err(dec, A_HPACK_DUPLICATE_HDR_ERR);
                         break;
                     }
 
                     dec->pseudo_flags |= A_H2_PSEUDO_HDR_METHOD;
-                    rv = a_header_method_cb(h2_c, stream, name, n_len, value, v_len);
+                    rv = a_header_method_cb(h2_c, stream, &name, &value, dec->soft_error == 0);
                     aura_hpack_set_decoder_soft_err(dec, rv);
                     break;
 
                 case A_TOKEN_SCHEME:
                     /* Duplicate */
                     if (dec->pseudo_flags & A_H2_PSEUDO_HDR_SCHEME) {
-                        aura_hpack_set_decoder_soft_err(dec, A_HPACK_DUPLICATE_SCHEME_ERR);
+                        aura_hpack_set_decoder_soft_err(dec, A_HPACK_DUPLICATE_HDR_ERR);
                         break;
                     }
 
                     dec->pseudo_flags |= A_H2_PSEUDO_HDR_SCHEME;
-                    rv = a_header_scheme_cb(h2_c, stream, name, n_len, value, v_len);
+                    rv = a_header_scheme_cb(h2_c, stream, &name, &value, dec->soft_error == 0);
                     aura_hpack_set_decoder_soft_err(dec, rv);
                     break;
 
                 case A_TOKEN_AUTHORITY:
                     /* Duplicate */
                     if (dec->pseudo_flags & A_H2_PSEUDO_HDR_AUTHORITY) {
-                        aura_hpack_set_decoder_soft_err(dec, A_HPACK_DUPLICATE_AUTHORITY_ERR);
+                        aura_hpack_set_decoder_soft_err(dec, A_HPACK_DUPLICATE_HDR_ERR);
                         break;
                     }
 
                     dec->pseudo_flags |= A_H2_PSEUDO_HDR_AUTHORITY;
-                    rv = a_header_authority_cb(h2_c, stream, name, n_len, value, v_len);
+                    rv = a_header_authority_cb(h2_c, stream, &name, &value, dec->soft_error == 0);
                     aura_hpack_set_decoder_soft_err(dec, rv);
                     break;
 
                 case A_TOKEN_PATH:
                     /* Duplicate */
                     if (dec->pseudo_flags & A_H2_PSEUDO_HDR_PATH) {
-                        aura_hpack_set_decoder_soft_err(dec, A_HPACK_DUPLICATE_PATH_ERR);
+                        aura_hpack_set_decoder_soft_err(dec, A_HPACK_DUPLICATE_HDR_ERR);
                         break;
                     }
 
                     dec->pseudo_flags |= A_H2_PSEUDO_HDR_PATH;
-                    rv = a_header_path_cb(h2_c, stream, name, n_len, value, v_len);
+                    rv = a_header_path_cb(h2_c, stream, &name, &value, dec->soft_error == 0);
                     aura_hpack_set_decoder_soft_err(dec, rv);
                     break;
 
@@ -874,37 +1043,50 @@ static int a_srv_process_headers_early_bailout(struct aura_h2_core *h2_c, struct
                 }
 
             } else {
+                dec->regular_hdr_field_seen = true;
                 switch (dec_hdr.token) {
                 case A_TOKEN_CONTENT_LENGTH:
-                    rv = a_header_content_len_cb(h2_c, stream, name, n_len, value, v_len);
+                    rv = a_header_content_len_cb(h2_c, stream, &name, &value, dec->soft_error == 0);
                     aura_hpack_set_decoder_soft_err(dec, rv);
                     break;
 
-                case A_TOKEN_EXPECT:
                 case A_TOKEN_PRIORITY:
+                    if (!(stream->flags & A_H2_STREAM_FLAG_READ_TRAILERS) &&
+                        !aura_h2_stream_is_push_stream(stream->stream_id) &&
+                        !(stream->flags & A_H2_STREAM_FLAG_BAD_PRIO)) {
+                        rv = a_header_priority_cb(h2_c, stream, &name, &value, dec->soft_error == 0);
+                        aura_hpack_set_decoder_soft_err(dec, rv);
+                    }
+                    break;
+
+                case A_TOKEN_EXPECT:
                 case A_TOKEN_ACCEPT:
                 case A_TOKEN_ACCEPT_ENCODING:
                 case A_TOKEN_USER_AGENT:
                     break;
 
                 case A_TOKEN_HOST:
-                    /* HTTP2 allows the use of host header (in place of :authority) */
+                    /**
+                     * From the HTTP/2 RFC, server SHOULD treat a request as malformed
+                     * if this value defers from the :authority value, but we simply
+                     * skip it in this case.
+                     */
                     if (dec->pseudo_flags & A_H2_PSEUDO_HDR_AUTHORITY)
                         break;
 
-                    rv = a_header_authority_cb(h2_c, stream, name, n_len, value, v_len);
+                    rv = a_header_authority_cb(h2_c, stream, &name, &value, dec->soft_error == 0);
                     aura_hpack_set_decoder_soft_err(dec, rv);
                     break;
 
                 case A_TOKEN_TE:
-                    if (aura_lc_str_is_eq(value, v_len, str_lit("trailers"))) {
+                    if (aura_lc_str_is_eq(value.base, value.len, str_lit("trailers"))) {
                         /**/
                     }
                     break;
 
                 default:
                     /* rest of the header fields that are marked as special are rejected */
-                    app_debug(true, 0, "hpack unknown special header: %s (ignore)", name);
+                    app_debug(true, 0, "hpack unknown special header: %s (ignore)", name.len);
                     aura_hpack_set_decoder_soft_err(dec, A_HPACK_INVALID_HDR_FIELD_ERR);
                     break;
                 }
@@ -913,7 +1095,7 @@ static int a_srv_process_headers_early_bailout(struct aura_h2_core *h2_c, struct
                  * so no need to pass headers on stream request structure
                  */
                 if (dec->soft_error == 0)
-                    aura_add_header(mc, &stream->req.headers, &dec_hdr);
+                    aura_header_add_header_field(mc, &stream->req.headers, &dec_hdr);
             }
         }
 
@@ -929,8 +1111,8 @@ static int a_srv_process_headers_early_bailout(struct aura_h2_core *h2_c, struct
         /**
          * Wait for more bytes
          */
-        if (src_in == end) {
-            return A_H2_ERR_NONE;
+        if (src_in == end && !final) {
+            return A_H2_IN_PROGRESS_ERR;
         }
     }
 
@@ -939,14 +1121,8 @@ static int a_srv_process_headers_early_bailout(struct aura_h2_core *h2_c, struct
      * Missing required pseudo headers
      */
     if ((dec->pseudo_flags & A_H2_REQ_PSEUDO_HDRS) != A_H2_REQ_PSEUDO_HDRS) {
+        app_exit(true, 0, "Missing required pseudo headers");
         /* Close connection */
-        // aura_h2_conn_transition_state(h2_c, A_H2_CONN_STATE_CLOSING);
-        // aura_conn_transition_state(h2_c->conn, A_CONN_STATE_CLOSING);
-        aura_h2_conn_enqueue_goaway(
-          h2_c,
-          h2_c->local_goaway_stream_id,
-          rv,
-          &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG]);
 
         return A_ERR_NONE;
     }
@@ -959,41 +1135,41 @@ static int a_srv_process_headers_early_bailout(struct aura_h2_core *h2_c, struct
     switch (soft_err) {
     case A_HPACK_INVALID_PATH_ERR:
         /* 404 */
-        stream->res.status_code = 404;
-        stream->res.content_length = SIZE_MAX;
-        // return aura_submit_response(h2_c, stream, true);
+        return aura_h2_submit_error_response(h2_c, stream, 404, NULL, 0);
 
     default:
-        break;
+        /* Usual stream errors */
+        return aura_h2_conn_close_stream(h2_c, stream, aura_h2_translate_hpack_error(soft_err), true);
     }
 
+    stream->flags |= A_H2_STREAM_FLAG_EXECUTE;
     return A_H2_ERR_NONE;
 }
 
 int a_srv_headers_cb(struct aura_h2_core *h2_c, struct aura_h2_stream *stream,
                      struct aura_mem_ctx *mc, const uint8_t *src, size_t len) {
-    app_debug(true, 0, "a_srv_headers_cb <<<<");
+    app_debug(true, 0, ">>>> a_srv_headers_cb");
 
-    if (stream->state == A_H2_STREAM_STATE_HALF_CLOSED_REMOTE) {
+    if (stream->state == A_H2_STREAM_STATE_HALF_CLOSED_REMOTE && stream->flags & A_H2_STREAM_FLAG_READ_TRAILERS) {
         return a_handle_trailing_headers();
     } else {
         return a_srv_process_headers_early_bailout(h2_c, stream, mc, src, len);
     }
 }
 
-static int a_srv_process_cont(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame) {
+static int a_srv_process_cont(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame,
+                              struct aura_mem_ctx *mc) {
     return aura_h2_conn_process_cont(&c->core, in_frame, true);
 }
 
 /**/
-static int a_srv_process_header(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame) {
+static int a_srv_process_header(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame,
+                                struct aura_mem_ctx *mc) {
     struct aura_h2_stream *stream = NULL;
     struct aura_h2_frame *frame = &in_frame->frame;
     const struct aura_iovec *reason;
-    struct aura_mem_ctx *mc = c->conn->mc;
     int rv;
 
-    app_debug(true, 0, "a_srv_process_header <<<<");
     rv = aura_h2_parse_frame_payload(in_frame);
     if (rv < A_H2_ERR_NONE) {
         reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG];
@@ -1006,7 +1182,7 @@ static int a_srv_process_header(struct aura_h2_server_conn *c, struct aura_h2_in
         goto goaway;
     }
 
-    rv = a_srv_begin_headers(c, in_frame, &stream);
+    rv = a_srv_begin_headers(c, in_frame, &stream, mc);
     if (rv != A_H2_ERR_NONE)
         return rv;
 
@@ -1024,7 +1200,8 @@ static int a_srv_process_header(struct aura_h2_server_conn *c, struct aura_h2_in
     if (rv != A_H2_ERR_NONE)
         return rv;
 
-    return aura_h2_srv_process_request(c, stream);
+    /* Because 'a_srv_headers_cb' can delete a stream, pass the stream id to the process function */
+    return aura_h2_srv_process_request(c, frame->stream_id);
 
 goaway:
     aura_h2_conn_enqueue_goaway(&c->core, c->core.local_goaway_stream_id, rv, reason);
@@ -1034,12 +1211,12 @@ goaway:
 /**
  *
  */
-static int a_srv_process_data(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame) {
+static int a_srv_process_data(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame,
+                              struct aura_mem_ctx *mc) {
     struct aura_h2_data_payload *payload;
     struct aura_h2_stream *stream;
     const struct aura_iovec *reason;
     struct aura_h2_closed_stream_ent *closed_stream_entry;
-    struct aura_mem_ctx *mc = c->conn->mc;
     struct aura_sliding_buf *buf;
     bool process = false;
     int rv;
@@ -1081,7 +1258,7 @@ static int a_srv_process_data(struct aura_h2_server_conn *c, struct aura_h2_in_f
     }
 
     if (aura_h2_stream_can_recv_data(stream)) {
-        aura_h2_conn_send_stream_error(&c->core, stream, A_H2_STREAM_CLOSED_ERR, true);
+        aura_h2_conn_close_stream(&c->core, stream, A_H2_STREAM_CLOSED_ERR, true);
         return A_H2_ERR_NONE;
     }
 
@@ -1100,7 +1277,7 @@ static int a_srv_process_data(struct aura_h2_server_conn *c, struct aura_h2_in_f
 
     stream->received_len += payload->len;
     if (stream->received_len > A_H2_MAX_DEFAULT_DATA_SZ) {
-        aura_h2_conn_send_stream_error(&c->core, stream, A_H2_REFUSED_STREAM_ERR, true);
+        aura_h2_conn_close_stream(&c->core, stream, A_H2_REFUSED_STREAM_ERR, true);
         return A_H2_ERR_NONE;
     }
 
@@ -1191,7 +1368,8 @@ exception:
 }
 
 /* Deprecated priority */
-static int a_srv_process_prio(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame) {
+static int a_srv_process_prio(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame,
+                              struct aura_mem_ctx *mc) {
     int rv;
     rv = aura_h2_parse_frame_payload(in_frame);
     if (rv != A_H2_ERR_NONE)
@@ -1203,37 +1381,77 @@ static int a_srv_process_prio(struct aura_h2_server_conn *c, struct aura_h2_in_f
     return rv;
 }
 
-static int a_srv_process_rst(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame) {
+static int a_srv_process_rst(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame,
+                             struct aura_mem_ctx *mc) {
     aura_h2_sen_update(&c->core.sen, A_H2_SEN_EVT_RST, 0);
     return aura_h2_conn_process_rst_stream(&c->core, in_frame, true);
 }
 
-static int a_srv_process_settings(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame) {
+static int a_srv_process_settings(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame,
+                                  struct aura_mem_ctx *mc) {
     aura_h2_sen_update(&c->core.sen, A_H2_SEN_EVT_SETTINGS_FLOOD, 0);
     return aura_h2_conn_process_settings(&c->core, in_frame, true);
 }
 
-static int a_srv_process_ping(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame) {
+static int a_srv_process_ping(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame,
+                              struct aura_mem_ctx *mc) {
     aura_h2_sen_update(&c->core.sen, A_H2_SEN_EVT_PING_FLOOD, 0);
     return aura_h2_conn_process_ping(&c->core, in_frame);
 }
 
-static int a_srv_process_goaway(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame) {
+static int a_srv_process_goaway(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame,
+                                struct aura_mem_ctx *mc) {
     return aura_h2_conn_process_goaway(&c->core, in_frame, true);
 }
 
-static int a_srv_process_window_update(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame) {
+static int a_srv_process_window_update(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame,
+                                       struct aura_mem_ctx *mc) {
     aura_h2_sen_update(&c->core.sen, A_H2_SEN_EVT_WIND_UPDATE_FLOOD, 0);
     return aura_h2_conn_process_wind_update(&c->core, in_frame, true);
 }
 
+static int a_srv_process_update_priority(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame,
+                                         struct aura_mem_ctx *mc) {
+    struct aura_h2_stream *stream;
+    struct aura_pri_ext prio_ext;
+    struct aura_h2_prio_update_payload *payload = &in_frame->prio_update_payload;
+    struct aura_h2_closed_stream_ent *close_stream_ent;
+    int rv;
+
+    rv = aura_h2_parse_frame_payload(in_frame);
+    if (rv != A_H2_ERR_NONE)
+        return a_h2_srv_close_connection(c, rv, A_H2_ERR_STR_IDX_INVALID_ARG);
+
+    stream = aura_h2_conn_find_stream(&c->core, payload->stream_id);
+    if (!stream) {
+        close_stream_ent = aura_h2_conn_closed_stream_rb_get(&c->core, payload->stream_id);
+        if (!close_stream_ent) {
+            /* stream closed for long, penalize */
+            aura_h2_sen_update(&c->core.sen, A_H2_SEN_EVT_STALE, 0);
+        }
+    }
+
+    if (aura_h2_stream_can_process_prioity_update(stream)) {
+        if (aura_h2_parse_http_prio(&prio_ext, in_frame->prio_update_payload.prio, in_frame->prio_update_payload.len) < 0) {
+            stream->flags |= A_H2_STREAM_FLAG_BAD_PRIO;
+            return A_H2_ERR_NONE;
+        }
+
+        aura_h2_update_stream_priority(&c->core, stream, &prio_ext);
+    }
+
+    return A_H2_ERR_NONE;
+}
+
 int aura_h2_srv_process_frame(struct aura_h2_server_conn *c, struct aura_sliding_buf *buf) {
     struct aura_h2_in_frame *in_frame = &c->core.in_frame;
+    struct aura_conn *conn = aura_container_of(c, struct aura_conn, h2_server);
     uint8_t *src;
     uint32_t len;
     int rv;
 
-    static int (*frame_handlers[])(struct aura_h2_server_conn *c, struct aura_h2_in_frame *f) = {
+    app_debug(true, 0, ">>>> aura_h2_srv_process_frame");
+    static int (*frame_handlers[])(struct aura_h2_server_conn *c, struct aura_h2_in_frame *buf, struct aura_mem_ctx *mc) = {
       [A_H2_FRAME_TYPE_DATA] = a_srv_process_data,
       [A_H2_FRAME_TYPE_HDRS] = a_srv_process_header,
       [A_H2_FRAME_TYPE_PRIO] = a_srv_process_prio,
@@ -1244,6 +1462,7 @@ int aura_h2_srv_process_frame(struct aura_h2_server_conn *c, struct aura_sliding
       [A_H2_FRAME_TYPE_GOAWAY] = a_srv_process_goaway,
       [A_H2_FRAME_TYPE_WIND_UPDATE] = a_srv_process_window_update,
       [A_H2_FRAME_TYPE_CONT] = a_srv_process_cont,
+      [A_H2_FRAME_TYPE_PRIO_UPDATE] = a_srv_process_update_priority,
     };
 
     len = aura_sliding_buf_read_len(buf);
@@ -1251,12 +1470,23 @@ int aura_h2_srv_process_frame(struct aura_h2_server_conn *c, struct aura_sliding
 
     if (!in_frame->frame_hdr_read) {
         rv = aura_h2_parse_frame_header(in_frame, src, len, c->core.peer_settings.max_frame_size);
-        if (rv != A_H2_ERR_NONE)
-            return rv;
+        if (rv != A_H2_ERR_NONE) {
+            /**
+             * only setup goaway for established connections,
+             * otherwise for very early errors, simply close
+             * the connection
+             */
+            if (rv == A_H2_FRAME_SIZE_ERR && aura_conn_is_established(conn)) {
+                rv = a_h2_srv_close_connection(c, rv, A_H2_ERR_STR_IDX_INVALID_ARG);
+            }
+
+            return aura_h2_get_app_error(rv);
+        }
     }
 
+    aura_h2_frame_dump(&in_frame->frame);
+
     if (aura_h2_frame_is_complete(in_frame, len)) {
-        // frame_len = A_H2_FRAME_HEADER_SIZE + in_frame->frame.len;
         if (in_frame->frame.type >= ARRAY_SIZE(frame_handlers)) {
             app_debug(true, 0, "Unknown frame type: %d", in_frame->frame.type);
             /* Consume and ignore unknown frame types */
@@ -1278,19 +1508,21 @@ int aura_h2_srv_process_frame(struct aura_h2_server_conn *c, struct aura_sliding
             return A_H2_PROTOCOL_ERR;
         }
 
-        rv = frame_handlers[in_frame->frame.type](c, in_frame);
+        rv = frame_handlers[in_frame->frame.type](c, in_frame, conn->mc);
         aura_sliding_buf_consume(buf, in_frame->expected_bytes);
         aura_h2_frame_reset_inframe(in_frame);
         return rv;
     }
 
-    return A_H2_FRAME_INCOMPLETE;
+    return A_ERR_AGAIN;
 }
 
 int aura_h2_srv_process(struct aura_h2_server_conn *c, struct aura_sliding_buf *buf) {
     int rv = A_ERR_NONE;
 
+    app_debug(true, 0, ">>>> aura_h2_srv_process");
     while (!aura_sliding_buf_is_empty(buf)) {
+        app_debug(true, 0, "aura_h2_srv_process process_len=%u", aura_sliding_buf_read_len(buf));
         switch (c->state) {
         case A_H2_CONN_STATE_PREFACE:
             rv = aura_h2_srv_process_preface(c, buf);
@@ -1309,11 +1541,11 @@ int aura_h2_srv_process(struct aura_h2_server_conn *c, struct aura_sliding_buf *
             break;
         }
 
-        // rv = c->state_handler(c, buf);
-        rv = aura_h2_get_app_error(rv);
         switch (rv) {
-        case A_ERR_AGAIN:
         case A_ERR_FATAL:
+            return rv;
+
+        case A_ERR_AGAIN:
         case A_ERR_NONE:
         default:
             break;

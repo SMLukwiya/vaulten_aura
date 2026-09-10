@@ -86,6 +86,13 @@
                 break;                                                                                                     \
         }                                                                                                                  \
         return rv;                                                                                                         \
+    }                                                                                                                      \
+                                                                                                                           \
+    /**                                                                                                                    \
+     * Dense pool is empty                                                                                                 \
+     */                                                                                                                    \
+    static inline bool aura_##name##_dense_pool_is_empty(struct aura_##name##_dense_pool *pool) {                          \
+        return pool->free_top == size;                                                                                     \
     }
 
 /**

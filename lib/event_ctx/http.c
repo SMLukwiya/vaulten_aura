@@ -43,6 +43,16 @@ int aura_http_unbind(struct aura_evt_src *evt_src, struct aura_fn_registry_ent *
                         fn_ent->fn->meta.triggers.entries[trigger_idx].http.path.len,
                         NULL) == false)
         return -1;
+    return 0;
+}
+
+struct aura_fn_registry_ent *aura_http_find_fn(struct aura_evt_src *evt_src, void *how) {
+    struct aura_iovec *path = how;
+    aura_rax_node_t *node = aura_rax_lookup(&evt_src->http_src.routes, path->base, path->len);
+    if (!node)
+        return NULL;
+
+    return node->data.ptr_val;
 }
 
 /* HTTP event source */
@@ -53,4 +63,5 @@ struct aura_evt_src_ops http_src_ops = {
   .destroy = aura_http_destroy,
   .bind = aura_http_bind,
   .unbind = aura_http_unbind,
+  .find_fn = aura_http_find_fn,
 };

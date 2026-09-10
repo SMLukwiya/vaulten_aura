@@ -65,6 +65,7 @@ int aura_epoll_add(struct aura_evt_loop *evt_loop, int fd, void *data, int event
     if (events & AURA_EVENT_WRITE)
         ep_ev.events |= EPOLLOUT;
 
+    ep_ev.events |= EPOLLET;
     ep_ev.data.ptr = data;
 
     do {
@@ -93,6 +94,7 @@ static int aura_epoll_modify(struct aura_evt_loop *evt_loop, int fd, void *data,
     if (events & AURA_EVENT_WRITE)
         ep_ev.events |= EPOLLOUT;
 
+    ep_ev.events |= EPOLLET;
     do {
         res = epoll_ctl(epoll->epoll_fd, EPOLL_CTL_MOD, fd, &ep_ev);
     } while (res != 0 && errno == EINTR);
@@ -173,7 +175,7 @@ int aura_epoll_poll(struct aura_evt_loop *evt_loop, int64_t timeout_ms, uint32_t
             conn = (struct aura_conn *)ev_src;
 
             /* Error or Hangup - immediate critical */
-            if (ev.events & (EPOLLERR | EPOLLHUP)) {
+            if (ev.events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP | EPOLLPRI)) {
                 /* Remove from whatever list it was previously on */
                 aura_conn_transition_state(conn, A_CONN_STATE_CLOSING);
                 evt_loop->ops->remove(evt_loop, fd);
@@ -191,6 +193,7 @@ int aura_epoll_poll(struct aura_evt_loop *evt_loop, int64_t timeout_ms, uint32_t
             break;
         }
     }
+    return 0;
 }
 
 /**

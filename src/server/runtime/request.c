@@ -25,7 +25,7 @@ _Response *aura_rt_create_res(struct aura_mem_ctx *mc) {
     return resp;
 }
 
-static inline struct aura_basic_header *a_rt_req_get_header_slot(struct aura_mem_ctx *mc, struct aura_header_vector2 *headers) {
+static inline struct aura_basic_header *a_rt_req_get_header_slot(struct aura_mem_ctx *mc, struct aura_header_vector *headers) {
     struct aura_basic_header *hdr_field;
 
     if (headers->cnt >= headers->cap) {

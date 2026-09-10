@@ -74,6 +74,7 @@ struct aura_evt_src_ops {
 
     int (*bind)(struct aura_evt_src *, struct aura_fn_registry_ent *fn_ent, int trigger_idx);
     int (*unbind)(struct aura_evt_src *, struct aura_fn_registry_ent *fn_ent, int trigger_idx);
+    struct aura_fn_registry_ent *(*find_fn)(struct aura_evt_src *, void *how);
 };
 
 enum {
@@ -86,6 +87,9 @@ struct aura_evt_src_registry {
     struct aura_evt_src sources[A_EVT_SRC_MAX_CNT];
     uint8_t cnt;
 };
+
+/**/
+int aura_event_src_init(struct aura_evt_src *evt_src, aura_evt_src_t type, int flags);
 
 /**/
 int aura_event_registry_add(struct aura_evt_src_registry *reg, aura_evt_src_t type, int flags);

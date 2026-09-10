@@ -3,13 +3,15 @@
 #include <stdint.h>
 #include <string.h>
 
-void aura_fq_init(struct aura_fq *fq, uint64_t staging_sz) {
-    memset(fq, 0, sizeof(fq));
-
+struct aura_fq *aura_fq_create(struct aura_mem_ctx *mc, uint64_t staging_sz, void *opaque) {
+    struct aura_fq *fq = aura_alloc(mc, A_FQ_ALLOC_SIZE(staging_sz));
+    if (!fq)
+        return NULL;
+    memset(fq, 0, A_FQ_ALLOC_SIZE(staging_sz));
     fq->staging_sz = staging_sz;
-    // A_BITMAP_CREATE(staging_sz, blocked_map);
-    // memcpy(fq->tail, blocked_map, sizeof(blocked_map));
-    /* Blocked list not needed */
+    fq->opaque = opaque;
+
+    return fq;
 }
 
 void aura_fq_destroy(struct aura_fq *fq) {
@@ -19,9 +21,16 @@ void aura_fq_destroy(struct aura_fq *fq) {
     memset(fq, 0, sizeof(*fq));
 }
 
+void aura_fq_destroy2(struct aura_fq *fq) {
+    if (!fq)
+        return;
+    aura_free(fq);
+}
+
 int aura_fq_enqueue(struct aura_fq *fq, void *payload, flight_key_t key) {
     struct aura_fq_entry *fqe;
 
+    app_debug(true, 0, "aura_fq_enqueue_A");
     if (fq->tail - fq->head == A_FQ_SZ) {
         return A_FQ_STALLED;
     }
@@ -64,7 +73,7 @@ static inline int a_fq_process_curr_bitword(struct aura_fq_entry *staging_ring, 
 
         /* Run completion function if any was given */
         if (comp_fn)
-            comp_fn(fqe->payload);
+            comp_fn(fqe->payload, rv);
         fqe->state = A_FQ_SLOT_EMPTY;
         fqe->payload = NULL;
         aura_bitmap_clear_bit(active_bit, bitmap + word_idx);
@@ -75,7 +84,8 @@ static inline int a_fq_process_curr_bitword(struct aura_fq_entry *staging_ring, 
 
 int aura_flight_queue_flush(struct aura_fq *fq, aura_fq_ready_fn ready_fn,
                             aura_fq_consume_fn consume_fn,
-                            aura_fq_completion_fn comp_fn) {
+                            aura_fq_completion_fn comp_fn,
+                            aura_fq_finalizer_fn fin_fn) {
     A_BUG_ON_2(!ready_fn, true);
     A_BUG_ON_2(!consume_fn, true);
 
@@ -85,9 +95,13 @@ int aura_flight_queue_flush(struct aura_fq *fq, aura_fq_ready_fn ready_fn,
     uint64_t bitmap_word_cnt, start_word;
     uint64_t start, end;
     uint64_t offset, active_bit, target_idx;
-    bool staging_cursot_set = false;
+    bool staging_cursor_set = false;
     int rv;
 
+    if (aura_fq_is_empty(fq))
+        return A_FQ_OK;
+
+    app_debug(true, 0, ">>>> aura_flight_queue_flush");
     bitmap_word_cnt = A_BITS_TO_LONG(fq->staging_sz);
     start = fq->staging_cursor;
     end = A_BITS_PER_LONG;
@@ -101,6 +115,7 @@ int aura_flight_queue_flush(struct aura_fq *fq, aura_fq_ready_fn ready_fn,
             /* Fast path, Empty word */
             if (active_bit == end)
                 continue;
+            app_debug(true, 0, "aura_flight_queue_flush staging ring: word=%d, idx=%d", i, active_bit);
 
             /* Loop until we are done with this word */
             while (active_bit < end) {
@@ -115,16 +130,21 @@ int aura_flight_queue_flush(struct aura_fq *fq, aura_fq_ready_fn ready_fn,
                     switch (rv) {
                     case A_FQ_RELEASED:
                     case A_FQ_ABORTED:
+                    case A_FQ_FATAL:
+                        if (comp_fn)
+                            comp_fn(fqe->payload, rv);
+
                         fqe->state = A_FQ_SLOT_EMPTY;
                         fqe->payload = NULL;
                         aura_bitmap_clear_bit(active_bit, bitmap + i);
+
                         break;
 
                     case A_FQ_STALLED:
-                        return A_FQ_STALLED;
+                        if (comp_fn)
+                            comp_fn(fqe->payload, rv);
 
-                    case A_FQ_FATAL:
-                        return A_FQ_FATAL;
+                        return A_FQ_STALLED;
 
                     case A_FQ_OK:
                         /**
@@ -139,8 +159,8 @@ int aura_flight_queue_flush(struct aura_fq *fq, aura_fq_ready_fn ready_fn,
                      * staged work position, even if it's the
                      * same position as the current one
                      */
-                    if (!staging_cursot_set) {
-                        staging_cursot_set = true;
+                    if (!staging_cursor_set) {
+                        staging_cursor_set = true;
                         fq->staging_cursor = target_idx;
                     }
                 }
@@ -176,7 +196,8 @@ int aura_flight_queue_flush(struct aura_fq *fq, aura_fq_ready_fn ready_fn,
              * the original cursor position, starting offset
              * still remains the very first bit
              * this represents a complete cycle around the
-             * staging aread
+             * staging aread.
+             * @todo: add illustration to make comment clearer!
              */
             if (i == start_word)
                 end = start;
@@ -184,6 +205,8 @@ int aura_flight_queue_flush(struct aura_fq *fq, aura_fq_ready_fn ready_fn,
             /* Fast path, Empty word */
             if (active_bit == end)
                 continue;
+
+            app_debug(true, 0, "aura_flight_queue_flush looping around: word=%d, idx=%d", i, active_bit);
 
             /* Loop until we are done with this word */
             while (active_bit < end) {
@@ -198,15 +221,24 @@ int aura_flight_queue_flush(struct aura_fq *fq, aura_fq_ready_fn ready_fn,
                     switch (rv) {
                     case A_FQ_RELEASED:
                     case A_FQ_ABORTED:
+                        if (comp_fn)
+                            comp_fn(fqe->payload, rv);
+
                         fqe->state = A_FQ_SLOT_EMPTY;
                         fqe->payload = NULL;
                         aura_bitmap_clear_bit(active_bit, bitmap + i);
                         break;
 
                     case A_FQ_STALLED:
+                        if (comp_fn)
+                            comp_fn(fqe->payload, rv);
+
                         return A_FQ_STALLED;
 
                     case A_FQ_FATAL:
+                        if (comp_fn)
+                            comp_fn(fqe->payload, rv);
+
                         return A_FQ_FATAL;
 
                     case A_FQ_OK:
@@ -214,6 +246,9 @@ int aura_flight_queue_flush(struct aura_fq *fq, aura_fq_ready_fn ready_fn,
                          * Some progress was probably made,
                          * but the entry stays in the same slot
                          */
+                        if (comp_fn)
+                            comp_fn(fqe->payload, rv);
+
                         break;
                     }
                 } else {
@@ -222,8 +257,8 @@ int aura_flight_queue_flush(struct aura_fq *fq, aura_fq_ready_fn ready_fn,
                      * staged work position, even if it's the
                      * same position as the current one
                      */
-                    if (!staging_cursot_set) {
-                        staging_cursot_set = true;
+                    if (!staging_cursor_set) {
+                        staging_cursor_set = true;
                         fq->staging_cursor = target_idx;
                     }
                 }
@@ -239,17 +274,17 @@ int aura_flight_queue_flush(struct aura_fq *fq, aura_fq_ready_fn ready_fn,
      * If we scan the staging area and all the entries
      * were cleared, set the staging cursor to 0
      */
-    if (!staging_cursot_set)
+    if (!staging_cursor_set)
         fq->staging_cursor = 0;
 
+    app_debug(true, 0, "aura_flight_queue_flush process ring");
+    aura_fq_dump(fq);
     /* Sweep the normal list */
     uint64_t curr = fq->head;
     uint64_t bit_pos, word_pos;
     while (curr != fq->tail) {
         fqe = fq->ring + (curr & A_FQ_MASK);
         if (fqe->state == A_FQ_SLOT_EMPTY) {
-            // if (curr == fq->head)
-            //     fq->head++;
             curr++;
             continue;
         }
@@ -269,7 +304,6 @@ int aura_flight_queue_flush(struct aura_fq *fq, aura_fq_ready_fn ready_fn,
             }
 
             /* Add to staging list */
-            // staging_ring->ring[bit_pos] = *fqe;
             staging_ring[bit_pos] = *fqe;
             word_pos = A_BIT_WORD(bit_pos);
             offset = bit_pos - (word_pos * A_BITS_PER_LONG);
@@ -278,9 +312,6 @@ int aura_flight_queue_flush(struct aura_fq *fq, aura_fq_ready_fn ready_fn,
             /* Mark slot as empty */
             fqe->state = A_FQ_SLOT_EMPTY;
             fqe->payload = NULL;
-
-            // if (curr == fq->head)
-            //     fq->head++;
 
             curr++;
             continue;
@@ -291,14 +322,22 @@ int aura_flight_queue_flush(struct aura_fq *fq, aura_fq_ready_fn ready_fn,
         switch (rv) {
         case A_FQ_RELEASED:
         case A_FQ_ABORTED:
+            if (comp_fn)
+                comp_fn(fqe->payload, rv);
+
             fqe->state = A_FQ_SLOT_EMPTY;
             fqe->payload = NULL;
             break;
 
         case A_FQ_STALLED:
+            if (comp_fn)
+                comp_fn(fqe->payload, rv);
+
             return A_FQ_STALLED;
 
         case A_FQ_FATAL:
+            if (comp_fn)
+                comp_fn(fqe->payload, rv);
             return A_FQ_FATAL;
 
         case A_FQ_OK:
@@ -309,6 +348,9 @@ int aura_flight_queue_flush(struct aura_fq *fq, aura_fq_ready_fn ready_fn,
              * If entry already exists, halt the system since we
              * have experienced a hard block
              */
+            if (comp_fn)
+                comp_fn(fqe->payload, rv);
+
             bit_pos = fqe->key;
 
             if (is_fqe_staged(fq, bit_pos)) {
@@ -334,9 +376,19 @@ int aura_flight_queue_flush(struct aura_fq *fq, aura_fq_ready_fn ready_fn,
     }
 
     /* Run completion function if any was given */
-    if (comp_fn)
-        comp_fn(fqe->payload);
-
+    bool run_fin = curr != fq->head;
     fq->head = curr;
+    app_debug(true, 0, "aura_flight_queue_flush <<<< F_END comp=%p, run=%d", fin_fn, run_fin);
+    if (fin_fn && run_fin)
+        fin_fn(fq->opaque);
+
     return A_FQ_OK;
+}
+
+void aura_fq_dump(struct aura_fq *fq) {
+    app_debug(true, 0, "AURA FLUSH QUEUE");
+    app_debug(true, 0, "    Fq head=%d, Fq tail=%d", fq->head, fq->tail);
+    app_debug(true, 0, "    Staging size=%u", fq->staging_sz);
+    app_debug(true, 0, "    Staging cursor=%u", fq->staging_cursor);
+    app_debug(true, 0, "    Fq empty=%d", aura_fq_is_empty(fq));
 }

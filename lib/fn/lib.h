@@ -136,12 +136,6 @@ typedef enum {
     A_FN_TRIGGER_QUEUE
 } aura_trigger_t;
 
-// static const char *aura_fn_trigger_str[] = {
-//   "http",
-//   "cron",
-//   "queue",
-// };
-
 /* Cron */
 /* Cron misfire policy */
 typedef enum {
@@ -489,12 +483,15 @@ struct aura_fn_list {
     struct aura_fn_tag *func_tags;
 };
 
+typedef void (*opaque_destructor_fn)(void *opaque);
+
 /* Function registry entry */
 struct aura_fn_registry_ent {
     struct aura_fn_tag fn_tag;
     struct aura_fn *fn;
     struct aura_fn_queue fn_queue;
     void *opaque; /* Function data(http) */
+    opaque_destructor_fn opaque_dest;
     uint8_t load_state;
 };
 
@@ -646,6 +643,11 @@ static inline void aura_fn_get_name_and_version(struct iovec *fn, char *fn_name,
     }
 
     memcpy(fn_name, fn->iov_base, func_len);
+}
+
+static inline void aura_fn_set_opaque(struct aura_fn_registry_ent *ent, void *opaque, opaque_destructor_fn dest) {
+    ent->opaque = opaque;
+    ent->opaque_dest = dest;
 }
 
 /* Parse function meta data */

@@ -67,7 +67,6 @@ ssize_t aura_read(int fd, void *buf, size_t len) {
     }
 
     if (n_read == 0) {
-        sys_debug(true, errno, "Client closed conn : %d", errno);
         return -1;
     }
 

@@ -2,8 +2,8 @@
 #include "string_lib.h"
 #include "token_srv.h"
 
-int aura_add_header(struct aura_mem_ctx *mc, struct aura_header_vector2 *hdrs,
-                    struct aura_header_field *header) {
+int aura_header_add_header_field(struct aura_mem_ctx *mc, struct aura_header_vector *hdrs,
+                                 struct aura_header_field *header) {
     struct aura_basic_header *slot;
 
     if (hdrs->cnt >= hdrs->cap) {

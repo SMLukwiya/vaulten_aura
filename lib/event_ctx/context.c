@@ -3,13 +3,7 @@
 extern struct aura_evt_src_ops http_src_ops;
 extern struct aura_evt_src_ops cron_src_ops;
 
-int aura_event_registry_add(struct aura_evt_src_registry *reg, aura_evt_src_t type, int flags) {
-    struct aura_evt_src *evt_src;
-
-    if (reg->cnt >= A_EVT_SRC_MAX_CNT)
-        return -1;
-
-    evt_src = &reg->sources[reg->cnt++];
+int aura_event_src_init(struct aura_evt_src *evt_src, aura_evt_src_t type, int flags) {
     memset(evt_src, 0, sizeof(*evt_src));
     snprintf(evt_src->name, A_EVT_SRC_NAME_MAX_LEN, "%s", aura_evt_src_str_name[type]);
     evt_src->flags = flags;
@@ -26,12 +20,26 @@ int aura_event_registry_add(struct aura_evt_src_registry *reg, aura_evt_src_t ty
 
     default:
         app_debug(true, 0, "Unknown event source type: %d", type);
-        --reg->cnt;
         return -1;
     }
 
     /* Initialize the event source immediately */
     if (evt_src->ops->init(evt_src) < 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+int aura_event_registry_add(struct aura_evt_src_registry *reg, aura_evt_src_t type, int flags) {
+    struct aura_evt_src *evt_src;
+
+    if (reg->cnt >= A_EVT_SRC_MAX_CNT)
+        return -1;
+
+    evt_src = &reg->sources[reg->cnt++];
+
+    if (aura_event_src_init(evt_src, type, flags) < 0) {
         --reg->cnt;
         return -1;
     }

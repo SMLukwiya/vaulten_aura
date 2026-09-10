@@ -61,4 +61,10 @@ int aura_scan_str(const char *value, const char *fmt, ...);
 
 int aura_install_signal_handler(int signo, void (*handler)(int signo));
 
+/**/
+void aura_hex_dump_syslog(int priority, const char *prefix, const void *addr, size_t len);
+
+/**/
+void aura_hex_dump(const void *addr, size_t len);
+
 #endif

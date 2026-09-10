@@ -39,6 +39,7 @@ typedef enum {
     A_H2_FRAME_TYPE_GOAWAY = 0x7,
     A_H2_FRAME_TYPE_WIND_UPDATE = 0x8,
     A_H2_FRAME_TYPE_CONT = 0x9,
+    A_H2_FRAME_TYPE_PRIO_UPDATE = 0x10,
 } aura_h2_frame_t;
 
 #define A_H2_FRAME_FLAG_END_STREAM 0x1
@@ -103,6 +104,13 @@ struct aura_h2_priority {
     uint8_t weight;
 };
 
+/* HTTP priority_frame */
+struct aura_h2_prio_update_payload {
+    uint32_t stream_id;
+    const uint8_t *prio;
+    uint64_t len;
+};
+
 struct aura_h2_data_payload {
     const uint8_t *data;
     uint8_t *pad; /* optional */
@@ -165,6 +173,7 @@ struct aura_h2_in_frame {
         struct aura_h2_window_update_payload wind_update_payload;
         struct aura_h2_cont_payload cont_payload;
         struct aura_h2_priority prio_payload;
+        struct aura_h2_prio_update_payload prio_update_payload;
     }; /* Parsed frame data representation */
     uint32_t expected_bytes; /* Total bytes expected */
     uint8_t pad_len;         /* Padding length */
@@ -185,8 +194,7 @@ static inline int aura_h2_get_frame_error(int rv) {
 }
 
 /**/
-void aura_dump_h2_frame(struct aura_h2_frame *f);
-void aura_dump_h2_settings(struct aura_h2_settings *s);
+void aura_h2_frame_dump(struct aura_h2_frame *f);
 
 /**
  * Parse frame payload associated with

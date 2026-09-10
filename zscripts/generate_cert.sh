@@ -30,6 +30,8 @@ openssl req \
     -new \
     -subj "/CN=Root CA" \
     -addext "basicConstraints=critical,CA:TRUE" \
+    # -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    # -addext "keyid:always,issuer" \
     -key "$root_key_file" \
     -out "$root_csr_file"
 

@@ -148,6 +148,7 @@ struct aura_h2_closed_stream_ent {
 A_DEFINE_DENSE_POOL(h2_sched, A_H2_OUT_FRAME_SZ, struct aura_h2_sched_iov);
 
 /**
+ * Dense pool index manager
  * Define Flight queue staging area bitmap manager
  * Number of slots = max conc streams
  */
@@ -195,7 +196,7 @@ struct aura_h2_core {
     struct aura_h2_sched_dense_pool out_frame_pool; /* Slots for sending frames to peer */
     struct aura_h2_fq_staging_dense_pool_idx_man staging_bitmap;
 
-    struct aura_fq fq; /* Flight queue */
+    struct aura_fq *fq; /* Flight queue */
 };
 
 static inline aura_error_t aura_h2_get_app_error(int err) {
@@ -226,6 +227,15 @@ static inline aura_h2_frame_error_t aura_h2_translate_hpack_error(int rv) {
 
     case A_HPACK_INTERNAL_ERR:
         return A_H2_INTERNAL_ERR;
+
+    case A_HPACK_TRUNCATED_ERR:
+    case A_HPACK_INVALID_STATE_ERR:
+    case A_HPACK_PROTOCOL_ERR:
+    case A_HPACK_INVALID_NAME_ERR:
+    case A_HPACK_INVALID_VALUE_ERR:
+    case A_HPACK_INVALID_HDR_FIELD_ERR:
+    case A_HPACK_DUPLICATE_HDR_ERR:
+        return A_H2_PROTOCOL_ERR;
 
     default:
         return A_H2_ERR_NONE;
@@ -369,7 +379,7 @@ static inline bool aura_h2_conn_stream_is_local(uint32_t stream_id, bool is_serv
 /* Return true if this a new stream id from peer */
 static inline bool aura_h2_conn_peer_stream_id_new(struct aura_h2_core *h2_c,
                                                    uint32_t stream_id, bool is_server) {
-    if (!aura_h2_conn_stream_is_local(stream_id, is_server))
+    if (aura_h2_conn_stream_is_local(stream_id, is_server))
         return false;
 
     return stream_id > h2_c->max_received_stream_id;
@@ -479,8 +489,8 @@ struct aura_h2_stream *aura_h2_conn_stream_open(struct aura_h2_core *core, struc
                                                 bool is_server);
 
 /* Send stream reset frame with specifies error */
-int aura_h2_conn_send_stream_error(struct aura_h2_core *h2_c, struct aura_h2_stream *stream,
-                                   int err_num, bool is_server);
+int aura_h2_conn_close_stream(struct aura_h2_core *h2_c, struct aura_h2_stream *stream,
+                              int err_num, bool is_server);
 
 /**
  * Handle settings frame
@@ -522,8 +532,26 @@ void aura_h2_core_destroy(struct aura_h2_core *h2_c, bool is_server);
  */
 struct aura_h2_stream_desc *aura_h2_conn_stream_desc_get(struct aura_h2_core *h2_c, uint32_t idx);
 
-/*==================*/
+/**/
 int aura_h2_conn_enqueue_wind_update(struct aura_h2_core *h2_c, uint32_t stream_id,
                                      size_t wind_sz);
+
+/**/
+int aura_h2_parse_http_prio(struct aura_pri_ext *prio, const uint8_t *value, int64_t len);
+
+/**/
+void aura_h2_update_stream_priority(struct aura_h2_core *h2_c, struct aura_h2_stream *stream,
+                                    struct aura_pri_ext *prio);
+
+/* Attach stream for sending on connection scheduler */
+void aura_h2_conn_sched_attach_stream(struct aura_h2_core *h2_c, struct aura_h2_stream *stream);
+
+/* Detach stream from  conn scheduler */
+void aura_h2_conn_sched_detach_stream(struct aura_h2_core *h2_c, struct aura_h2_stream *stream);
+
+/**/
+void aura_h2_stream_release_staging_bit_pos(
+  struct aura_h2_fq_staging_dense_pool_idx_man *pool,
+  uint32_t idx);
 
 #endif

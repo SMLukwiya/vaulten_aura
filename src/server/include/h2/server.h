@@ -87,12 +87,6 @@ static inline bool aura_h2_conn_error_is_fatal(int err) {
 }
 
 /**
- * Create response for error on given stream
- * closing the stream after submitting
- */
-int aura_h2_submit_error_response(struct aura_h2_core *h2_conn, struct aura_h2_stream *stream, int status);
-
-/**
  * Construct a response to send to the peer
  */
 int aura_h2_submit_rt_response(struct aura_h2_core *h2_conn, struct aura_h2_stream *stream,
@@ -113,5 +107,8 @@ static inline void aura_h2_srv_on_handshake_complete(struct aura_h2_server_conn 
     c->state = A_H2_CONN_STATE_PREFACE;
     c->state_handler = aura_h2_srv_process;
 }
+
+/* Trigger an h2 write */
+int aura_h2_srv_write(struct aura_h2_server_conn *c);
 
 #endif

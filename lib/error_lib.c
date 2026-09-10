@@ -24,11 +24,12 @@ void aura_log(bool daemon, int level, aura_log_action log_action, aura_log_type 
     vsnprintf(buf + prefix_len, ERROR_BUFFER_SZ - prefix_len - 1, fmt, ap);
     va_end(ap);
 
-    if (error)
+    if (error) {
         if (is_app)
             snprintf(buf + strlen(buf), ERROR_BUFFER_SZ - prefix_len - strlen(buf) - 1, " (error: %s)", "aura app error");
         else if (is_sys)
             snprintf(buf + strlen(buf), ERROR_BUFFER_SZ - prefix_len - strlen(buf) - 1, " (error: %s)", strerror(error));
+    }
 
     strcat(buf, "\n");
 

@@ -35,7 +35,10 @@ struct aura_srv_host_conf *aura_host_config_create(struct aura_srv_host_pool *po
     host->hostname.base = strdup(hostname);
     host->hostname.len = strlen(hostname);
     host->def_tls_off = default_tls_idx;
-    if (aura_router_init(&host->router) < 0)
+    // if (aura_router_init(&host->router) < 0)
+    //     return NULL;
+
+    if (aura_event_src_init(&host->evt_src, A_EVT_SRC_HTTP, 0) < 0)
         return NULL;
 
     if (h2_frames != NULL)

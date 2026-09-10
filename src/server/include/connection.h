@@ -17,19 +17,16 @@
 #include <stdint.h>
 
 #define A_MAX_SERVER_NAME 256
-#define A_HANDSHAKE_BUF_SZ 4096 /* 4KB */
+#define A_HANDSHAKE_BUF_SZ 4096     /* 4KB */
+#define A_CONN_PROCESS_BUF_SZ 65536 /* 64KB */
 
 /* conn state */
 typedef enum {
     A_CONN_STATE_NONE,
     A_CONN_STATE_CONNECTING,
     A_CONN_STATE_HANDSHAKE,
+    A_CONN_STATE_ESTABLISHED,
     A_CONN_STATE_ACTIVE,
-    A_CONN_STATE_READ_REQ,
-    A_CONN_STATE_SEND_REQ,
-    A_CONN_STATE_PROCESS_REQ,
-    A_CONN_STATE_READ_RESP,
-    A_CONN_STATE_SEND_RESP,
     A_CONN_STATE_CLOSING
 } aura_conn_state_t;
 
@@ -49,14 +46,12 @@ struct aura_conn;
  * connection itself
  */
 struct aura_conn_ops {
-    /* called to read data from outside(socket fd) */
-    ssize_t (*on_read)(struct aura_conn *conn);
-    /* called to write data to the outside */
-    ssize_t (*on_write)(const void *data, size_t len);
     /* handle current conn state, invoking prot specific op if needed */
     int (*state_handler)(struct aura_conn *conn);
-    /* called on protocol specific events */
-    void (*on_event)(struct aura_conn *conn, aura_conn_sen_events_t, void *data);
+    /* called on protocol timer event */
+    int (*on_deadline_update)(struct aura_conn *conn, aura_conn_deadline_t t);
+    /* called on protocol timer event */
+    void (*on_timer_update)(struct aura_conn *conn);
 };
 
 /**
@@ -98,11 +93,11 @@ struct aura_conn_deadlines {
 struct aura_conn {
     struct aura_evt_source ev_src;
     struct aura_mem_ctx *mc;
-    struct aura_srv_sock sock;    /* socket that accepted this conn */
-    uint32_t conn_id;             /* 32 bit generation */
-    uint32_t conn_tab_idx;        /* 32 bit index  (indexed into conn table) */
-    struct aura_srv_ctx *srv_ctx; /* global server context */
-    struct aura_route *route;     /* route that handles this connection */
+    struct aura_srv_sock sock;           /* socket that accepted this conn */
+    uint32_t conn_id;                    /* 32 bit generation */
+    uint32_t conn_tab_idx;               /* 32 bit index  (indexed into conn table) */
+    struct aura_srv_ctx *srv_ctx;        /* global server context */
+    struct aura_fn_registry_ent *fn_ent; /* Function associated with connection */
     union {
         struct aura_tls_ctx tls_ctx; /* TLS context attached to connection*/
     };
@@ -134,6 +129,7 @@ struct aura_conn {
     uint8_t in_hooks_cnt;                   /* Hooks count */
     bool is_server;                         /* Not client connection */
     bool is_secure;                         /* Encrypted enabled connection */
+    bool send_close_notify;                 /* send close notify to the user */
 };
 
 /* Transition connection state */
@@ -167,27 +163,17 @@ static inline ptls_log_conn_state_t *a_get_conn_log_state(struct aura_conn *conn
 }
 
 /**
- * Called by every thread that references
- * connection, last thread to execute
- */
-// static inline void aura_conn_release(struct aura_conn *conn) {
-//     if (!conn)
-//         return;
-
-//     if (atomic_fetch_sub(&conn->ref_cnt, 1) == 1) {
-//         close(conn->sock.sock_fd);
-//         pthread_mutex_destroy(&conn->mutex);
-//         aura_free(conn);
-//     }
-// }
-
-/**
  * Set server name on connection structure
  * Used by client connections only
  */
 static inline void aura_conn_set_server_name(struct aura_conn *conn, const uint8_t *server_name, size_t len) {
     conn->server_name.base = aura_strndup(conn->mc, server_name, len);
     conn->server_name.len = len;
+}
+
+/* */
+static inline bool aura_conn_is_established(struct aura_conn *conn) {
+    return conn->state == A_CONN_STATE_ESTABLISHED;
 }
 
 /* Create Generic connection */
@@ -201,11 +187,6 @@ void aura_conn_destroy(struct aura_conn *);
  * Attach specific protocol callbacks on connection
  */
 void aura_conn_prot_attach_ops(struct aura_conn *conn, int protocol);
-
-/**
- * Attach connection callbacks
- */
-void aura_conn_attach_ops(struct aura_conn *conn, a_transport_protocol prot);
 
 /**
  * TCP event handler, called by the designated listener

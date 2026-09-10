@@ -39,6 +39,10 @@ static inline bool aura_heap_is_empty(struct aura_heap *hp) {
     return hp->size == 0;
 }
 
+static inline uint32_t aura_heap_get_size(struct aura_heap *hp) {
+    return hp->size;
+}
+
 #define aura_heap_for_each(heap, cursor) for (int i = 0; (heap) && (i < (heap)->size) && ((cursor) = (heap)->entries[i], 1); ++i)
 
 int aura_heap_init(struct aura_heap *hp, struct aura_mem_ctx *mc, uint32_t cap,

@@ -22,6 +22,7 @@ struct aura_route {
 };
 
 struct aura_route2 {
+    struct aura_srv_ctx *srv_ctx;
     void *bpf_program;
 };
 

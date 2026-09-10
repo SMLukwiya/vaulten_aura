@@ -18,8 +18,6 @@
 #include <string.h>
 #include <sys/uio.h>
 
-#define A_H2_ERROR_INVALID_HEADER_CHAR -254 /* an internal error indicating invalid chars in header name or value */
-
 #define A_HPACK_PARSE_FLAGS_METHOD_SEEN 0x1
 #define A_HPACK_PARSE_FLAGS_SCHEME_SEEN 0x2
 #define A_HPACK_PARSE_FLAGS_PATH_SEEN 0x4
@@ -89,22 +87,14 @@ typedef enum {
     A_HPACK_INVALID_NAME_ERR = -1,
     A_HPACK_INVALID_VALUE_ERR = -2,
     A_HPACK_INVALID_HDR_FIELD_ERR = -3,
-    A_HPACK_UNSUPPORTED_METHOD_ERR = -4,
-    A_HPACK_DUPLICATE_METHOD_ERR = -5,
-    A_HPACK_INVALID_METHOD_ERR = -6,
-    A_HPACK_DUPLICATE_SCHEME_ERR = -7,
-    A_HPACK_INVALID_SCHEME_ERR = -8,
-    A_HPACK_DUPLICATE_AUTHORITY_ERR = -9,
-    A_HPACK_DUPLICATE_PATH_ERR = -10,
-    A_HPACK_INVALID_PATH_ERR = -11,
-    A_HPACK_DUPLICATE_STATUS_ERR = -12,
-    A_HPACK_INVALID_STATUS_ERR = -13,
-    A_HPACK_SOFT_ERR = -14, /* Soft error boundary */
-    A_HPACK_COMPRESSION_ERR = -15,
-    A_HPACK_PROTOCOL_ERR = -16,
-    A_HPACK_TRUNCATED_ERR = -17,
-    A_HPACK_INTERNAL_ERR = -18,
-    A_HPACK_INVALID_STATE_ERR = -19
+    A_HPACK_DUPLICATE_HDR_ERR = -4,
+    A_HPACK_INVALID_PATH_ERR = -5,
+    A_HPACK_SOFT_ERR = -6, /* Soft error boundary */
+    A_HPACK_COMPRESSION_ERR = -7,
+    A_HPACK_PROTOCOL_ERR = -8,
+    A_HPACK_TRUNCATED_ERR = -9,
+    A_HPACK_INTERNAL_ERR = -10,
+    A_HPACK_INVALID_STATE_ERR = -11
 } a_hpack_err_t;
 
 /* Hpack OP Codes */
@@ -162,24 +152,26 @@ struct aura_hpack_dec_recv_buf {
 
 /* Hpack decoder structure */
 struct aura_hpack_decoder {
-    struct aura_sliding_buf recv_buf;                             /* Receiver buffer for string decoding */
-    size_t len;                                                   /* decoded integer, also acts as accumulator */
-    size_t index;                                                 /* decoded index, never acts as accumulator */
-    size_t shift;                                                 /* current decoding integer shift */
-    a_hpack_op_code opcode;                                       /* current decoder op code*/
-    a_hpack_decoder_state state;                                  /* current decoder state */
-    struct aura_hpack_dyn_tab dyn_tab;                            /* Decoder header table */
-    struct aura_hpack_dec_recv_buf name_recv_buf, value_recv_buf; /* Receive buffers for new name and literal value */
-    int soft_error;
-    bool huff_encoded;       /* is string huffman encoded */
-    bool new_tab_insert;     /* should add this entry to the dyn tab */
-    bool never_indexed;      /* should never be indexed */
-    bool err_state;          /* has decoder encountered a hard error */
-    struct aura_mem_ctx *mc; /* decoder mem ctx */
-    uint8_t prefix;          /* decoder integer prefix */
-    uint8_t huff_state;      /* huffman encoding state */
-    uint8_t flags;           /* decoder flags e.g, emission... */
-    uint8_t pseudo_flags;    /* Pseudo header flags */
+    struct aura_sliding_buf recv_buf;              /* Receiver buffer for string decoding */
+    size_t len;                                    /* decoded integer, also acts as accumulator */
+    size_t index;                                  /* decoded index, never acts as accumulator */
+    size_t shift;                                  /* current decoding integer shift */
+    a_hpack_op_code opcode;                        /* current decoder op code*/
+    a_hpack_decoder_state state;                   /* current decoder state */
+    struct aura_hpack_dyn_tab dyn_tab;             /* Decoder header table */
+    struct aura_hpack_dec_recv_buf name_recv_buf;  /* Name receive buffers for new name */
+    struct aura_hpack_dec_recv_buf value_recv_buf; /* Value receive for literal value */
+    int soft_error;                                /* soft errors */
+    bool huff_encoded;                             /* is string huffman encoded */
+    bool new_tab_insert;                           /* should add this entry to the dyn tab */
+    bool never_indexed;                            /* should never be indexed */
+    bool err_state;                                /* has decoder encountered a hard error */
+    struct aura_mem_ctx *mc;                       /* decoder mem ctx */
+    uint8_t prefix;                                /* decoder integer prefix */
+    uint8_t huff_state;                            /* huffman encoding state */
+    uint8_t flags;                                 /* decoder flags e.g, emission... */
+    uint8_t pseudo_flags;                          /* Pseudo header flags */
+    bool regular_hdr_field_seen;                   /* Records if then first non pseudo header is seen */
 };
 
 /* Hpack encoder structure */
@@ -189,9 +181,6 @@ struct aura_hpack_encoder {
     struct aura_sliding_buf enc_buf;
     bool send_table_size_update;
 };
-
-/* Dispose dynamic hpack table header */
-void aura_hpack_header_tab_dispose(struct aura_hpack_dyn_tab *hdr_tb);
 
 /**
  * Encode content length
@@ -280,7 +269,8 @@ static inline size_t aura_hpack_get_headers_size2(struct aura_basic_header *hdrs
 /**
  * Retrieve static table entry with the given token
  */
-static inline const struct aura_hpack_tab_entry *aura_hpack_static_tab_get_by_token(const struct aura_hpack_static_table *static_tab, int32_t token) {
+static inline const struct aura_hpack_tab_entry *aura_hpack_static_tab_get_by_token(
+  const struct aura_hpack_static_table *static_tab, int32_t token) {
     const struct aura_hpack_tab_entry *entry;
 
     for (int i = 0; i < A_HPACK_DYNAMIC_TAB_HEADER_OFFSET; ++i) {
@@ -295,7 +285,8 @@ static inline const struct aura_hpack_tab_entry *aura_hpack_static_tab_get_by_to
  * Retrieve header table entry associated
  * with the given index from static table
  */
-static inline struct aura_hpack_tab_entry *aura_hpack_static_tab_get_entry(const struct aura_hpack_static_table *static_tab, size_t idx) {
+static inline struct aura_hpack_tab_entry *aura_hpack_static_tab_get_entry(
+  const struct aura_hpack_static_table *static_tab, size_t idx) {
     return (struct aura_hpack_tab_entry *)&static_tab->entries[idx];
 }
 
@@ -303,7 +294,8 @@ static inline struct aura_hpack_tab_entry *aura_hpack_static_tab_get_entry(const
  * Retrieve header table entry associated
  * with the given index from dynamic table
  */
-static inline struct aura_hpack_tab_entry *aura_hpack_dyn_header_tab_get_entry(struct aura_hpack_dyn_tab *tb, size_t idx) {
+static inline struct aura_hpack_tab_entry *aura_hpack_dyn_header_tab_get_entry(
+  struct aura_hpack_dyn_tab *tb, size_t idx) {
     struct aura_hpack_tab_entry *entry;
 
     idx -= A_HPACK_DYNAMIC_TAB_HEADER_OFFSET;
@@ -328,7 +320,6 @@ static inline void aura_hpack_header_table_evict_one(struct aura_hpack_dyn_tab *
 
     entry = aura_hpack_dyn_header_tab_get_entry(tb, --tb->cnt + A_HPACK_DYNAMIC_TAB_HEADER_OFFSET);
     name_len = entry->header_field.name->len;
-    app_debug(true, 0, "----------->> SOMETHING WAS EVICTED name=%s", entry->header_field.name->data);
 
     if (entry->header_field.flags & A_HDR_FIELD_FLAG_VALUE_INTERNED) {
         value_len = entry->header_field.name->len;
@@ -359,10 +350,10 @@ static inline bool aura_hpack_hdr_err_fatal(int error) {
     return error < A_HPACK_SOFT_ERR;
 }
 
-/*[-----------------------]*/
+/* Initialize hpack decoder */
 int aura_hpacK_decoder_init(struct aura_hpack_decoder *dec, struct aura_mem_ctx *mc, size_t tab_max_size);
 
-/**/
+/* Destroy hpack decoder */
 void aura_hpack_decoder_destroy(struct aura_hpack_decoder *dec);
 
 static inline bool aura_hpack_is_static_table_token(int token) {
@@ -446,12 +437,6 @@ int aura_hpack_encode_headers(struct aura_hpack_encoder *enc, struct aura_intern
 ssize_t aura_hpack_decode(struct aura_hpack_decoder *dec, const uint8_t *src_in,
                           const uint8_t *end, struct aura_intern_tab *intern_tab,
                           struct aura_header_field *hdr, bool final);
-
-/**
- * Update header tax table size as received
- * from SETTINGS_HEADER_TABLE_SIZE
- */
-int aura_hpack_dyn_tab_update_hdr_tab_max_size(struct aura_hpack_dyn_tab *tab, size_t max_size);
 
 /**
  * Update encoder header table settings

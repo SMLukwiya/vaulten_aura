@@ -14,7 +14,7 @@ int aura_get_absolute_path(const char *path, char *resolved_path) {
     return 0;
 }
 
-bool aura_open_file(char *filename, int *fd) {
+bool aura_open_file(const char *filename, int *fd) {
     char resolved_file_path[1024];
     int res;
 
@@ -56,7 +56,7 @@ uint8_t *aura_load_file(int fd, size_t *len) {
     }
     rewind(fp);
 
-    buf = malloc(_len);
+    buf = malloc(_len + 1);
     if (!buf) {
         fclose(fp);
         return NULL;
@@ -74,6 +74,15 @@ uint8_t *aura_load_file(int fd, size_t *len) {
     fclose(fp);
     *len = _len;
     return buf;
+}
+
+uint8_t *aura_load_file2(const char *filename, uint64_t *len) {
+    int fd;
+
+    if (!aura_open_file(filename, &fd))
+        return NULL;
+
+    return aura_load_file(fd, len);
 }
 
 const struct stat get_file_stat(const char *filename) {

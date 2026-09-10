@@ -10,23 +10,13 @@ const struct aura_h2_priority aura_h2_default_priority = {
   .weight = 16,
 };
 
-void aura_dump_h2_frame(struct aura_h2_frame *f) {
+void aura_h2_frame_dump(struct aura_h2_frame *f) {
     app_debug(true, 0, "H2 FRAME");
     app_debug(true, 0, "    Length: %lu", f->len);
     app_debug(true, 0, "    Stream id: %lu", f->stream_id);
     app_debug(true, 0, "    Frame Type: %ld", f->type);
     app_debug(true, 0, "    Flags: %ld", f->flags);
     app_debug(true, 0, "    Payload: %p", f->payload);
-}
-
-void aura_dump_h2_settings(struct aura_h2_settings *s) {
-    app_debug(true, 0, "H2 SETTINGS");
-    app_debug(true, 0, "    Hdr Tb Size: %lu", s->hdr_table_size);
-    app_debug(true, 0, "    Enable Push: %lu", s->enable_push);
-    app_debug(true, 0, "    Max Con Streams: %lu", s->max_conc_streams);
-    app_debug(true, 0, "    Initial wind size: %lu", s->initial_window_size);
-    app_debug(true, 0, "    Max Frame size: %lu", s->max_frame_size);
-    app_debug(true, 0, "    Max Hdr list size: %lu", s->max_hdr_list_size);
 }
 
 static inline uint8_t a_h2_unpack_8u(const uint8_t *src) {
@@ -172,6 +162,37 @@ static int aura_h2_decode_priority_payload(struct aura_h2_in_frame *in_frame) {
 
     a_h2_decode_priority(payload, frame->payload);
     if (payload->dependency == frame->stream_id)
+        return A_H2_PROTOCOL_ERR;
+
+    return A_H2_ERR_NONE;
+}
+
+/* Decode priority update extension */
+static inline void a_h2_decode_priority_update(struct aura_h2_prio_update_payload *prio_update,
+                                               const uint8_t *src, uint64_t len) {
+    uint32_t s = a_h2_unpack_32u(src);
+    prio_update->stream_id = s & A_H2_STREAM_ID_MASK;
+    if (len > 4) {
+        prio_update->prio = src + 4;
+        prio_update->len = len - 4;
+    } else {
+        prio_update->prio = NULL;
+        prio_update->len = 0;
+    }
+}
+
+/* Handle priority update */
+static int aura_h2_decode_priority_payload_update(struct aura_h2_in_frame *in_frame) {
+    struct aura_h2_prio_update_payload *payload = &in_frame->prio_update_payload;
+    struct aura_h2_frame *frame = &in_frame->frame;
+    if (frame->stream_id != 0)
+        return A_H2_PROTOCOL_ERR;
+
+    if (frame->len < 4)
+        return A_H2_FRAME_SIZE_ERR;
+
+    a_h2_decode_priority_update(payload, frame->payload, frame->len);
+    if (payload->stream_id == 0)
         return A_H2_PROTOCOL_ERR;
 
     return A_H2_ERR_NONE;
@@ -335,10 +356,6 @@ int aura_h2_parse_frame_header(struct aura_h2_in_frame *in_frame, const uint8_t 
     in_frame->frame_hdr_read = true;
     in_frame->expected_bytes = A_H2_FRAME_HEADER_SIZE + in_frame->frame.len;
 
-    // if (in_len >= (in_frame->frame.len + A_H2_FRAME_HEADER_SIZE)) {
-    // return A_H2_FRAME_INCOMPLETE;
-    // }
-
     return A_H2_ERR_NONE;
 }
 
@@ -369,6 +386,8 @@ int aura_h2_parse_frame_payload(struct aura_h2_in_frame *in_frame) {
         return aura_h2_decode_wind_update_payload(in_frame);
     case A_H2_FRAME_TYPE_CONT:
         return aura_h2_decode_cont_frame(in_frame);
+    case A_H2_FRAME_TYPE_PRIO_UPDATE:
+        return aura_h2_decode_priority_payload_update(in_frame);
     default:
         /* unknown flag type, ignore */
         break;

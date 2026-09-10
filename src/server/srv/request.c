@@ -1,6 +1,6 @@
 #include "request.h"
 
-static void a_route_hdr_vec_destroy(struct aura_header_vector2 *hdr_vec) {
+static void a_route_hdr_vec_destroy(struct aura_header_vector *hdr_vec) {
     struct aura_basic_header *hdr;
     for (int i = 0; i < hdr_vec->cnt; ++i) {
         hdr = &hdr_vec->entries[i];

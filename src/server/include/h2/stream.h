@@ -26,12 +26,12 @@
 /**
  * RFC 9218: highest urgency level
  */
-#define A_PRI_EXT_URGENCY_HIGH 7
+#define A_PRI_EXT_URGENCY_HIGH 0
 
 /**
  * RFC 9218: lowest urgency level
  */
-#define A_PRI_EXT_URGENCY_LOW 0
+#define A_PRI_EXT_URGENCY_LOW 7
 
 /**
  * RFC 9218: number of urgency levels
@@ -48,20 +48,20 @@ struct aura_pri_ext {
 
 typedef enum {
     A_H2_STREAM_FLAG_NONE = 0,
-    A_H2_STREAM_FLAG_READ_HDRS = 1,
-    A_H2_STREAM_FLAG_CONT = 1 << 2,
-    A_H2_STREAM_FLAG_HDRS_RECD = 1 << 3,
-    A_H2_STREAM_FLAG_READ_DATA = 1 << 4,
-    A_H2_STREAM_FLAG_READ_TRAILERS = 1 << 5,
-    A_H2_STREAM_FLAG_EXECUTE = 1 << 6,
-    A_H2_STREAM_FLAG_PAUSED_FLOW_CTRL = 1 << 7,
-    A_H2_STREAM_FLAG_PUSH = 1 << 8,
-    A_H2_STREAM_FLAG_SEND_HDRS = 1 << 9,
-    A_H2_STREAM_FLAG_HDRS_ENCODED = 1 << 10, /* Has headers already been encoded into frame(s) */
-    A_H2_STREAM_FLAG_HDRS_SENT = 1 << 11,
-    A_H2_STREAM_FLAG_SEND_DATA = 1 << 12,
-    A_H2_STREAM_FLAG_DATA_SENT = 1 << 13,
-    A_H2_STREAM_FLAG_SHUTDOWN = 1 << 14,
+    A_H2_STREAM_FLAG_CONT = 1 << 1,
+    A_H2_STREAM_FLAG_HDRS_RECD = 1 << 2,
+    A_H2_STREAM_FLAG_READ_DATA = 1 << 3,
+    A_H2_STREAM_FLAG_READ_TRAILERS = 1 << 4,
+    A_H2_STREAM_FLAG_EXECUTE = 1 << 5,
+    A_H2_STREAM_FLAG_PAUSED_FLOW_CTRL = 1 << 6,
+    A_H2_STREAM_FLAG_PUSH = 1 << 7,
+    A_H2_STREAM_FLAG_SEND_HDRS = 1 << 8,
+    A_H2_STREAM_FLAG_HDRS_ENCODED = 1 << 9, /* Has headers already been encoded into frame(s) */
+    A_H2_STREAM_FLAG_HDRS_SENT = 1 << 10,
+    A_H2_STREAM_FLAG_SEND_DATA = 1 << 11,
+    A_H2_STREAM_FLAG_DATA_SENT = 1 << 12,
+    A_H2_STREAM_FLAG_SHUTDOWN = 1 << 13,
+    A_H2_STREAM_FLAG_BAD_PRIO = 1 << 14,
 } aura_h2_stream_flags_t;
 
 typedef enum {
@@ -90,20 +90,21 @@ typedef void (*user_data_destructor)(void *user_data);
 /* H2 stream structure */
 struct aura_h2_stream {
     uint32_t stream_id;
-    uint32_t staging_bit_pos; /* stream bit pos in out frame staging area */
-    uint32_t received_headers;
-    struct aura_h2_core *h2_c; /* ptr back to h2 core stream belongs to */
-    aura_h2_stream_state_t state;
-    struct aura_heap_ent hp_ent;     /* Intrusive stream entry in priority heap */
-    struct aura_sliding_buf sync;    /* Headers buffer */
-    struct aura_list_head data_list; /* Linked sliding buffers for data frames */
-    struct aura_sliding_buf data;    /* Data buffer */
+    uint32_t staging_bit_pos;         /* stream bit pos in out frame staging area */
+    uint32_t stream_desc_idx;         /* Stream descriptor index */
+    uint32_t received_headers;        /* total headers reeived */
+    struct aura_h2_core *h2_c;        /* ptr back to h2 core stream belongs to */
+    struct aura_heap_ent hp_ent;      /* Intrusive stream entry in priority heap */
+    struct aura_sliding_buf *out_buf; /* Output buffer */
+    struct aura_list_head data_list;  /* Linked sliding buffers for data frames */
+    struct aura_sliding_buf data;     /* Data buffer */
     int32_t local_window_size;
     int32_t peer_window_size;
     uint32_t bytes_since_wind_update; /* Bytes consumed since last window update */
     uint32_t received_len;            /* content len received so far */
     uint32_t glob_seq;                /* conn global sequence to break ties for same priority streams */
-    uint64_t vruntime;                /* Virtual runtime used priorities streams in priority heap */
+    uint32_t last_write;              /* Last nr of bytes sent over by this stream */
+    uint64_t vruntime;                /* Virtual runtime used to priorities streams in priority heap */
     struct aura_pri_ext prio;         /* Priority extension structure */
     aura_h2_stream_flags_t flags;     /* Stream flags */
     struct aura_http_req req;         /* Stream request */
@@ -113,6 +114,7 @@ struct aura_h2_stream {
     user_data_destructor user_data_dtor; /* callback to free user data */
     struct timespec start_ts;
     bool queued;
+    uint8_t state; /* stream state (aura_h2_stream_state_t) */
 };
 
 /**
@@ -236,6 +238,15 @@ static inline bool aura_h2_stream_is_push_stream(uint32_t stream_id) {
  */
 static inline void aura_h2_stream_attach_staging_bit_pos(struct aura_h2_stream *s, uint32_t bit_pos) {
     s->staging_bit_pos = bit_pos;
+}
+
+/* Can stream accept priority update */
+static inline bool aura_h2_stream_can_process_prioity_update(struct aura_h2_stream *stream) {
+    if (stream->state == A_H2_STREAM_STATE_CLOSED ||
+        stream->state == A_H2_STREAM_STATE_HALF_CLOSED_LOCAL)
+        return false;
+
+    return true;
 }
 
 /**

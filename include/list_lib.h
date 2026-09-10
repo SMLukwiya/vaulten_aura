@@ -103,11 +103,11 @@ static inline bool aura_list_is_singular(struct aura_list_head *head) {
  * This is deletion safe version of the normal iterator
  * It doesn't distort the pointers while deleting
  */
-#define a_list_for_each_safe_to_delete(cursor, pos, head, member) \
-    for (                                                         \
-      cursor = a_list_first_entry(head, typeof(*cursor), member), \
-     pos = a_list_next_entry(cursor, typeof(*cursor), member);    \
-      &cursor->member != (head);                                  \
+#define aura_list_for_each_safe_to_delete(cursor, pos, head, member) \
+    for (                                                            \
+      cursor = a_list_first_entry(head, typeof(*cursor), member),    \
+     pos = a_list_next_entry(cursor, typeof(*cursor), member);       \
+      &cursor->member != (head);                                     \
       cursor = pos)
 
 #define a_list_dequeue(cursor, head, member)                        \

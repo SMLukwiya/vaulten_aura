@@ -45,6 +45,21 @@ add_subdirectory(src/cli)
 add_subdirectory(src/daemon)
 add_subdirectory(src/server)
 
+# SERVER TOOLS
+set(SERVER_PROBE_DIR ${PROJECT_SOURCE_DIR}/tools/probes/server)
+
+add_custom_target(
+    aura_server_tools
+    ALL
+    COMMAND $(MAKE) -C ${SERVER_PROBE_DIR}
+    ENABLE_DEBUG=APP_DEV_BUILD
+    CC="${CMAKE_C_COMPILER}"
+    EXTRA_CFLAGS="-I\"${PROJECT_INCLUDE_DIR}\""
+    EXTRA_TARGETS="\"${PROJECT_SOURCE_DIR}/lib/error_lib.c\"" # \"${PROJECT_SOURCE_DIR}/lib/utils_lib.c\"
+    WORKING_DIRECTORY ${SERVER_PROBE_DIR}
+    COMMENT "Building server tools"
+)
+
 set(CMAKE_C_FLAGS_DEBUG "-O0 -g")
 set(CMAKE_C_FLAGS_RELEASE "-O2")
 
