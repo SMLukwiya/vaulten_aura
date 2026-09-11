@@ -31,7 +31,6 @@ struct aura_h2_stream *aura_h2_stream_open(struct aura_h2_core *core, struct aur
     s->prio.urgency = A_PRI_EXT_DEFAULT_URGENCY;
     s->prio.incremental = false;
     s->glob_seq = glob_seq;
-    aura_list_head_init(&s->s_list);
     aura_list_head_init(&s->data_list);
 
     aura_route_req_init(&s->req);

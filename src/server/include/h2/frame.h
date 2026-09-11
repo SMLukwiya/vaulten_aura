@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
+/* Negated versions of H2 errors */
 typedef enum {
     A_H2_ERR_NONE = 0x0,
     A_H2_PROTOCOL_ERR = -0x1,
@@ -28,6 +29,7 @@ typedef enum {
     A_H2_IN_PROGRESS_ERR = -0xE
 } aura_h2_frame_error_t;
 
+/* Frame types */
 typedef enum {
     A_H2_FRAME_TYPE_DATA = 0x0,
     A_H2_FRAME_TYPE_HDRS = 0x1,
@@ -80,6 +82,7 @@ typedef enum {
 #define aura_h2_frame_is_end_stream(flags) (((flags) & A_H2_FRAME_FLAG_END_STREAM) != 0)
 #define aura_h2_frame_is_end_headers(flags) (((flags) & A_H2_FRAME_FLAG_END_HEADERS) != 0)
 
+/* H2 Frame structure */
 struct aura_h2_frame {
     const uint8_t *payload;
     uint32_t stream_id;
@@ -88,6 +91,7 @@ struct aura_h2_frame {
     uint8_t flags;
 };
 
+/* H2 settings frame */
 struct aura_h2_settings {
     uint32_t hdr_table_size;
     uint32_t max_conc_streams;
@@ -111,6 +115,7 @@ struct aura_h2_prio_update_payload {
     uint64_t len;
 };
 
+/* Data payload structure */
 struct aura_h2_data_payload {
     const uint8_t *data;
     uint8_t *pad; /* optional */
@@ -118,21 +123,25 @@ struct aura_h2_data_payload {
     uint8_t pad_len; /* optional */
 };
 
+/* Header payload structure */
 struct aura_h2_hdrs_payload {
     struct aura_h2_priority priority;
     const uint8_t *src;
     uint32_t len;
 };
 
+/* Reset payload structure */
 struct aura_h2_rst_stream_payload {
     uint32_t error_code;
 };
 
+/* Settings payload structure */
 struct aura_h2_settings_payload {
     uint32_t value;
     uint16_t settings_id;
 };
 
+/* Push promise payload structure */
 struct aura_h2_push_promise_payload {
     uint32_t stream_id;
     uint16_t pad_len;
@@ -140,20 +149,24 @@ struct aura_h2_push_promise_payload {
     uint8_t *padding;
 };
 
+/* Ping payload structure */
 struct aura_h2_ping_payload {
     uint8_t data[8];
 };
 
+/* Goaway payload structure */
 struct aura_h2_goaway_payload {
     struct aura_iovec debug_data;
     uint32_t last_stream_id;
     uint32_t error_code;
 };
 
+/* Wind update payload structure */
 struct aura_h2_window_update_payload {
     uint32_t increment;
 };
 
+/* Continuation payload structure */
 struct aura_h2_cont_payload {
     const uint8_t *src;
     uint32_t len;

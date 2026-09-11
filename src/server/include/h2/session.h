@@ -80,18 +80,18 @@ typedef enum {
     A_H2_CONN_STATE_PREFACE,
     A_H2_CONN_STATE_PREFACE_SETTINGS,
     A_H2_CONN_STATE_FRAMES,
-    A_H2_CONN_STATE_CONN, /* Special handling */
+    A_H2_CONN_STATE_CONT, /* Continuation expected */
     A_H2_CONN_STATE_CLOSING,
+    A_H2_CONN_STATE_CLOSED,
     A_H2_CONN_STATE_CLEANUP,
 } aura_h2_conn_state_t;
 
 typedef enum {
     A_H2_CORE_FLAG_NONE = 0,
-    A_H2_CORE_FLAG_CONT = 1,               /* Continuation frame expected */
-    A_H2_CORE_FLAG_GOAWAY_QUEUED = 1 << 1, /* Goaway frame queued for sending */
-    A_H2_CORE_FLAG_GOAWAY_SENT = 1 << 3,   /* Goaway frame sent */
-    A_H2_CORE_FLAG_GOAWAY_RECD = 1 << 4,   /* Goaway frame received */
-    A_H2_CORE_FLAG_CLOSING = 1 << 5        /* Core connection closing */
+    A_H2_CORE_FLAG_GOAWAY_QUEUED = 1,    /* Goaway frame queued for sending */
+    A_H2_CORE_FLAG_GOAWAY_SENT = 1 << 1, /* Goaway frame sent */
+    A_H2_CORE_FLAG_GOAWAY_RECD = 1 << 2, /* Goaway frame received */
+    A_H2_CORE_FLAG_CLOSING = 1 << 3      /* Core connection closing */
 } aura_h2_core_flag_t;
 
 /* Pseudo header flags */
@@ -185,7 +185,6 @@ struct aura_h2_core {
     uint32_t max_received_stream_id;  /* Max stream id received from peer */
     uint32_t local_goaway_stream_id;  /* Last stream id we used in a GOAWAY, doubles as last processed stream id */
     uint32_t peer_goaway_stream_id;   /* Last stream id received from a peer's GOAWAY */
-    aura_h2_core_flag_t flags;        /* H2 core flags */
     struct {
         struct aura_h2_closed_stream_ent entries[A_H2_CLOSED_STREAM_CNT]; /* Max conc len of recently closed streams */
         uint8_t next;
@@ -196,7 +195,9 @@ struct aura_h2_core {
     struct aura_h2_sched_dense_pool out_frame_pool; /* Slots for sending frames to peer */
     struct aura_h2_fq_staging_dense_pool_idx_man staging_bitmap;
 
-    struct aura_fq *fq; /* Flight queue */
+    struct aura_fq *fq;      /* Flight queue */
+    uint32_t cont_stream_id; /* stream id to expect for continuation frame */
+    uint8_t flags;           /* H2 core flags */
 };
 
 static inline aura_error_t aura_h2_get_app_error(int err) {

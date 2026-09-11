@@ -785,15 +785,9 @@ int aura_h2_conn_process_cont(struct aura_h2_core *h2_c, struct aura_h2_in_frame
     int rv;
 
     rv = A_H2_ERR_NONE;
-    /* Check if we expect continuation frame */
-    if ((h2_c->flags & A_H2_CORE_FLAG_CONT) == 0) {
-        rv = A_H2_PROTOCOL_ERR;
-        reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG];
-        goto goaway;
-    }
 
     stream = aura_h2_conn_find_stream(h2_c, in_frame->frame.stream_id);
-    if (!stream || !(stream->flags & A_H2_STREAM_FLAG_CONT)) {
+    if (!stream) {
         rv = A_H2_PROTOCOL_ERR;
         reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG];
         goto goaway;
@@ -805,14 +799,7 @@ int aura_h2_conn_process_cont(struct aura_h2_core *h2_c, struct aura_h2_in_frame
         return A_H2_ERR_NONE;
     }
 
-    // if (aura_sliding_buf_append(h2_conn->headers_to_parse, in_frame->frame.payload, in_frame->frame.len) < 0) {
-    //     rv = A_H2_INTERNAL_ERR;
-    //     reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INTERNAL_ERROR];
-    //     goto goaway;
-    // }
-
     if (in_frame->frame.flags & A_H2_FRAME_FLAG_END_HEADERS) {
-        stream->flags &= ~A_H2_STREAM_FLAG_CONT;
         stream->flags |= A_H2_STREAM_FLAG_HDRS_RECD;
     }
 
@@ -846,7 +833,6 @@ int aura_h2_conn_after_frame_sent(struct aura_h2_core *h2_c, uint32_t stream_id,
 
             if (stream_closed)
                 aura_h2_conn_close_stream(h2_c, stream, 0, true);
-            // aura_h2_stream_destroy(stream, true);
         }
 
         aura_h2_stream_consume_window(stream, nbytes);
@@ -858,7 +844,6 @@ int aura_h2_conn_after_frame_sent(struct aura_h2_core *h2_c, uint32_t stream_id,
             stream_closed = stream->state == A_H2_STREAM_STATE_HALF_CLOSED_REMOTE;
 
             if (stream_closed)
-                // aura_h2_stream_destroy(stream, true);
                 aura_h2_conn_close_stream(h2_c, stream, 0, true);
         }
     }

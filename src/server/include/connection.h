@@ -27,7 +27,8 @@ typedef enum {
     A_CONN_STATE_HANDSHAKE,
     A_CONN_STATE_ESTABLISHED,
     A_CONN_STATE_ACTIVE,
-    A_CONN_STATE_CLOSING
+    A_CONN_STATE_CLOSING,
+    A_CONN_STATE_CLOSED
 } aura_conn_state_t;
 
 /* conn deadlines */

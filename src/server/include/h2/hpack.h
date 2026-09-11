@@ -129,11 +129,11 @@ struct aura_hpack_tab_entry {
 /* Hpack dynamic table structure */
 struct aura_hpack_dyn_tab {
     struct aura_hpack_tab_entry *entries; /* Dynamic table entries */
-    size_t cnt;                           /* Current number of table entries */
-    size_t cap;
-    size_t tab_size;         /* (32 + name_len + val_len) * cnt */
-    size_t max_size;         /* dynamic size updates value */
-    size_t hdr_tab_max_size; /* as determined by SETTINGS_HEADER_TABLE_SIZE setting */
+    uint64_t cnt;                         /* Current number of table entries */
+    uint64_t cap;                         /* Table capacity */
+    uint64_t tab_size;                    /* (32 + name_len + val_len) * cnt */
+    uint64_t max_size;                    /* dynamic size updates value */
+    uint64_t hdr_tab_max_size;            /* as determined by SETTINGS_HEADER_TABLE_SIZE setting */
 };
 
 /* Static table structure */
@@ -153,24 +153,24 @@ struct aura_hpack_dec_recv_buf {
 /* Hpack decoder structure */
 struct aura_hpack_decoder {
     struct aura_sliding_buf recv_buf;              /* Receiver buffer for string decoding */
-    size_t len;                                    /* decoded integer, also acts as accumulator */
-    size_t index;                                  /* decoded index, never acts as accumulator */
-    size_t shift;                                  /* current decoding integer shift */
-    a_hpack_op_code opcode;                        /* current decoder op code*/
-    a_hpack_decoder_state state;                   /* current decoder state */
+    uint64_t len;                                  /* decoded integer, also acts as accumulator */
+    uint64_t index;                                /* decoded index, never acts as accumulator */
+    uint64_t shift;                                /* current decoding integer shift */
+    struct aura_mem_ctx *mc;                       /* decoder mem ctx */
     struct aura_hpack_dyn_tab dyn_tab;             /* Decoder header table */
     struct aura_hpack_dec_recv_buf name_recv_buf;  /* Name receive buffers for new name */
     struct aura_hpack_dec_recv_buf value_recv_buf; /* Value receive for literal value */
-    int soft_error;                                /* soft errors */
-    bool huff_encoded;                             /* is string huffman encoded */
-    bool new_tab_insert;                           /* should add this entry to the dyn tab */
-    bool never_indexed;                            /* should never be indexed */
-    bool err_state;                                /* has decoder encountered a hard error */
-    struct aura_mem_ctx *mc;                       /* decoder mem ctx */
+    int8_t soft_error;                             /* soft errors kept until end headers is seen */
+    uint8_t state;                                 /* current decoder state */
+    uint8_t opcode;                                /* current decoder op code*/
     uint8_t prefix;                                /* decoder integer prefix */
     uint8_t huff_state;                            /* huffman encoding state */
     uint8_t flags;                                 /* decoder flags e.g, emission... */
     uint8_t pseudo_flags;                          /* Pseudo header flags */
+    bool huff_encoded;                             /* is string huffman encoded */
+    bool new_tab_insert;                           /* should add this entry to the dyn tab */
+    bool never_indexed;                            /* should never be indexed */
+    bool err_state;                                /* has decoder encountered a hard error */
     bool regular_hdr_field_seen;                   /* Records if then first non pseudo header is seen */
 };
 
@@ -189,29 +189,10 @@ struct aura_hpack_encoder {
 uint8_t *aura_encode_content_length(uint8_t *dest, size_t value);
 
 /**
- * Checks if header entries are to be evicted so
- * that the current size fits within the max table size
- * Encode dynamic table update (for transmission to peer) after evictions
- */
-uint8_t *aura_header_table_adjust_size(struct aura_hpack_dyn_tab *tb, uint32_t new_cap, uint8_t *dest);
-
-uint8_t *aura_encode_method(struct aura_mem_ctx *mc, struct aura_hpack_dyn_tab *dyn_tab,
-                            struct aura_intern_tab *intern_tab, uint8_t *dest,
-                            struct aura_iovec value);
-
-/**
  * Encode status code using literal header indexed
  * and literal header without indexing as fallback
  */
 uint8_t *aura_encode_status(uint8_t *dest, int status);
-
-/**
- * Encode the given header set with the most
- * memory appropriate method available
- */
-uint8_t *aura_encode_header(struct aura_mem_ctx *mc, const struct aura_hpack_static_table *static_tab,
-                            struct aura_hpack_dyn_tab *dyn_tab, uint8_t *dest,
-                            struct aura_header_field *header);
 
 /**/
 int aura_hpack_load_static_table(struct aura_mem_ctx *mc);
@@ -225,45 +206,6 @@ static inline bool aura_hpack_is_pseudo_header(const char *header) {
  */
 static inline size_t aura_hpack_hdr_entry_size(size_t name_len, size_t value_len) {
     return name_len + value_len + A_HPACK_HDR_TAB_ENT_OVERHEAD;
-}
-
-/**
- * Calculate the total space consumed by the given set of headers
- */
-static inline size_t aura_hpack_get_headers_size(struct aura_header_field *hdrs, size_t num_of_hdrs) {
-    struct aura_header_field *hdr;
-    size_t size, name_len, value_len;
-
-    if (!hdrs)
-        return 0;
-
-    size = 0;
-    for (int i = 0; i <= num_of_hdrs; ++i) {
-        hdr = &hdrs[i];
-        name_len = hdr->name->len;
-
-        if (hdr->flags & A_HDR_FIELD_FLAG_VALUE_INTERNED)
-            value_len = hdr->value.interned->len;
-        else
-            value_len = hdr->value.raw.str.len;
-
-        size += aura_hpack_hdr_entry_size(name_len, value_len);
-    }
-    return size;
-}
-
-static inline size_t aura_hpack_get_headers_size2(struct aura_basic_header *hdrs, size_t num_of_hdrs) {
-    struct aura_basic_header *hdr;
-    size_t size;
-
-    if (!hdrs)
-        return 0;
-
-    size = 0;
-    for (int i = 0; i <= num_of_hdrs; ++i)
-        size += aura_hpack_hdr_entry_size(hdr->name.len, hdr->value.len);
-
-    return size;
 }
 
 /**
@@ -404,6 +346,13 @@ static inline uint32_t aura_hpack_tab_get_entry_cnt(struct aura_hpack_dyn_tab *t
 static inline void aura_hpack_set_decoder_soft_err(struct aura_hpack_decoder *dec, int err) {
     if (dec->soft_error == 0)
         dec->soft_error = err;
+}
+
+static inline void aura_hpack_decoder_reset(struct aura_hpack_decoder *dec) {
+    dec->state = A_HPACK_STATE_DECODE_START;
+    dec->soft_error = 0;
+    dec->err_state = false;
+    dec->pseudo_flags = 0;
 }
 
 /**
