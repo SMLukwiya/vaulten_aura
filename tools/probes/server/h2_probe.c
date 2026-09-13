@@ -58,7 +58,6 @@ int aura_server_tool_h2_probe(const char *host, const char *service, const char 
     SSL_CTX *ctx;
     BIO *ssl_bio = NULL;
     SSL *ssl;
-    X509 *cert;
     int sock_fd = -1, err, rv;
 
     ERR_clear_error();

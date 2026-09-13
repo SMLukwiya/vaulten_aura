@@ -55,9 +55,24 @@ add_custom_target(
     ENABLE_DEBUG=APP_DEV_BUILD
     CC="${CMAKE_C_COMPILER}"
     EXTRA_CFLAGS="-I\"${PROJECT_INCLUDE_DIR}\""
-    EXTRA_TARGETS="\"${PROJECT_SOURCE_DIR}/lib/error_lib.c\"" # \"${PROJECT_SOURCE_DIR}/lib/utils_lib.c\"
+    EXTRA_TARGETS="\"${PROJECT_SOURCE_DIR}/lib/error_lib.c\""
     WORKING_DIRECTORY ${SERVER_PROBE_DIR}
     COMMENT "Building server tools"
+)
+
+# Path to makefile directory
+set(SERVER_PROBE_DIR2 ${PROJECT_SOURCE_DIR}/tools/probes/h2_server)
+
+add_custom_target(
+    aura_h2_server_tools
+    ALL
+    COMMAND $(MAKE) -C ${SERVER_PROBE_DIR2}
+    ENABLE_DEBUG=APP_DEV_BUILD
+    CC="${CMAKE_C_COMPILER}"
+    EXTRA_CFLAGS="\"-I${PROJECT_SOURCE_DIR}/src/server/include -I${PROJECT_SOURCE_DIR}/lib/memory -I${PROJECT_SOURCE_DIR}/lib -I${PROJECT_INCLUDE_DIR}\""
+    EXTRA_TARGETS="\"${PROJECT_SOURCE_DIR}/lib/error_lib.c ${PROJECT_SOURCE_DIR}/src/server/protocol/h2/hpack.c\""
+    WORKING_DIRECTORY ${SERVER_PROBE_DIR2}
+    COMMENT "Building h2 server tools"
 )
 
 set(CMAKE_C_FLAGS_DEBUG "-O0 -g")

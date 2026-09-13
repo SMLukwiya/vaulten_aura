@@ -44,6 +44,7 @@ typedef enum {
     A_H2_FRAME_TYPE_PRIO_UPDATE = 0x10,
 } aura_h2_frame_t;
 
+/* Frame flags */
 #define A_H2_FRAME_FLAG_END_STREAM 0x1
 #define A_H2_FRAME_FLAG_END_HEADERS 0x4
 #define A_H2_FRAME_FLAG_PADDED 0x8
@@ -51,6 +52,7 @@ typedef enum {
 #define A_H2_FRAME_FLAG_ACK 0x1
 #define A_H2_FRAME_FLAG_NONE 0
 
+/* Settings Ids */
 typedef enum {
     A_H2_SETTINGS_HEADER_TABLE_SIZE = 0x1,
     A_H2_SETTINGS_ENABLE_PUSH = 0x2,
@@ -63,8 +65,7 @@ typedef enum {
 #define A_H2_INITIAL_WINDOW_SIZE 65536
 #define A_H2_MAX_WINDOW_SIZE 0x7FFFFFFF
 #define A_H2_MIN_FRAME_SIZE 16384
-#define A_H2_MAX_FRAME_SIZE 16777215
-#define A_H2_MAX_HEADER_LEN 0xFFFFFF
+#define A_H2_MAX_FRAME_SIZE 0xFFFFFF
 #define A_H2_MAX_DEBUG_PAYLOAD_LEN 16376
 
 #define A_H2_FRAME_HEADER_SIZE 9

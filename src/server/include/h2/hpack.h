@@ -186,7 +186,7 @@ struct aura_hpack_encoder {
  * Encode content length
  * literal header without indexing 'Indexed name'
  */
-uint8_t *aura_encode_content_length(uint8_t *dest, size_t value);
+// uint8_t *aura_encode_content_length(uint8_t *dest, size_t value);
 
 /**
  * Encode status code using literal header indexed
@@ -377,8 +377,7 @@ int aura_hpack_encode_status(struct aura_hpack_encoder *enc,
                              int status);
 
 /* Encode content len for wire transmission */
-int aura_hpack_encode_content_length(struct aura_hpack_encoder *enc,
-                                     size_t value);
+int aura_hpack_encode_content_length(struct aura_hpack_encoder *enc, uint64_t value);
 
 int aura_hpack_encode_headers(struct aura_hpack_encoder *enc, struct aura_intern_tab *intern_tab,
                               struct aura_basic_header *hdr_field, size_t hdr_cnt);
@@ -404,6 +403,17 @@ void aura_hpack_enc_update_tab_settings_sz(struct aura_hpack_encoder *enc, size_
  * of the table
  */
 void aura_hpack_dec_update_tab_settings_sz(struct aura_hpack_decoder *dec, size_t max_size);
+
+/* Encode length */
+uint64_t aura_hpack_encode_len(uint8_t *dest, uint64_t prefix, uint64_t len);
+
+/* Encode indexed name */
+uint64_t aura_hpack_encode_indexed_name(uint8_t *dest, size_t dest_len, size_t idx,
+                                        struct aura_iovec *value, a_hpack_indexing_mode ind_mode);
+
+/* Encode new name */
+uint64_t aura_hpack_encode_new_name(uint8_t *dest, size_t dest_len, struct aura_iovec *name,
+                                    struct aura_iovec *value, a_hpack_indexing_mode ind_mode);
 
 void aura_hpack_tab_dump(struct aura_hpack_dyn_tab *tab);
 void aura_hpack_dec_dump(struct aura_hpack_decoder *dec);

@@ -77,7 +77,7 @@ static int a_hpack_decode_integer(const uint8_t **src, const uint8_t *src_end, u
 /**
  * Decodes huffman encoded string,
  */
-static int a_hpack_decode_huffman(char *dest, const uint8_t *src, size_t len, bool value_is_name, size_t *consumed) {
+static int a_hpack_decode_huffman(char *dest, const uint8_t *src, uint64_t len, bool value_is_name, uint64_t *consumed) {
     char *ptr;
     const uint8_t *src_end;
     uint8_t ch, char_errs = 0;
@@ -121,7 +121,7 @@ static int a_hpack_decode_huffman(char *dest, const uint8_t *src, size_t len, bo
     return A_HPACK_OK;
 }
 
-static int a_hpack_validate_header_name(const uint8_t *src, size_t len) {
+static int a_hpack_validate_header_name(const uint8_t *src, uint64_t len) {
     uint8_t ch;
 
     /* all printable chars, except upper case and separator characters */
@@ -402,7 +402,7 @@ static int a_hpack_validate_header_name(const uint8_t *src, size_t len) {
 /**
  *
  */
-static int a_hpack_validate_header_value(const uint8_t *src, size_t len) {
+static int a_hpack_validate_header_value(const uint8_t *src, uint64_t len) {
     uint8_t ch;
 
     /* surrounding whitespaces RFC 9113 8.2.1 */
@@ -687,9 +687,9 @@ static inline void a_hpack_dyn_tab_shrink(struct aura_hpack_dyn_tab *dyn_tab) {
 
 static struct aura_hpack_tab_entry *a_dyn_header_table_get_new_slot(struct aura_mem_ctx *mc,
                                                                     struct aura_hpack_dyn_tab *tb,
-                                                                    size_t add, size_t max_num_entries) {
+                                                                    uint64_t add, uint64_t max_num_entries) {
     struct aura_hpack_tab_entry *old_entries;
-    size_t old_cap;
+    uint64_t old_cap;
 
     /* adjust size */
     while (tb->cnt > max_num_entries || (tb->cnt != 0 && (tb->tab_size + add) > tb->max_size))
@@ -722,10 +722,10 @@ static struct aura_hpack_tab_entry *a_dyn_header_table_get_new_slot(struct aura_
 
 static int a_dyn_header_table_get_new_slot2(struct aura_mem_ctx *mc,
                                             struct aura_hpack_dyn_tab *dyn_tab,
-                                            size_t add, size_t max_num_entries,
+                                            uint64_t add, uint64_t max_num_entries,
                                             struct aura_hpack_tab_entry **slot) {
     struct aura_hpack_tab_entry *old_entries;
-    size_t old_cap;
+    uint64_t old_cap;
 
     /* adjust size */
     while (dyn_tab->cnt > max_num_entries ||
@@ -794,47 +794,47 @@ uint8_t *aura_encode_status(uint8_t *dest, int status) {
     return dest;
 }
 
-uint8_t *aura_encode_content_length(uint8_t *dest, size_t value) {
-    char buf[32];
-    char *p = buf + sizeof(buf);
-    size_t l;
+// uint8_t *aura_encode_content_length(uint8_t *dest, size_t value) {
+//     char buf[32];
+//     char *p = buf + sizeof(buf);
+//     size_t l;
 
-    do {
-        *--p = '0' + value % 10;
-    } while ((value /= 10) != 0);
-    l = buf + sizeof(buf) - p;
+//     do {
+//         *--p = '0' + value % 10;
+//     } while ((value /= 10) != 0);
+//     l = buf + sizeof(buf) - p;
 
-    *dest++ = 0x0f; /* 15 */
-    *dest++ = 0x0d; /* + 13 = 28(index) */
-    *dest++ = (uint8_t)l;
-    memcpy(dest, p, l);
-    dest += l;
+//     *dest++ = 0x0f; /* 15 */
+//     *dest++ = 0x0d; /* + 13 = 28(index) */
+//     *dest++ = (uint8_t)l;
+//     memcpy(dest, p, l);
+//     dest += l;
 
-    return dest;
-}
+//     return dest;
+// }
 
-static void a_hpack_search_static_table(struct aura_header_field *nv, bool *exact_match) {
-    const struct aura_hpack_tab_entry *entry;
-    size_t n;
+// static void a_hpack_search_static_table(struct aura_header_field *nv, bool *exact_match) {
+//     const struct aura_hpack_tab_entry *entry;
+//     size_t n;
 
-    entry = aura_hpack_static_tab_get_by_token(&static_table, nv->token);
-    if (!entry)
-        return;
+//     entry = aura_hpack_static_tab_get_by_token(&static_table, nv->token);
+//     if (!entry)
+//         return;
 
-    if (nv->flags & A_HDR_FIELD_FLAG_VALUE_INTERNED) {
-        *exact_match = entry->header_field.value.interned == nv->value.interned;
-        return;
-    }
+//     if (nv->flags & A_HDR_FIELD_FLAG_VALUE_INTERNED) {
+//         *exact_match = entry->header_field.value.interned == nv->value.interned;
+//         return;
+//     }
 
-    if (aura_mem_is_eq(nv->value.raw.str.base, nv->value.raw.str.len, entry->header_field.value.raw.str.base, entry->header_field.value.raw.str.len)) {
-        *exact_match = true;
-    }
-}
+//     if (aura_mem_is_eq(nv->value.raw.str.base, nv->value.raw.str.len, entry->header_field.value.raw.str.base, entry->header_field.value.raw.str.len)) {
+//         *exact_match = true;
+//     }
+// }
 
 static int a_hpack_dyn_tab_add_new_entry(struct aura_mem_ctx *mc, struct aura_hpack_dyn_tab *dyn_tab,
                                          struct aura_header_field *header) {
     struct aura_hpack_tab_entry *entry_slot;
-    size_t name_len, value_len;
+    uint64_t name_len, value_len;
     int rv;
 
     name_len = header->name->len;
@@ -921,7 +921,7 @@ int aura_hpack_load_static_table(struct aura_mem_ctx *mc) {
 }
 
 /* Initialize hpack dynamic table */
-static inline void a_hpack_dyn_tab_init(struct aura_hpack_dyn_tab *dyn, size_t max_size) {
+static inline void a_hpack_dyn_tab_init(struct aura_hpack_dyn_tab *dyn, uint64_t max_size) {
     memset(dyn, 0, sizeof(*dyn));
     dyn->max_size = max_size;
     dyn->hdr_tab_max_size = max_size;
@@ -930,7 +930,7 @@ static inline void a_hpack_dyn_tab_init(struct aura_hpack_dyn_tab *dyn, size_t m
 /* Destroy hpack dynamic table */
 void aura_hpack_hdr_tab_destroy(struct aura_hpack_dyn_tab *dyn_tab) {
     struct aura_hpack_tab_entry *entry;
-    size_t idx;
+    uint64_t idx;
 
     if (dyn_tab->cnt > 0) {
         idx = 0;
@@ -947,7 +947,7 @@ void aura_hpack_hdr_tab_destroy(struct aura_hpack_dyn_tab *dyn_tab) {
     aura_free(dyn_tab->entries);
 }
 
-int aura_hpacK_decoder_init(struct aura_hpack_decoder *dec, struct aura_mem_ctx *mc, size_t tab_max_size) {
+int aura_hpacK_decoder_init(struct aura_hpack_decoder *dec, struct aura_mem_ctx *mc, uint64_t tab_max_size) {
     memset(dec, 0, sizeof(*dec));
     if (aura_sliding_buf_init(&dec->recv_buf, mc, 4096, A_SLIDING_BUF_FL_NONE) < 0)
         return -1;
@@ -963,8 +963,8 @@ void aura_hpack_decoder_destroy(struct aura_hpack_decoder *dec) {
 }
 
 /* Count the number of bytes taken by the length to be encoded */
-static size_t a_hpack_count_encoded_len(size_t prefix, size_t n) {
-    size_t prefix_max, len = 0;
+static uint64_t a_hpack_count_encoded_len(uint64_t prefix, uint64_t n) {
+    uint64_t prefix_max, len = 0;
 
     prefix_max = (uint8_t)((1 << prefix) - 1);
     /* can fit in one byte */
@@ -983,10 +983,10 @@ static size_t a_hpack_count_encoded_len(size_t prefix, size_t n) {
 }
 
 /* Decode length from given src */
-static ssize_t a_hpack_decode_len(uint8_t *src, const uint8_t *end, size_t *out, size_t *shift,
-                                  size_t initial, size_t start_shift, size_t prefix, bool *done) {
-    size_t prefix_max = (uint8_t)((1 << prefix) - 1);
-    size_t n = initial, add;
+static int64_t a_hpack_decode_len(uint8_t *src, const uint8_t *end, uint64_t *out, uint64_t *shift,
+                                  uint64_t initial, uint64_t start_shift, uint64_t prefix, bool *done) {
+    uint64_t prefix_max = (uint8_t)((1 << prefix) - 1);
+    uint64_t n = initial, add;
     const uint8_t *start = src;
     uint8_t curr;
 
@@ -1041,16 +1041,16 @@ static ssize_t a_hpack_decode_len(uint8_t *src, const uint8_t *end, size_t *out,
     if (src <= end) {
         *out = n;
         *done = true;
-        return (ssize_t)(src - start);
+        return (int64_t)(src - start);
     }
 
     *out = n;
-    return (ssize_t)(src - start);
+    return (int64_t)(src - start);
 }
 
 /* Get number of bytes to encode len bytes of src using huffman encoding */
-static size_t a_hpack_huff_get_encode_len(const uint8_t *src, size_t len) {
-    size_t nbits = 0;
+static uint64_t a_hpack_huff_get_encode_len(const uint8_t *src, uint64_t len) {
+    uint64_t nbits = 0;
 
     for (int i = 0; i < len; ++i) {
         nbits += huff_sym_table[src[i]].nbits;
@@ -1060,7 +1060,7 @@ static size_t a_hpack_huff_get_encode_len(const uint8_t *src, size_t len) {
 
 /* Decode huffman into r_buf */
 static int a_hpack_huffman_decode(struct aura_hpack_dec_recv_buf *r_buf, uint8_t *state, const uint8_t *src,
-                                  size_t len, bool final, int *err) {
+                                  uint64_t len, bool final, int *err) {
     const uint8_t *end;
     uint8_t c;
     const nghttp2_huff_decode entry = {*state, 0x00, 0}, *e = &entry;
@@ -1091,12 +1091,12 @@ static int a_hpack_huffman_decode(struct aura_hpack_dec_recv_buf *r_buf, uint8_t
 }
 
 /* Update current table size to new value */
-static inline void aura_hpack_dyn_tab_update_curr_size(struct aura_hpack_dyn_tab *tab, size_t max_size) {
+static inline void aura_hpack_dyn_tab_update_curr_size(struct aura_hpack_dyn_tab *tab, uint64_t max_size) {
     tab->max_size = max_size;
     a_hpack_dyn_tab_shrink(tab);
 }
 
-void aura_hpack_enc_update_tab_settings_sz(struct aura_hpack_encoder *enc, size_t max_size) {
+void aura_hpack_enc_update_tab_settings_sz(struct aura_hpack_encoder *enc, uint64_t max_size) {
     if (enc->dyn_tab.hdr_tab_max_size > max_size)
         a_hpack_dyn_tab_shrink(&enc->dyn_tab);
 
@@ -1104,7 +1104,7 @@ void aura_hpack_enc_update_tab_settings_sz(struct aura_hpack_encoder *enc, size_
     enc->dyn_tab.hdr_tab_max_size = max_size;
 }
 
-void aura_hpack_dec_update_tab_settings_sz(struct aura_hpack_decoder *dec, size_t max_size) {
+void aura_hpack_dec_update_tab_settings_sz(struct aura_hpack_decoder *dec, uint64_t max_size) {
     if (dec->dyn_tab.hdr_tab_max_size > max_size) {
         a_hpack_dyn_tab_shrink(&dec->dyn_tab);
         /* Only expect table size updates for decreasing changes */
@@ -1114,9 +1114,9 @@ void aura_hpack_dec_update_tab_settings_sz(struct aura_hpack_decoder *dec, size_
 }
 
 /* Read length value over the wire */
-static ssize_t a_hpack_len_read(struct aura_hpack_decoder *dec, const uint8_t *src,
-                                const uint8_t *end, size_t maxlen, bool *done) {
-    size_t out;
+static int64_t a_hpack_len_read(struct aura_hpack_decoder *dec, const uint8_t *src,
+                                const uint8_t *end, uint64_t maxlen, bool *done) {
+    uint64_t out;
     int rv;
 
     /* call internal */
@@ -1170,7 +1170,7 @@ static ssize_t a_hpack_normal_read(struct aura_hpack_decoder *dec, struct aura_h
 
 /* Get static/dynamic table entry associated with given index */
 static inline const struct aura_hpack_tab_entry *a_hpack_get_tab_entry(const struct aura_hpack_static_table *static_tab,
-                                                                       struct aura_hpack_dyn_tab *dyn_tab, size_t idx) {
+                                                                       struct aura_hpack_dyn_tab *dyn_tab, uint64_t idx) {
     if (likely(idx < A_HPACK_DYNAMIC_TAB_HEADER_OFFSET))
         return aura_hpack_static_tab_get_entry(static_tab, idx);
     else
@@ -1180,7 +1180,7 @@ static inline const struct aura_hpack_tab_entry *a_hpack_get_tab_entry(const str
 /* Validate header value */
 static int a_hpack_validate_header(struct aura_header_field *hdr) {
     const uint8_t *name, *value;
-    size_t n_len, v_len;
+    uint64_t n_len, v_len;
     int rv;
 
     name = hdr->name->data;
@@ -1209,7 +1209,7 @@ static int a_hpack_validate_header(struct aura_header_field *hdr) {
 
 /* Emit fully indexed value */
 static inline int a_hpack_emit_hdr_indexed(struct aura_hpack_dyn_tab *dyn_tab,
-                                           struct aura_header_field *hdr, size_t idx) {
+                                           struct aura_header_field *hdr, uint64_t idx) {
     const struct aura_hpack_tab_entry *e = a_hpack_get_tab_entry(&static_table, dyn_tab, idx);
 
     *hdr = (e->header_field);
@@ -1349,7 +1349,7 @@ out:
 }
 
 /* Reserve some space of len bytes for possible data */
-static inline int aura_hpack_decoder_recv_buf_reserve(struct aura_sliding_buf *buf, size_t len,
+static inline int aura_hpack_decoder_recv_buf_reserve(struct aura_sliding_buf *buf, uint64_t len,
                                                       struct aura_hpack_dec_recv_buf *r_buf) {
 
     if (!aura_sliding_buf_ensure_cap(buf, len))
@@ -1368,8 +1368,8 @@ ssize_t aura_hpack_decode(struct aura_hpack_decoder *dec, const uint8_t *src_in,
                           struct aura_header_field *hdr, bool final) {
     const uint8_t *start = src_in;
     uint8_t c;
-    bool done, busy = false, should_intern_value;
     int rv;
+    bool done, busy = false, should_intern_value;
 
     if (dec->err_state) {
         return A_HPACK_COMPRESSION_ERR;
@@ -1720,7 +1720,6 @@ void aura_hpack_encoder_destroy(struct aura_hpack_encoder *enc) {
 static void a_hpack_search_static_table2(struct aura_header_field *nv, bool name_only,
                                          uint32_t *index, bool *exact_match) {
     const struct aura_hpack_tab_entry *e;
-    size_t n;
 
     for (int i = 1; i < A_HPACK_DYNAMIC_TAB_HEADER_OFFSET; ++i) {
         e = &static_table.entries[i];
@@ -1775,8 +1774,8 @@ static void a_hpack_search_dyn_tab(struct aura_hpack_dyn_tab *dyn_tab,
 }
 
 /* Determine indexing mode */
-static a_hpack_indexing_mode a_hpack_get_indexing_mode(size_t name_len, size_t value_len,
-                                                       int token, int flags, size_t hdr_tab_size) {
+static a_hpack_indexing_mode a_hpack_get_indexing_mode(uint64_t name_len, uint64_t value_len,
+                                                       int token, int flags, uint64_t hdr_tab_size) {
     a_hpack_indexing_mode indexing_mode;
 
     if (flags & A_HDR_FIELD_FLAG_NO_INDEX)
@@ -1821,7 +1820,7 @@ static inline uint8_t a_hpack_pack_binary_fmt(a_hpack_indexing_mode ind_mode) {
 }
 
 /* Encode given len using provided prefix */
-static size_t a_hpack_encode_len(uint8_t *dest, size_t prefix, size_t n) {
+static uint64_t a_hpack_encode_len(uint8_t *dest, uint64_t prefix, uint64_t n) {
     uint8_t prefix_max = (uint8_t)((1 << prefix) - 1);
     uint8_t *start = dest;
 
@@ -1842,18 +1841,22 @@ static size_t a_hpack_encode_len(uint8_t *dest, size_t prefix, size_t n) {
     /* add final bytes of n */
     *dest++ = (uint8_t)n;
 
-    return (size_t)(dest - start);
+    return (uint64_t)(dest - start);
+}
+
+uint64_t aura_hpack_encode_len(uint8_t *dest, uint64_t prefix, uint64_t len) {
+    return a_hpack_encode_len(dest, prefix, len);
 }
 
 /* Encode normal string */
-static inline size_t a_hpack_string_encode(uint8_t *dest, const char *s, size_t len) {
+static inline uint64_t a_hpack_string_encode(uint8_t *dest, const char *s, uint64_t len) {
     uint8_t *start = dest;
     memcpy(dest, s, len);
     dest += len;
     return dest - start;
 }
 
-int a_hpack_huffman_encode(uint8_t *dest, size_t dest_len, const uint8_t *src, size_t len) {
+int a_hpack_huffman_encode(uint8_t *dest, uint64_t dest_len, const uint8_t *src, uint64_t len) {
     const nghttp2_huff_sym *sym;
     const uint8_t *end;
     uint8_t *start, *dest_end;
@@ -1910,11 +1913,10 @@ int a_hpack_huffman_encode(uint8_t *dest, size_t dest_len, const uint8_t *src, s
     return dest - start;
 }
 
-static size_t a_hpack_encode_string(uint8_t *dest, size_t dest_len, const uint8_t *str, size_t len) {
+static uint64_t a_hpack_encode_string(uint8_t *dest, uint64_t dest_len, const uint8_t *str, uint64_t len) {
     uint8_t *start = dest;
-    size_t enc_len;
+    uint64_t enc_len;
     bool huffman = false;
-    int rv;
 
     enc_len = a_hpack_huff_get_encode_len(str, len);
     if (enc_len < len) {
@@ -1934,10 +1936,9 @@ static size_t a_hpack_encode_string(uint8_t *dest, size_t dest_len, const uint8_
 }
 
 /* Encode table size update */
-static inline int a_hpack_encode_tab_size_update(struct aura_sliding_buf *buf, size_t tab_size) {
-    uint8_t *dest, tab_update[] = {0x20};
-    uint8_t *start;
-    size_t enc_len;
+static inline int a_hpack_encode_tab_size_update(struct aura_sliding_buf *buf, uint64_t tab_size) {
+    uint8_t *dest, *start;
+    uint64_t enc_len;
 
     enc_len = a_hpack_count_encoded_len(5, tab_size);
     /* If enc_len > 5 bytes (arbitrary safe value) */
@@ -1954,15 +1955,15 @@ static inline int a_hpack_encode_tab_size_update(struct aura_sliding_buf *buf, s
 }
 
 /* Encode indexed block for perfect table match */
-static inline size_t a_hpack_encode_indexed_block(uint8_t *dest, size_t idx) {
+static inline uint64_t a_hpack_encode_indexed_block(uint8_t *dest, uint64_t idx) {
     *dest = 0x80u;
     return a_hpack_encode_len(dest, 7, idx);
 }
 
-/* Encode indexd name representation */
-static size_t a_hpack_encode_indexed_name(uint8_t *dest, size_t dest_len, size_t idx,
-                                          struct aura_iovec *value, a_hpack_indexing_mode ind_mode) {
-    size_t prefix;
+/* Encode indexed name representation */
+static uint64_t a_hpack_encode_indexed_name(uint8_t *dest, uint64_t dest_len, uint64_t idx,
+                                            struct aura_iovec *value, a_hpack_indexing_mode ind_mode) {
+    uint64_t prefix;
     uint8_t *start = dest;
 
     if (ind_mode == A_HPACK_HDR_FIELD_WITH_INDEXING) {
@@ -1978,9 +1979,14 @@ static size_t a_hpack_encode_indexed_name(uint8_t *dest, size_t dest_len, size_t
     return dest - start;
 }
 
+uint64_t aura_hpack_encode_indexed_name(uint8_t *dest, uint64_t dest_len, uint64_t idx,
+                                        struct aura_iovec *value, a_hpack_indexing_mode ind_mode) {
+    return a_hpack_encode_indexed_name(dest, dest_len, idx, value, ind_mode);
+}
+
 /* Encode new name representation */
-static size_t a_hpack_encode_new_name(uint8_t *dest, size_t dest_len, struct aura_iovec *name,
-                                      struct aura_iovec *value, a_hpack_indexing_mode ind_mode) {
+static uint64_t a_hpack_encode_new_name(uint8_t *dest, uint64_t dest_len, struct aura_iovec *name,
+                                        struct aura_iovec *value, a_hpack_indexing_mode ind_mode) {
     uint8_t *start = dest;
 
     *dest++ = a_hpack_pack_binary_fmt(ind_mode);
@@ -1990,10 +1996,15 @@ static size_t a_hpack_encode_new_name(uint8_t *dest, size_t dest_len, struct aur
     return dest - start;
 }
 
+uint64_t aura_hpack_encode_new_name(uint8_t *dest, uint64_t dest_len, struct aura_iovec *name,
+                                    struct aura_iovec *value, a_hpack_indexing_mode ind_mode) {
+    return a_hpack_encode_new_name(dest, dest_len, name, value, ind_mode);
+}
+
 /* Encode name value pair choosing an appropriate encoding format */
 static int a_hpack_encode_header(struct aura_hpack_encoder *enc, struct aura_header_field *hdr) {
     uint8_t *dest;
-    size_t dest_len, hdr_size, rv;
+    uint64_t dest_len, hdr_size, rv;
     struct aura_iovec name, value;
     bool name_only = false, is_exact_match = false;
     a_hpack_indexing_mode ind_mode;
@@ -2050,7 +2061,7 @@ static int a_hpack_encode_header(struct aura_hpack_encoder *enc, struct aura_hea
 }
 
 static void a_hpack_header_find_or_create(struct aura_header_field *hdr, struct aura_intern_tab *intern_tab,
-                                          uint8_t *name, size_t name_len, uint8_t *val, size_t val_len,
+                                          uint8_t *name, uint64_t name_len, uint8_t *val, uint64_t val_len,
                                           bool should_intern_name, bool should_intern_value) {
     const struct aura_hpack_tab_entry *e;
     int token;
@@ -2131,8 +2142,6 @@ int aura_hpack_encode_method(struct aura_hpack_encoder *enc,
                              struct aura_intern_tab *intern_tab,
                              struct aura_iovec value) {
     uint8_t *dest;
-    size_t dest_len;
-    int rv;
 
     dest = aura_sliding_buf_read_ptr(&enc->enc_buf);
     if (aura_mem_is_eq(value.base, value.len, str_lit("GET"))) {
@@ -2154,11 +2163,9 @@ int aura_hpack_encode_method(struct aura_hpack_encoder *enc,
     return a_hpack_encode_header(enc, &header);
 }
 
-int aura_hpack_encode_status(struct aura_hpack_encoder *enc,
-                             int status) {
+int aura_hpack_encode_status(struct aura_hpack_encoder *enc, int status) {
     A_BUG_ON_2(status < 100 || status > 999, true);
     uint8_t *dest, *start;
-    int rv;
 
     dest = aura_sliding_buf_write_ptr(&enc->enc_buf);
     start = dest;
@@ -2189,11 +2196,10 @@ int aura_hpack_encode_status(struct aura_hpack_encoder *enc,
 }
 
 /** @todo: ensure that the enc->buf has enough space */
-int aura_hpack_encode_content_length(struct aura_hpack_encoder *enc,
-                                     size_t value) {
-    char buf[32];
+int aura_hpack_encode_content_length(struct aura_hpack_encoder *enc, uint64_t value) {
+    char buf[64];
     char *p = buf + sizeof(buf);
-    size_t l;
+    uint64_t l;
     uint8_t *dest, *start;
 
     do {
@@ -2214,15 +2220,9 @@ int aura_hpack_encode_content_length(struct aura_hpack_encoder *enc,
 }
 
 int aura_hpack_encode_headers(struct aura_hpack_encoder *enc, struct aura_intern_tab *intern_tab,
-                              struct aura_basic_header *hdr_field, size_t hdr_cnt) {
+                              struct aura_basic_header *hdr_field, uint64_t hdr_cnt) {
     bool should_intern_value;
-    uint8_t *dest;
-    size_t dest_len, hdr_size = 0;
     int rv;
-
-    // aura_hpack_enc_dump(enc);
-    // if (enc->err_state)
-    //     return A_HPACK_COMPRESSION_ERR;
 
     if (enc->send_table_size_update) {
         enc->send_table_size_update = 0;

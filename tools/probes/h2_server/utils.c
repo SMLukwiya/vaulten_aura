@@ -65,7 +65,7 @@ uint8_t *aura_pack_32u(uint8_t *dest, uint32_t val) {
     *dest++ = val >> 16;
     *dest++ = val >> 8;
     *dest++ = val;
-    return val;
+    return dest;
 }
 
 uint8_t aura_unpack_8u(uint8_t *src) {

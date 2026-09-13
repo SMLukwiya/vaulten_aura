@@ -1,4 +1,5 @@
 #include "h2/frame.h"
+#include "bug_lib.h"
 #include "error_lib.h"
 #include "slab.h"
 #include "types_lib.h"
@@ -401,8 +402,7 @@ int aura_h2_parse_frame_payload(struct aura_h2_in_frame *in_frame) {
  */
 static void aura_encode_frame_header(uint8_t *dest, size_t frame_len, uint8_t type,
                                      uint8_t flags, uint32_t stream_id) {
-    if (frame_len > A_H2_MAX_HEADER_LEN)
-        app_exit(true, 0, "Invalid header length: %lu", A_H2_MAX_HEADER_LEN);
+    A_BUG_ON_2(frame_len > A_H2_MAX_FRAME_SIZE, true);
 
     dest = a_h2_pack_24u(dest, (uint32_t)frame_len);
     dest = a_h2_pack_8u(dest, type);
@@ -422,7 +422,6 @@ static inline void aura_encode_rst_stream_frame(uint8_t *dest, uint32_t frame_le
       A_H2_FRAME_FLAG_NONE,
       stream_id);
     uint8_t *d = a_h2_pack_32u(dest + A_H2_FRAME_HEADER_SIZE, err_num);
-    // memcpy(dest + A_H2_FRAME_HEADER_SIZE, &err_num, sizeof(uint32_t));
 }
 
 /**
