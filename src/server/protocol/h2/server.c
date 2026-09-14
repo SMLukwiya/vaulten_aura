@@ -419,6 +419,7 @@ static int a_h2_srv_close_conn_immediate(struct aura_h2_server_conn *c, int err,
     struct aura_conn *conn;
     struct aura_iovec reason = aura_h2_err_string[err_str_idx];
 
+    app_debug(true, 0, ">>>> a_h2_srv_close_conn_immediate");
     int rv = aura_h2_conn_enqueue_goaway(&c->core, c->core.local_goaway_stream_id, err, &reason);
     if (rv != A_H2_ERR_NONE)
         return rv;
@@ -452,7 +453,7 @@ static int a_h2_srv_close_connection(struct aura_h2_server_conn *c, int err, int
     return A_H2_ERR_NONE;
 }
 
-static int a_setup_server_preface(struct aura_h2_core *h2_c) {
+static int a_setup_server_preface(struct aura_h2_core *h2_c, int *err_str_idx) {
     uint32_t settings_len, wind_len, total_len; /* Frame length */
     uint8_t *out_data, *frame;
     uint32_t initial_window_size;
@@ -475,6 +476,7 @@ static int a_setup_server_preface(struct aura_h2_core *h2_c) {
       (void *)&settings,
       ARRAY_SIZE(settings));
     if (!out_data) {
+        *err_str_idx = A_H2_ERR_STR_IDX_INTERNAL_ERROR;
         return A_H2_INTERNAL_ERR;
     }
 
@@ -497,6 +499,7 @@ static int a_setup_server_preface(struct aura_h2_core *h2_c) {
       (uint8_t *)&initial_window_size,
       0);
     if (!out_data) {
+        *err_str_idx = A_H2_ERR_STR_IDX_INTERNAL_ERROR;
         return A_H2_INTERNAL_ERR;
     }
 
@@ -549,14 +552,10 @@ int aura_h2_srv_process_preface(struct aura_h2_server_conn *c, struct aura_slidi
     return A_ERR_NONE;
 }
 
-/**
- * We do not consider h2 established at this point yet.
- * Get app error from h2 error and tear down connetion
- * simply tear down the connection
- */
+/** */
 static int a_srv_process_preface_settings(struct aura_h2_server_conn *c, struct aura_sliding_buf *plain_buf) {
     struct aura_h2_in_frame *in_frame = &c->core.in_frame;
-    int rv, len, frame_len;
+    int rv, len, frame_len, err_str_idx;
     uint8_t *src;
 
     app_debug(true, 0, ">>>> a_srv_process_preface_settings");
@@ -569,17 +568,17 @@ static int a_srv_process_preface_settings(struct aura_h2_server_conn *c, struct 
     aura_h2_frame_dump(&in_frame->frame);
 
     if (in_frame->frame.type != A_H2_FRAME_TYPE_SETTINGS)
-        return A_ERR_FATAL;
+        return a_h2_srv_close_conn_immediate(c, A_H2_PROTOCOL_ERR, A_H2_ERR_STR_IDX_INVALID_ARG);
 
     frame_len = A_H2_FRAME_HEADER_SIZE + in_frame->frame.len;
-    rv = aura_h2_conn_process_settings(&c->core, in_frame, true);
+    rv = aura_h2_conn_process_settings(&c->core, in_frame, true, &err_str_idx);
     aura_sliding_buf_consume(plain_buf, frame_len);
     if (rv != A_H2_ERR_NONE)
-        return A_ERR_FATAL;
+        return a_h2_srv_close_conn_immediate(c, rv, err_str_idx);
 
-    rv = a_setup_server_preface(&c->core);
+    rv = a_setup_server_preface(&c->core, &err_str_idx);
     if (rv != A_H2_ERR_NONE)
-        return A_ERR_FATAL;
+        return a_h2_srv_close_conn_immediate(c, rv, err_str_idx);
 
     aura_h2_conn_transition_state(&c->state, A_H2_CONN_STATE_FRAMES);
 
@@ -1494,8 +1493,29 @@ static int a_srv_process_rst(struct aura_h2_server_conn *c, struct aura_h2_in_fr
 
 static int a_srv_process_settings(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame,
                                   struct aura_mem_ctx *mc) {
+    int rv, err_str_idx;
     aura_h2_sen_update(&c->core.sen, A_H2_SEN_EVT_SETTINGS_FLOOD, 0);
-    return aura_h2_conn_process_settings(&c->core, in_frame, true);
+    app_debug(true, 0, ">>>> a_srv_process_settings");
+
+    rv = aura_h2_conn_process_settings(&c->core, in_frame, true, &err_str_idx);
+    if (rv != A_H2_ERR_NONE)
+        return a_h2_srv_close_conn_immediate(c, rv, err_str_idx);
+
+    if (c->state == A_H2_CONN_STATE_PREFACE_SETTINGS) {
+        rv = a_setup_server_preface(&c->core, &err_str_idx);
+        if (rv != A_H2_ERR_NONE)
+            return a_h2_srv_close_conn_immediate(c, rv, err_str_idx);
+
+        aura_h2_conn_transition_state(&c->state, A_H2_CONN_STATE_FRAMES);
+
+        /**
+         *
+         */
+        struct aura_conn *conn = aura_container_of(c, struct aura_conn, h2_server);
+        aura_conn_transition_state(conn, A_CONN_STATE_ACTIVE);
+    }
+
+    return rv;
 }
 
 static int a_srv_process_ping(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame,
@@ -1592,11 +1612,14 @@ int aura_h2_srv_process_frame(struct aura_h2_server_conn *c, struct aura_sliding
     aura_h2_frame_dump(&in_frame->frame);
 
     if (aura_h2_frame_is_complete(in_frame, len)) {
-        if (in_frame->frame.type >= ARRAY_SIZE(frame_handlers)) {
-            app_debug(true, 0, "Unknown frame type: %d", in_frame->frame.type);
-            /* Consume and ignore unknown frame types */
+        /**
+         * Special handling First settings
+         * We expect a settings frame
+         */
+        if (c->state == A_H2_CONN_STATE_PREFACE_SETTINGS && in_frame->frame.type != A_H2_FRAME_TYPE_SETTINGS) {
+            rv = a_h2_srv_close_conn_immediate(c, A_H2_PROTOCOL_ERR, A_H2_ERR_STR_IDX_INVALID_ARG);
             aura_sliding_buf_consume(buf, in_frame->expected_bytes);
-            return rv;
+            return aura_h2_get_app_error(rv);
         }
 
         /**
@@ -1608,7 +1631,15 @@ int aura_h2_srv_process_frame(struct aura_h2_server_conn *c, struct aura_sliding
             in_frame->frame.type != A_H2_FRAME_TYPE_CONT &&
             c->core.cont_stream_id != in_frame->frame.stream_id) {
             rv = a_h2_srv_close_conn_immediate(c, A_H2_PROTOCOL_ERR, A_H2_ERR_STR_IDX_INVALID_ARG);
+            aura_sliding_buf_consume(buf, in_frame->expected_bytes);
             return aura_h2_get_app_error(rv);
+        }
+
+        if (in_frame->frame.type >= ARRAY_SIZE(frame_handlers)) {
+            app_debug(true, 0, "Unknown frame type: %d", in_frame->frame.type);
+            /* Consume and ignore unknown frame types */
+            aura_sliding_buf_consume(buf, in_frame->expected_bytes);
+            return rv;
         }
 
         rv = frame_handlers[in_frame->frame.type](c, in_frame, conn->mc);
@@ -1632,9 +1663,6 @@ int aura_h2_srv_process(struct aura_h2_server_conn *c, struct aura_sliding_buf *
             break;
 
         case A_H2_CONN_STATE_PREFACE_SETTINGS:
-            rv = a_srv_process_preface_settings(c, buf);
-            break;
-
         case A_H2_CONN_STATE_FRAMES:
             rv = aura_h2_srv_process_frame(c, buf);
             break;

@@ -497,7 +497,7 @@ int aura_h2_conn_close_stream(struct aura_h2_core *h2_c, struct aura_h2_stream *
  * Handle settings frame
  */
 int aura_h2_conn_process_settings(struct aura_h2_core *h2_c, struct aura_h2_in_frame *in_frame,
-                                  bool is_server);
+                                  bool is_server, int *err_str_idx);
 
 int aura_process_priority(struct aura_h2_core *h2_c, struct aura_h2_in_frame *in_frame);
 

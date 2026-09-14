@@ -45,33 +45,18 @@ add_subdirectory(src/cli)
 add_subdirectory(src/daemon)
 add_subdirectory(src/server)
 
-# SERVER TOOLS
-set(SERVER_PROBE_DIR ${PROJECT_SOURCE_DIR}/tools/probes/server)
-
-add_custom_target(
-    aura_server_tools
-    ALL
-    COMMAND $(MAKE) -C ${SERVER_PROBE_DIR}
-    ENABLE_DEBUG=APP_DEV_BUILD
-    CC="${CMAKE_C_COMPILER}"
-    EXTRA_CFLAGS="-I\"${PROJECT_INCLUDE_DIR}\""
-    EXTRA_TARGETS="\"${PROJECT_SOURCE_DIR}/lib/error_lib.c\""
-    WORKING_DIRECTORY ${SERVER_PROBE_DIR}
-    COMMENT "Building server tools"
-)
-
 # Path to makefile directory
-set(SERVER_PROBE_DIR2 ${PROJECT_SOURCE_DIR}/tools/probes/h2_server)
+set(SERVER_PROBE_DIR ${PROJECT_SOURCE_DIR}/tools/probes/h2_server)
 
 add_custom_target(
     aura_h2_server_tools
     ALL
-    COMMAND $(MAKE) -C ${SERVER_PROBE_DIR2}
+    COMMAND $(MAKE) -C ${SERVER_PROBE_DIR}
     ENABLE_DEBUG=APP_DEV_BUILD
     CC="${CMAKE_C_COMPILER}"
-    EXTRA_CFLAGS="\"-I${PROJECT_SOURCE_DIR}/src/server/include -I${PROJECT_SOURCE_DIR}/lib/memory -I${PROJECT_SOURCE_DIR}/lib -I${PROJECT_INCLUDE_DIR}\""
-    EXTRA_TARGETS="\"${PROJECT_SOURCE_DIR}/lib/error_lib.c ${PROJECT_SOURCE_DIR}/src/server/protocol/h2/hpack.c\""
-    WORKING_DIRECTORY ${SERVER_PROBE_DIR2}
+    EXTRA_CFLAGS="\"-I${PROJECT_SOURCE_DIR}/lib/memory -I${PROJECT_SOURCE_DIR}/lib -I${PROJECT_INCLUDE_DIR}\""
+    EXTRA_TARGETS="\"${PROJECT_SOURCE_DIR}/lib/error_lib.c ${PROJECT_SOURCE_DIR}/lib/hpack/core.c\""
+    WORKING_DIRECTORY ${SERVER_PROBE_DIR}
     COMMENT "Building h2 server tools"
 )
 

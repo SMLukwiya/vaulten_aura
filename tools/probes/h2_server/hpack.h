@@ -3,6 +3,6 @@
 
 #include <stdint.h>
 
-#include "h2/hpack.h"
+#include "hpack/core.h"
 
 #endif

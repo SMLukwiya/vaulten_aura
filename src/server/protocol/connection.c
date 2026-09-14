@@ -281,6 +281,7 @@ struct aura_dp_result aura_h2_server_process_hook(struct aura_dp_msg *dp_msg) {
     app_debug(true, 0, ">>>> aura_h2_server_process_hook");
 
     rv = c->state_handler(c, &dp_msg->buf);
+    app_debug(true, 0, ">>>> aura_h2_server_process_hook rv=%d", rv);
 
     switch (rv) {
     case A_ERR_AGAIN:
@@ -522,6 +523,7 @@ static int a_handle_handshake_async(struct aura_tls_ctx *tls_ctx, ptls_buffer_t 
     struct aura_conn *conn;
     int wait_fd;
 
+    app_debug(true, 0, ">>>> a_handle_handshake_async");
     A_BUG_ON_2(tls_ctx->async.in_flight, true);
     tls_ctx->async.in_flight = true;
 
@@ -672,20 +674,27 @@ int aura_conn_tcp_listener_event_handler(struct aura_srv_listener *listener, str
 }
 
 void aura_conn_process_handshake_queue(struct aura_srv_ctx *srv_ctx) {
-    struct aura_conn *conn;
+    struct aura_conn *conn, *_c;
     int rv;
 
-    while (!aura_list_is_empty(&srv_ctx->queues.handshake)) {
-        a_list_dequeue(conn, &srv_ctx->queues.handshake, c_list);
-
+    aura_list_for_each_safe_to_delete(conn, _c, &srv_ctx->queues.handshake, c_list) {
         rv = aura_conn_handshake(conn);
-        if (rv == A_ERR_AGAIN)
-            /* Add back */
-            aura_list_add(&srv_ctx->queues.active, &conn->c_list);
-        else if (rv == A_ERR_FATAL)
+
+        switch (rv) {
+        case A_ERR_AGAIN:
+            break;
+
+        case A_ERR_FATAL:
             aura_list_move(&srv_ctx->queues.reap, &conn->c_list);
-        else if (rv == A_ERR_NONE)
+            break;
+
+        case A_ERR_NONE:
             aura_list_move(&srv_ctx->queues.active, &conn->c_list);
+            break;
+
+        default:
+            break;
+        }
     }
 }
 
@@ -833,6 +842,9 @@ void aura_conn_process_active_queue(struct aura_srv_ctx *srv_ctx) {
 
                 // aura_h2_cli_conn_transition_state(conn->protocol_ctx, A_CONN_STATE_CLOSING);
             }
+            break;
+
+        default:
             break;
         }
     }

@@ -155,7 +155,7 @@ static inline void aura_conn_attach_inbound_hooks(struct aura_conn *conn,
 
 /* Check if conn should start destruction process */
 static inline bool aura_conn_should_close(struct aura_conn *conn) {
-    return conn->state == A_CONN_STATE_CLOSING;
+    return conn->state == A_H2_CONN_STATE_CLOSED;
 }
 
 /* Get conn ptls state */

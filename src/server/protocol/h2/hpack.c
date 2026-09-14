@@ -22,105 +22,6 @@ const char hpack_soft_err_found_invalid_char_in_header_value[] = "found an inval
 
 struct aura_hpack_static_table static_table;
 
-/**
- * Decode and extract integer into @out
- */
-static int a_hpack_decode_integer(const uint8_t **src, const uint8_t *src_end, uint8_t prefix_bits, int64_t *out) {
-    uint64_t value;
-    int32_t shift;
-    uint8_t prefix_max, curr;
-
-    if (prefix_bits < A_MIN_PREFIX_BITS || prefix_bits > A_MAX_PREFIX_BITS)
-        return A_HPACK_PROTOCOL_ERR;
-
-    if (*src >= src_end)
-        return A_HPACK_COMPRESSION_ERR;
-
-    prefix_max = (uint8_t)((1u << prefix_bits) - 1u);
-    curr = **src;
-    value = curr & prefix_max;
-    (*src)++;
-    /* value can fit in the prefix max */
-    if (value < prefix_max) {
-        *out = (int64_t)value;
-        return A_HPACK_OK;
-    }
-
-    /* decode upto 8 octets(64 bits, excluding prefix), that is guaranteed not to cause overflow */
-    shift = 0;
-    while (true) {
-        if (*src == src_end)
-            return A_HPACK_COMPRESSION_ERR;
-
-        curr = **src;
-        (*src)++;
-
-        /* check overflow */
-        if (shift >= 56)
-            return A_HPACK_COMPRESSION_ERR;
-
-        value += (int64_t)(curr & 127) << shift;
-        /* check if this is the last valid byte */
-        if ((curr & 128) == 0)
-            break;
-        shift += 7;
-    }
-    *out = value;
-    return A_HPACK_OK;
-}
-
-/**
- * Decodes huffman encoded string,
- * Return the string len on success
- * otherwise returns SIZE_MAX if hard fail
- */
-/**
- * Decodes huffman encoded string,
- */
-static int a_hpack_decode_huffman(char *dest, const uint8_t *src, uint64_t len, bool value_is_name, uint64_t *consumed) {
-    char *ptr;
-    const uint8_t *src_end;
-    uint8_t ch, char_errs = 0;
-    const nghttp2_huff_decode e = {0, 0x00, 0}, *entry = &e;
-
-    if (value_is_name && len == 0)
-        return A_HPACK_INVALID_NAME_ERR;
-
-    ptr = dest;
-    src_end = src + len;
-    for (; src < src_end; ++src) {
-        ch = *src;
-        entry = huff_decode_table[entry->state] + (ch >> 4);
-        if (entry->flags & NGHTTP2_HUFF_SYM) {
-            *ptr++ = entry->sym;
-            char_errs |= (entry->flags & NGHTTP2_HUFF_INVALID_CHARS);
-        }
-        entry = huff_decode_table[entry->state] + (ch & 0xf);
-        if (entry->flags & NGHTTP2_HUFF_SYM) {
-            *ptr++ = entry->sym;
-            char_errs |= (entry->flags & NGHTTP2_HUFF_INVALID_CHARS);
-        }
-    }
-
-    if (!(entry->flags & NGHTTP2_HUFF_ACCEPTED))
-        return A_HPACK_COMPRESSION_ERR;
-
-    /* validate */
-    if (value_is_name) {
-        /* pseudo-headers are checked later in 'decode_header' */
-        if (!aura_hpack_is_pseudo_header(dest) && (char_errs & NGHTTP2_HUFF_INVALID_FOR_HEADER_NAME) != 0) {
-            if ((char_errs & NGHTTP2_HUFF_UPPER_CASE_CHAR) != 0) {
-                return A_HPACK_PROTOCOL_ERR;
-            }
-            return A_HPACK_INVALID_NAME_ERR;
-        }
-    } else if ((char_errs & NGHTTP2_HUFF_INVALID_FOR_HEADER_VALUE) != 0 || !aura_hpack_header_value_valid(dest, ptr - dest))
-        return A_HPACK_INVALID_VALUE_ERR;
-
-    *consumed = ptr - dest;
-    return A_HPACK_OK;
-}
-
 static int a_hpack_validate_header_name(const uint8_t *src, uint64_t len) {
     uint8_t ch;
 
@@ -794,43 +695,6 @@ uint8_t *aura_encode_status(uint8_t *dest, int status) {
     return dest;
 }
 
-// uint8_t *aura_encode_content_length(uint8_t *dest, size_t value) {
-//     char buf[32];
-//     char *p = buf + sizeof(buf);
-//     size_t l;
-
-//     do {
-//         *--p = '0' + value % 10;
-//     } while ((value /= 10) != 0);
-//     l = buf + sizeof(buf) - p;
-
-//     *dest++ = 0x0f; /* 15 */
-//     *dest++ = 0x0d; /* + 13 = 28(index) */
-//     *dest++ = (uint8_t)l;
-//     memcpy(dest, p, l);
-//     dest += l;
-
-//     return dest;
-// }
-
-// static void a_hpack_search_static_table(struct aura_header_field *nv, bool *exact_match) {
-//     const struct aura_hpack_tab_entry *entry;
-//     size_t n;
-
-//     entry = aura_hpack_static_tab_get_by_token(&static_table, nv->token);
-//     if (!entry)
-//         return;
-
-//     if (nv->flags & A_HDR_FIELD_FLAG_VALUE_INTERNED) {
-//         *exact_match = entry->header_field.value.interned == nv->value.interned;
-//         return;
-//     }
-
-//     if (aura_mem_is_eq(nv->value.raw.str.base, nv->value.raw.str.len, entry->header_field.value.raw.str.base, entry->header_field.value.raw.str.len)) {
-//         *exact_match = true;
-//     }
-// }
-
 static int a_hpack_dyn_tab_add_new_entry(struct aura_mem_ctx *mc, struct aura_hpack_dyn_tab *dyn_tab,
                                          struct aura_header_field *header) {
     struct aura_hpack_tab_entry *entry_slot;
@@ -1003,6 +867,7 @@ static int64_t a_hpack_decode_len(uint8_t *src, const uint8_t *end, uint64_t *ou
         n = prefix_max;
         if (src > end) {
             *out = n;
+            *done = true;
             return 1;
         }
     }
@@ -1023,7 +888,7 @@ static int64_t a_hpack_decode_len(uint8_t *src, const uint8_t *end, uint64_t *ou
         add <<= start_shift;
 
         /* if add + n > UINT64_MAX */
-        if (UINT64_MAX - add < n) {
+        if (n > UINT64_MAX - add) {
             app_debug(true, 0, "decoder: addition overflow");
             return -1;
         }

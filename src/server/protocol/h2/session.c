@@ -338,7 +338,7 @@ int aura_h2_conn_close_stream(struct aura_h2_core *h2_c, struct aura_h2_stream *
 }
 
 int aura_h2_conn_process_settings(struct aura_h2_core *h2_c, struct aura_h2_in_frame *in_frame,
-                                  bool is_server) {
+                                  bool is_server, int *err_str_idx) {
     struct aura_h2_frame *frame;
     struct aura_h2_sched_iov *s_iov;
     struct aura_h2_stream *stream;
@@ -350,16 +350,14 @@ int aura_h2_conn_process_settings(struct aura_h2_core *h2_c, struct aura_h2_in_f
     app_debug(true, 0, ">>>> aura_h2_conn_process_settings");
     frame = &in_frame->frame;
     if (frame->stream_id != 0) {
-        rv = A_H2_PROTOCOL_ERR;
-        reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG];
-        goto goaway;
+        *err_str_idx = A_H2_ERR_STR_IDX_INVALID_ARG;
+        return A_H2_PROTOCOL_ERR;
     }
 
     if (aura_h2_frame_is_ack(frame->flags)) {
         if (frame->len != 0) {
-            rv = A_H2_FRAME_SIZE_ERR;
-            reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG];
-            goto goaway;
+            *err_str_idx = A_H2_ERR_STR_IDX_INVALID_ARG;
+            return A_H2_FRAME_SIZE_ERR;
         }
     } else {
         /* Store prev window size before updating it */
@@ -371,8 +369,8 @@ int aura_h2_conn_process_settings(struct aura_h2_core *h2_c, struct aura_h2_in_f
         in_frame->settings_payload = h2_c->peer_settings;
         rv = aura_h2_parse_frame_payload(in_frame);
         if (rv != A_H2_ERR_NONE) {
-            reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INVALID_ARG];
-            goto goaway;
+            *err_str_idx = A_H2_ERR_STR_IDX_INVALID_ARG;
+            return rv;
         }
 
         /* copy new settings with the changed values */
@@ -391,9 +389,8 @@ int aura_h2_conn_process_settings(struct aura_h2_core *h2_c, struct aura_h2_in_f
           frame_len,
           NULL, 0);
         if (!out_data) {
-            rv = A_H2_INTERNAL_ERR;
-            reason = &aura_h2_err_string[A_H2_ERR_STR_IDX_INTERNAL_ERROR];
-            goto goaway;
+            *err_str_idx = A_H2_ERR_STR_IDX_INTERNAL_ERROR;
+            return A_H2_INTERNAL_ERR;
         }
 
         s_iov = aura_h2_get_sched_iov(h2_c, A_H2_SCHED_CONTROL);
@@ -426,14 +423,6 @@ int aura_h2_conn_process_settings(struct aura_h2_core *h2_c, struct aura_h2_in_f
     }
 
     return A_H2_ERR_NONE;
-
-goaway:
-    aura_h2_conn_enqueue_goaway(
-      h2_c,
-      h2_c->local_goaway_stream_id,
-      rv,
-      reason);
-    return rv;
 }
 
 static uint64_t stream_hp_get_first_vruntime(struct aura_heap *hp) {

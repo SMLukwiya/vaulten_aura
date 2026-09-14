@@ -44,7 +44,6 @@ void aura_h2_sched_destroy(struct aura_h2_sched2 *sched) {
         if (idx == A_H2_SCHED_URG_CTRL_PRIMARY_SLOT_SZ)
             break;
 
-        app_debug(true, 0, "PRI NOT EMPTY=%u", idx);
         s_iov = &sched->queues.urg_ctrl_frames[idx];
         aura_h2_sched_iov_dump(s_iov);
         aura_h2_sched_iov_destroy(s_iov);
@@ -56,13 +55,11 @@ void aura_h2_sched_destroy(struct aura_h2_sched2 *sched) {
         if (idx == A_H2_SCHED_URG_CTRL_SPILL_SLOT_SZ)
             break;
 
-        app_debug(true, 0, "SPILL NOT EMPTY=%u", idx);
         s_iov = &sched->queues.urg_ctrl_spill[idx];
         aura_h2_sched_iov_destroy(s_iov);
         aura_bitmap_clear_bit(idx, sched->queues.urg_ctr_spill_bitmap);
     }
 
-    app_debug(true, 0, "WRITE_BUF");
     aura_sliding_buf_destroy(&sched->write_buf);
 
     for (int i = 0; i < A_PRI_EXT_NR_URGENCY_LEVELS; ++i) {

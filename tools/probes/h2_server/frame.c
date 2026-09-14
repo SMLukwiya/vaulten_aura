@@ -35,20 +35,7 @@ static void aura_h2_probe_write_frame_header(uint8_t *dest, uint32_t len, uint8_
     dest = aura_pack_32u(dest, stream_id);
 }
 
-int aura_h2_probe_write_frame(uint8_t *dest, uint32_t len, uint8_t type, uint8_t flags, uint32_t stream_id, const uint8_t *payload) {
-    return 0;
-}
-
-int aura_h2_probe_hpack_parse_frame_header(struct aura_h2_probe_frame *frame, uint8_t *buf, uint64_t len) {
-    if (len < A_H2_FRAME_HEADER_SIZE)
-        return 1;
-
-    frame->len = aura_unpack_24u(buf);
-
-    frame->type = aura_unpack_8u(buf + 3);
-    frame->flags = aura_unpack_8u(buf + 4);
-    frame->stream_id = aura_unpack_32u(buf + 5) & A_H2_STREAM_ID_MASK;
-    frame->payload = buf + A_H2_FRAME_HEADER_SIZE;
-
+int aura_h2_probe_parse_frame_header(struct aura_h2_frame *frame, const uint8_t *buf, uint64_t len) {
+    aura_h2_decode_frame_header(frame, buf);
     return 0;
 }
