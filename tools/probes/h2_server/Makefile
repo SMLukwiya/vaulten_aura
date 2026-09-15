@@ -11,7 +11,9 @@ endif
 
 all: run_probe
 
-run_probe: run_probe.c utils.c frame.c hpack.c probe.c scenarios/connection_preface.c $(EXTRA_TARGETS)
+SCENARIOS = scenarios/connection_preface.c scenarios/headers.c scenarios/continuation.c
+
+run_probe: run_probe.c utils.c frame.c hpack.c probe.c $(SCENARIOS) $(EXTRA_TARGETS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 clean:

@@ -84,11 +84,11 @@ int aura_h2_probe_tls_handshake(struct aura_h2_probe_ctx *p_ctx) {
 
 void aura_h2_probe_close(struct aura_h2_probe_ctx *p_ctx) {
     int sock_fd = SSL_get_fd(p_ctx->ssl);
-    close(sock_fd);
 
     SSL_shutdown(p_ctx->ssl);
     SSL_free(p_ctx->ssl);
     SSL_CTX_free(p_ctx->ssl_ctx);
+    close(sock_fd);
 }
 
 int aura_h2_probe_send_preface(struct aura_h2_probe_ctx *p_ctx) {
@@ -117,7 +117,7 @@ int aura_h2_probe_recv(struct aura_h2_probe_ctx *p_ctx, uint8_t *buf, uint64_t l
     return SSL_read(p_ctx->ssl, buf, len);
 }
 
-int aura_h2_probe_expect_goaway(const uint8_t *src_in, uint64_t len, int err) {
+int64_t aura_h2_probe_expect_goaway(const uint8_t *src_in, uint64_t len, int err) {
     struct aura_h2_frame frame;
     struct aura_h2_goaway_payload goaway;
 
@@ -126,15 +126,43 @@ int aura_h2_probe_expect_goaway(const uint8_t *src_in, uint64_t len, int err) {
     assert(frame.stream_id == 0);
 
     aura_h2_decode_goaway_payload(&frame, &goaway);
-    assert(goaway.error_code == err);
-    return 0;
+    assert(goaway.error_code == (uint32_t)err);
+    return frame.len + A_H2_FRAME_HEADER_SIZE;
 }
 
-int aura_h2_probe_expect_settings(const uint8_t *src_in, uint64_t len) {
+int64_t aura_h2_probe_expect_settings(const uint8_t *src_in, uint64_t len) {
     struct aura_h2_frame frame;
     struct aura_h2_settings_payload settings;
 
     assert(aura_h2_probe_parse_frame_header(&frame, src_in, len) == 0);
     assert(frame.type == A_H2_FRAME_TYPE_SETTINGS);
     assert(frame.stream_id == 0);
+
+    return frame.len + A_H2_FRAME_HEADER_SIZE;
+}
+
+int64_t aura_h2_probe_expect_rst_stream(const uint8_t *src_in, uint64_t len, int err) {
+    struct aura_h2_frame frame;
+    struct aura_h2_rst_stream_payload rst;
+
+    assert(aura_h2_probe_parse_frame_header(&frame, src_in, len) == 0);
+    assert(frame.type == A_H2_FRAME_TYPE_RST);
+    assert(frame.stream_id != 0);
+    assert(frame.len == 4);
+
+    aura_h2_decode_rst_stream_payload(&frame, &rst);
+    assert(rst.error_code == (uint32_t)err);
+}
+
+int64_t aura_h2_probe_expect_wind_update(const uint8_t *src_in, uint64_t len, uint32_t stream_id) {
+    struct aura_h2_frame frame;
+    struct aura_h2_wind_update_payload wind;
+
+    assert(aura_h2_probe_parse_frame_header(&frame, src_in, len) == 0);
+    assert(frame.type == A_H2_FRAME_TYPE_WIND_UPDATE);
+    assert(frame.stream_id == stream_id);
+    assert(frame.len == 4);
+
+    aura_h2_decode_wind_update_payload(&frame, &wind);
+    assert(wind.increment > 0 && wind.increment < 0xFFFFFFFF);
 }

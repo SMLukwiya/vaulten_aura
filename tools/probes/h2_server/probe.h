@@ -29,7 +29,9 @@ int aura_h2_probe_send_preface(struct aura_h2_probe_ctx *p_ctx);
 int aura_h2_probe_send_preface_settings(struct aura_h2_probe_ctx *p_ctx);
 int aura_h2_probe_send(struct aura_h2_probe_ctx *p_ctx, const uint8_t *buf, uint64_t len, uint64_t start, uint64_t end);
 int aura_h2_probe_recv(struct aura_h2_probe_ctx *p_ctx, uint8_t *buf, uint64_t len);
-int aura_h2_probe_expect_goaway(const uint8_t *src_in, uint64_t len, int err);
-int aura_h2_probe_expect_settings(const uint8_t *src_in, uint64_t len);
+int64_t aura_h2_probe_expect_goaway(const uint8_t *src_in, uint64_t len, int err);
+int64_t aura_h2_probe_expect_settings(const uint8_t *src_in, uint64_t len);
+int64_t aura_h2_probe_expect_rst_stream(const uint8_t *src_in, uint64_t len, int err);
+int64_t aura_h2_probe_expect_wind_update(const uint8_t *src_in, uint64_t len, uint32_t stream_id);
 
 #endif

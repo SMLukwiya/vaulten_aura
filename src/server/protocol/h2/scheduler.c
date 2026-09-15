@@ -103,6 +103,8 @@ struct aura_h2_sched_iov *aura_h2_get_sched_iov(struct aura_h2_core *h2_c, uint8
 
         app_debug(true, 0, "aura_h2_get_sched_iov urgent idx=%d", idx);
         if (idx != A_H2_SCHED_URG_CTRL_PRIMARY_SLOT_SZ) {
+            /* @todo: comment on this addition */
+            idx += A_H2_CTRL_FRAME_OFF;
             aura_bitmap_set_bit(idx, sched->queues.urg_ctr_pri_bitmap);
             s_iov = &sched->queues.urg_ctrl_frames[idx];
             memset(s_iov, 0, sizeof(*s_iov));
@@ -505,7 +507,7 @@ int aura_h2_schedule(struct aura_h2_core *h2_c) {
          */
         idx = aura_bitmap_find_next_bit(
           sched->queues.urg_ctr_pri_bitmap,
-          A_H2_CTRL_FRAME_OFF + +sched->queues.urg_frame_off,
+          A_H2_CTRL_FRAME_OFF + sched->queues.urg_frame_off,
           A_H2_SCHED_URG_CTRL_PRIMARY_SLOT_SZ);
 
         if (idx != A_H2_SCHED_URG_CTRL_PRIMARY_SLOT_SZ) {

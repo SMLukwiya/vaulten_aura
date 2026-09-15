@@ -41,7 +41,7 @@ int aura_tls_input_decode(ptls_t *ptls, struct aura_sliding_buf *buf, bool *clos
         len -= consumed;
         aura_sliding_buf_consume(buf, consumed);
     } while (len > 0);
-    app_debug(true, 0, "aura_tls_input_decode rv = 0x%x", rv);
+    app_debug(true, 0, "aura_tls_input_decode rv = 0x%x, off=%d", rv, plain_buf.off);
 
     *close_notify = false;
     if (rv == (PTLS_ERROR_CLASS_PEER_ALERT + PTLS_ALERT_CLOSE_NOTIFY)) {

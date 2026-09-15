@@ -22,10 +22,10 @@ int aura_dp_pipeline_execute(struct aura_dp_msg *msg) {
         switch (rv) {
         case A_DP_HOOK_CONT:
         case A_DP_HOOK_DONE:
+        case A_DP_HOOK_WAIT:
             msg->active_idx = result.target_idx;
             break;
 
-        case A_DP_HOOK_WAIT:
         case A_DP_HOOK_ERR:
             /* Early exit */
             return rv;

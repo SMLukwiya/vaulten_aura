@@ -3,33 +3,6 @@
 #include "core.h"
 #include "hpack_huffman_tb_srv.h"
 
-uint64_t aura_encode_status(uint8_t *dest, int status) {
-    uint8_t *start = dest;
-
-    switch (status) {
-#define COMMON_CODE(code, st)  \
-    case st:                   \
-        *dest++ = 0x80 | code; \
-        break;
-        COMMON_CODE(8, 200);
-        COMMON_CODE(9, 204);
-        COMMON_CODE(10, 206);
-        COMMON_CODE(11, 304);
-        COMMON_CODE(12, 400);
-        COMMON_CODE(13, 404);
-        COMMON_CODE(14, 500);
-#undef COMMON_CODE
-    default:
-        /* use literal header field without indexing - indexed name */
-        *dest++ = 8;
-        *dest++ = 3;
-        sprintf((char *)dest, "%d", status);
-        dest += 3;
-        break;
-    }
-    return dest - start;
-}
-
 /* Count the number of bytes taken by the length to be encoded */
 static uint64_t a_hpack_count_encoded_len(uint64_t prefix, uint64_t n) {
     uint64_t prefix_max, len = 0;
@@ -304,7 +277,7 @@ uint64_t aura_hpack_encode_indexed_block(uint8_t *dest, uint64_t idx) {
 
 /* Encode indexed name representation */
 uint64_t aura_hpack_encode_indexed_name(uint8_t *dest, uint64_t dest_len, uint64_t idx,
-                                        struct aura_iovec *value, a_hpack_indexing_mode ind_mode) {
+                                        struct aura_iovec *value, uint8_t ind_mode) {
     uint64_t prefix;
     uint8_t *start = dest;
 
@@ -323,7 +296,7 @@ uint64_t aura_hpack_encode_indexed_name(uint8_t *dest, uint64_t dest_len, uint64
 
 /* Encode new name representation */
 uint64_t aura_hpack_encode_new_name(uint8_t *dest, uint64_t dest_len, struct aura_iovec *name,
-                                    struct aura_iovec *value, a_hpack_indexing_mode ind_mode) {
+                                    struct aura_iovec *value, uint8_t ind_mode) {
     uint8_t *start = dest;
 
     *dest++ = a_hpack_pack_binary_fmt(ind_mode);
@@ -352,5 +325,32 @@ uint64_t aura_hpack_encode_content_length(uint8_t *dest, uint64_t value) {
     memcpy(dest, p, l);
     dest += l;
 
+    return dest - start;
+}
+
+uint64_t aura_encode_status(uint8_t *dest, int status) {
+    uint8_t *start = dest;
+
+    switch (status) {
+#define COMMON_CODE(code, st)  \
+    case st:                   \
+        *dest++ = 0x80 | code; \
+        break;
+        COMMON_CODE(8, 200);
+        COMMON_CODE(9, 204);
+        COMMON_CODE(10, 206);
+        COMMON_CODE(11, 304);
+        COMMON_CODE(12, 400);
+        COMMON_CODE(13, 404);
+        COMMON_CODE(14, 500);
+#undef COMMON_CODE
+    default:
+        /* use literal header field without indexing - indexed name */
+        *dest++ = 8;
+        *dest++ = 3;
+        sprintf((char *)dest, "%d", status);
+        dest += 3;
+        break;
+    }
     return dest - start;
 }

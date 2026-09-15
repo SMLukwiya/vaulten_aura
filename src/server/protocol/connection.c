@@ -281,7 +281,6 @@ struct aura_dp_result aura_h2_server_process_hook(struct aura_dp_msg *dp_msg) {
     app_debug(true, 0, ">>>> aura_h2_server_process_hook");
 
     rv = c->state_handler(c, &dp_msg->buf);
-    app_debug(true, 0, ">>>> aura_h2_server_process_hook rv=%d", rv);
 
     switch (rv) {
     case A_ERR_AGAIN:

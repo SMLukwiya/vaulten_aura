@@ -81,14 +81,19 @@ typedef enum {
     A_HPACK_STATUS_CB,
 } aura_hpack_cb_idx;
 
-/* Hpack errors */
+/**
+ * Hpack errors
+ * Lower level error can replace upper
+ * level error in the decoder.
+ * see 'aura_hpack_set_decoder_soft_err' below
+ */
 typedef enum {
     A_HPACK_OK = 0,
-    A_HPACK_INVALID_NAME_ERR = -1,
-    A_HPACK_INVALID_VALUE_ERR = -2,
-    A_HPACK_INVALID_HDR_FIELD_ERR = -3,
-    A_HPACK_DUPLICATE_HDR_ERR = -4,
-    A_HPACK_INVALID_PATH_ERR = -5,
+    A_HPACK_INVALID_PATH_ERR = -1,
+    A_HPACK_INVALID_HDR_FIELD_ERR = -2,
+    A_HPACK_DUPLICATE_HDR_ERR = -3,
+    A_HPACK_INVALID_NAME_ERR = -4,
+    A_HPACK_INVALID_VALUE_ERR = -5,
     A_HPACK_SOFT_ERR = -6, /* Soft error boundary */
     A_HPACK_COMPRESSION_ERR = -7,
     A_HPACK_PROTOCOL_ERR = -8,
@@ -344,7 +349,7 @@ static inline uint32_t aura_hpack_tab_get_entry_cnt(struct aura_hpack_dyn_tab *t
 
 /* update the decoder error if not set */
 static inline void aura_hpack_set_decoder_soft_err(struct aura_hpack_decoder *dec, int err) {
-    if (dec->soft_error == 0)
+    if (err < dec->soft_error)
         dec->soft_error = err;
 }
 

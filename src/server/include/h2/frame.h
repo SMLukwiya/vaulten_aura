@@ -204,7 +204,7 @@ static inline void aura_h2_frame_reset_inframe(struct aura_h2_in_frame *in_frame
 }
 
 static inline int aura_h2_get_frame_error(int rv) {
-    return -(rv);
+    return rv < 0 ? -(rv) : rv;
 }
 
 /**/

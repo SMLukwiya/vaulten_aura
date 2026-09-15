@@ -55,7 +55,7 @@ add_custom_target(
     ENABLE_DEBUG=APP_DEV_BUILD
     CC="${CMAKE_C_COMPILER}"
     EXTRA_CFLAGS="\"-I${PROJECT_SOURCE_DIR}/lib/memory -I${PROJECT_SOURCE_DIR}/lib -I${PROJECT_INCLUDE_DIR}\""
-    EXTRA_TARGETS="\"${PROJECT_SOURCE_DIR}/lib/error_lib.c ${PROJECT_SOURCE_DIR}/lib/hpack/core.c\""
+    EXTRA_TARGETS="\"${PROJECT_SOURCE_DIR}/lib/error_lib.c ${PROJECT_SOURCE_DIR}/lib/utils_lib.c ${PROJECT_SOURCE_DIR}/lib/hpack/core.c\""
     WORKING_DIRECTORY ${SERVER_PROBE_DIR}
     COMMENT "Building h2 server tools"
 )

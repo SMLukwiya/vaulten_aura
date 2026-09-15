@@ -77,6 +77,7 @@ int aura_h2_conn_enqueue_goaway(struct aura_h2_core *h2_c, uint32_t last_stream_
     uint8_t *out_data;
     int rv;
 
+    app_debug(true, 0, ">>>> aura_h2_conn_enqueue_goaway");
     if (h2_c->flags & A_H2_CORE_FLAG_GOAWAY_SENT)
         return A_H2_ERR_NONE;
 
@@ -321,8 +322,8 @@ int aura_h2_conn_close_stream(struct aura_h2_core *h2_c, struct aura_h2_stream *
     if (stream->state == A_H2_STREAM_STATE_CLOSING)
         return A_H2_ERR_NONE;
 
-    if (err_num != 0)
-        if (aura_h2_conn_enqueue_rst_frame(h2_c, stream->stream_id, err_num) < 0)
+    if (err_num != A_H2_ERR_NONE)
+        if (aura_h2_conn_enqueue_rst_frame(h2_c, stream->stream_id, aura_h2_get_frame_error(err_num)) < 0)
             return A_H2_INTERNAL_ERR;
 
     aura_h2_stream_transition_state(stream, A_H2_STREAM_STATE_CLOSING);

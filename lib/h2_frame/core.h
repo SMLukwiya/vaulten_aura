@@ -113,7 +113,7 @@ struct aura_h2_wind_update_payload {
     uint32_t increment;
 };
 
-static inline void aura_h2_frame_dump(struct aura_h2_frame *f, bool _syslog) {
+static inline void _aura_h2_frame_dump(struct aura_h2_frame *f, bool _syslog) {
     app_debug(_syslog, 0, "H2 FRAME");
     app_debug(_syslog, 0, "    Length: %lu", f->len);
     app_debug(_syslog, 0, "    Stream id: %lu", f->stream_id);
@@ -179,13 +179,28 @@ static inline void aura_h2_decode_goaway_payload(struct aura_h2_frame *frame, st
     }
 }
 
-static inline void aura_h2_decode_frame_header(struct aura_h2_frame *frame, const uint8_t *src) {
+static inline void aura_h2_decode_rst_stream_payload(struct aura_h2_frame *frame, struct aura_h2_rst_stream_payload *payload) {
+    payload->error_code = a_h2_unpack_32u(frame->payload);
+}
 
+static inline void aura_h2_decode_wind_update_payload(struct aura_h2_frame *frame, struct aura_h2_wind_update_payload *payload) {
+    payload->increment = a_h2_unpack_32u(frame->payload) & A_H2_STREAM_ID_MASK;
+}
+
+static inline void aura_h2_decode_frame_header(struct aura_h2_frame *frame, const uint8_t *src) {
     frame->len = a_h2_unpack_24u(src);
     frame->type = a_h2_unpack_8u(src + 3);
     frame->flags = a_h2_unpack_8u(src + 4);
     frame->stream_id = a_h2_unpack_32u(src + 5) & A_H2_STREAM_ID_MASK;
     frame->payload = src + A_H2_FRAME_HEADER_SIZE;
+}
+
+static inline void aura_h2_encode_frame_header(uint8_t *dest, size_t frame_len, uint8_t type,
+                                               uint8_t flags, uint32_t stream_id) {
+    dest = a_h2_pack_24u(dest, (uint32_t)frame_len);
+    dest = a_h2_pack_8u(dest, type);
+    dest = a_h2_pack_8u(dest, flags);
+    dest = a_h2_pack_32u(dest, stream_id);
 }
 
 #endif
