@@ -128,9 +128,15 @@ struct aura_conn {
     struct aura_iovec server_name;
     struct aura_dp_pipeline_hook *in_hooks; /* Inbound hooks */
     uint8_t in_hooks_cnt;                   /* Hooks count */
-    bool is_server;                         /* Not client connection */
-    bool is_secure;                         /* Encrypted enabled connection */
-    bool send_close_notify;                 /* send close notify to the user */
+    /**
+     * Underlying protocol sentinel action
+     * Some actions need the help of the parent
+     * connection execute
+     */
+    uint8_t prot_sen_action;
+    bool is_server;         /* Not client connection */
+    bool is_secure;         /* Encrypted enabled connection */
+    bool send_close_notify; /* send close notify to the user */
 };
 
 /* Transition connection state */
@@ -172,9 +178,13 @@ static inline void aura_conn_set_server_name(struct aura_conn *conn, const uint8
     conn->server_name.len = len;
 }
 
-/* */
+/* Connection is ready to process data  */
 static inline bool aura_conn_is_established(struct aura_conn *conn) {
     return conn->state == A_CONN_STATE_ESTABLISHED;
+}
+
+static inline void aura_conn_sentinel_update(struct aura_conn *conn, uint8_t action, void *arg) {
+    aura_conn_sen_update(&conn->sen, action, arg);
 }
 
 /* Create Generic connection */

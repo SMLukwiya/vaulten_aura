@@ -48,6 +48,7 @@ struct aura_pri_ext {
 
 typedef enum {
     A_H2_STREAM_FLAG_NONE = 0,
+    A_H2_STREAM_FLAG_END_STREAM = 1,
     A_H2_STREAM_FLAG_HDRS_RECD = 1 << 1,
     A_H2_STREAM_FLAG_READ_DATA = 1 << 2,
     A_H2_STREAM_FLAG_READ_TRAILER = 1 << 3,

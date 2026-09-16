@@ -152,6 +152,8 @@ int64_t aura_h2_probe_expect_rst_stream(const uint8_t *src_in, uint64_t len, int
 
     aura_h2_decode_rst_stream_payload(&frame, &rst);
     assert(rst.error_code == (uint32_t)err);
+
+    return frame.len + A_H2_FRAME_HEADER_SIZE;
 }
 
 int64_t aura_h2_probe_expect_wind_update(const uint8_t *src_in, uint64_t len, uint32_t stream_id) {
@@ -165,4 +167,29 @@ int64_t aura_h2_probe_expect_wind_update(const uint8_t *src_in, uint64_t len, ui
 
     aura_h2_decode_wind_update_payload(&frame, &wind);
     assert(wind.increment > 0 && wind.increment < 0xFFFFFFFF);
+
+    return frame.len + A_H2_FRAME_HEADER_SIZE;
+}
+
+int64_t aura_h2_probe_expect_to_have(const uint8_t *src_in, uint64_t len, uint32_t frame_type, uint32_t stream_id) {
+    struct aura_h2_frame frame;
+    bool seen_type = false;
+    uint8_t *src = (uint8_t *)src_in;
+    uint64_t off = 0;
+    uint32_t s_id;
+
+    while (len > 0) {
+        assert(aura_h2_probe_parse_frame_header(&frame, src + off, len) == 0);
+        if (frame.type == frame_type) {
+            seen_type = true;
+            s_id = frame.stream_id;
+        }
+        off += frame.len;
+        len -= frame.len + A_H2_FRAME_HEADER_SIZE;
+    }
+
+    assert(seen_type);
+    assert(stream_id == frame.stream_id);
+
+    return 0;
 }

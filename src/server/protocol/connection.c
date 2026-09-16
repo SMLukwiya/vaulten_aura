@@ -798,6 +798,17 @@ static int aura_conn_process(struct aura_conn *conn) {
     return rv;
 }
 
+/* check connection sentinel update */
+static inline void a_conn_process_sentinel_update(struct aura_srv_ctx *ctx, struct aura_conn *conn) {
+    if (conn->sen.decision.sen_action == A_CONN_SEN_ACT_HARD_CLOSE) {
+        ctx->evt_loop->ops->remove(ctx->evt_loop, conn->sock.sock_fd);
+        /* move to reap */
+        aura_list_move(&ctx->queues.reap, &conn->c_list);
+    } else if (conn->sen.decision.sen_action == A_CONN_SEN_ACT_THROTTLE) {
+        /* @todo: throttle (probably timer) */
+    }
+}
+
 void aura_conn_process_active_queue(struct aura_srv_ctx *srv_ctx) {
     struct aura_conn *conn, *_c;
     struct aura_rh_map_key key;
@@ -809,13 +820,13 @@ void aura_conn_process_active_queue(struct aura_srv_ctx *srv_ctx) {
 
         switch (rv) {
         case A_ERR_AGAIN:
-            /* Add back */
+            a_conn_process_sentinel_update(srv_ctx, conn);
             break;
 
         case A_ERR_NONE:
             if (!aura_conn_should_close(conn)) {
                 /* Run conn sentinel */
-                aura_conn_sen_evaluate(&conn->sen, conn->prot_type);
+                a_conn_process_sentinel_update(srv_ctx, conn);
                 break;
             } else {
                 aura_list_move(&srv_ctx->queues.reap, &conn->c_list);
@@ -838,8 +849,6 @@ void aura_conn_process_active_queue(struct aura_srv_ctx *srv_ctx) {
                 pthread_mutex_lock(&srv_ctx->conn_pool.mutex);
                 aura_rh_map_del(&srv_ctx->conn_pool.pool, &key, NULL);
                 pthread_mutex_unlock(&srv_ctx->conn_pool.mutex);
-
-                // aura_h2_cli_conn_transition_state(conn->protocol_ctx, A_CONN_STATE_CLOSING);
             }
             break;
 

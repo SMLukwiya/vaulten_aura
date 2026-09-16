@@ -7,8 +7,8 @@
 #include <stdint.h>
 #include <string.h>
 
-#define A_H2_SEN_SCALE 3
-#define A_H2_EWMA_SMALL_FRAME_SIZE_THRESHOLD (16 << A_H2_SEN_SCALE)
+#define A_H2_SEN_SCALE 5
+#define A_H2_EWMA_SMALL_FRAME_SIZE_THRESHOLD (2 << A_H2_SEN_SCALE)
 /* Expect 10ms interval for settings updates */
 #define A_H2_SETTINGS_MIN_DELTA_MS 10UL
 /* Expect 2ms internal for ping, assuming bad network */
@@ -107,8 +107,6 @@ static inline void aura_h2_sen_score_update(uint8_t *score, int n) {
 }
 
 static inline void aura_conn_sen_update_ewma_u32(uint32_t *ema, uint32_t sample) {
-    int64_t m;
-
     if (*ema == 0) {
         *ema = sample << A_H2_SEN_SCALE;
         return;
@@ -199,7 +197,6 @@ static inline void aura_h2_sen_update(struct aura_h2_sentinel *sen, aura_h2_conn
 
     case A_H2_SEN_EVT_TINY_FRAME_FLOOD:
         sen->frames_cnt++;
-        // sen->payload_rx += val;
         aura_conn_sen_update_ewma_u32(&sen->ema_frame_sz, val);
         sen->flags |= A_H2_SEN_FLAG_FRAMES;
         break;
@@ -249,7 +246,7 @@ static inline void aura_h2_sen_update(struct aura_h2_sentinel *sen, aura_h2_conn
     sen->last_evt_ms = aura_now_ms(CLOCK_MONOTONIC);
 }
 
-static aura_conn_sen_action_t aura_h2_sen_evaluate(struct aura_h2_sentinel *sen) {
+static inline aura_conn_sen_action_t aura_h2_sen_evaluate(struct aura_h2_sentinel *sen) {
     if (sen->flags & A_H2_SEN_FLAG_FRAMES) {
         if (aura_h2_conn_sen_detect_small_frame_abuse(sen))
             aura_h2_sen_score_update(&sen->score, aura_h2_sen_evt_score[A_H2_SEN_EVT_TINY_FRAME_FLOOD]);

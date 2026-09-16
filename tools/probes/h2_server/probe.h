@@ -33,5 +33,6 @@ int64_t aura_h2_probe_expect_goaway(const uint8_t *src_in, uint64_t len, int err
 int64_t aura_h2_probe_expect_settings(const uint8_t *src_in, uint64_t len);
 int64_t aura_h2_probe_expect_rst_stream(const uint8_t *src_in, uint64_t len, int err);
 int64_t aura_h2_probe_expect_wind_update(const uint8_t *src_in, uint64_t len, uint32_t stream_id);
+int64_t aura_h2_probe_expect_to_have(const uint8_t *src_in, uint64_t len, uint32_t frame_type, uint32_t stream_id);
 
 #endif

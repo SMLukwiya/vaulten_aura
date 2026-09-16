@@ -566,8 +566,6 @@ static int a_srv_process_preface_settings(struct aura_h2_server_conn *c, struct 
     if (rv != A_H2_ERR_NONE)
         return aura_h2_get_app_error(rv);
 
-    aura_h2_frame_dump(&in_frame->frame);
-
     if (in_frame->frame.type != A_H2_FRAME_TYPE_SETTINGS)
         return a_h2_srv_close_conn_immediate(c, A_H2_PROTOCOL_ERR, A_H2_ERR_STR_IDX_INVALID_ARG);
 
@@ -904,7 +902,6 @@ int a_srv_pre_headers_processing(struct aura_h2_server_conn *c, struct aura_h2_i
             return A_H2_INTERNAL_ERR;
         }
 
-        (*stream)->received_headers += in_frame->hdrs_payload.len;
         if (aura_h2_frame_is_end_stream(frame->flags) && aura_h2_frame_is_end_headers(frame->flags)) {
             /* transition states and prepare for response */
             (*stream)->state = A_H2_STREAM_STATE_OPEN;
@@ -916,9 +913,15 @@ int a_srv_pre_headers_processing(struct aura_h2_server_conn *c, struct aura_h2_i
             (*stream)->flags |= (A_H2_STREAM_FLAG_READ_DATA | A_H2_STREAM_FLAG_HDRS_RECD);
             aura_h2_conn_transition_state(&c->state, A_H2_CONN_STATE_FRAMES);
         } else {
+            (*stream)->state = A_H2_STREAM_STATE_OPEN;
+            if (aura_h2_frame_is_end_stream(frame->flags)) {
+                (*stream)->state = A_H2_STREAM_STATE_HALF_CLOSED_REMOTE;
+                (*stream)->flags |= A_H2_STREAM_FLAG_END_STREAM;
+            }
+
             aura_h2_sen_update(&c->core.sen, A_H2_SEN_EVT_TINY_FRAME_FLOOD, in_frame->hdrs_payload.len);
             /* Store stream id for continuation frame checking */
-            c->core.cont_stream_id = in_frame->frame.stream_id;
+            c->core.cont_stream_id = (*stream)->stream_id;
             aura_h2_conn_transition_state(&c->state, A_H2_CONN_STATE_CONT);
         }
 
@@ -953,8 +956,6 @@ int a_srv_pre_headers_processing(struct aura_h2_server_conn *c, struct aura_h2_i
             }
         }
 
-        /** @todo: should this be added to received headers */
-        (*stream)->received_headers += in_frame->hdrs_payload.len;
         (*stream)->state = A_H2_STREAM_STATE_HALF_CLOSED_REMOTE;
         (*stream)->flags |= A_H2_STREAM_FLAG_READ_TRAILER;
 
@@ -1009,6 +1010,10 @@ static inline int a_h2_srv_parse_header_payload(struct aura_h2_core *core, struc
                 value.base = (char *)dec_hdr.value.raw.str.base;
                 value.len = dec_hdr.value.raw.str.len;
             }
+
+            stream->received_headers += (name.len + value.len + 32);
+            if (stream->received_headers > core->local_settings.max_hdr_list_size)
+                aura_hpack_set_decoder_soft_err(dec, A_HPACK_HEADER_SIZE_TOO_LARGE);
 
             if (aura_hpack_is_pseudo_header(name.base)) {
                 if (dec->regular_hdr_field_seen)
@@ -1116,7 +1121,8 @@ static inline int a_h2_srv_parse_header_payload(struct aura_h2_core *core, struc
                 default:
                     /* rest of the header fields that are marked as special are rejected */
                     app_debug(true, 0, "hpack unknown special header: %s (ignore)", name.base);
-                    aura_hpack_set_decoder_soft_err(dec, A_HPACK_INVALID_HDR_FIELD_ERR);
+                    /* @todo */
+                    // aura_hpack_set_decoder_soft_err(dec, A_HPACK_INVALID_HDR_FIELD_ERR);
                     break;
                 }
                 /**
@@ -1139,6 +1145,42 @@ static inline int a_h2_srv_parse_header_payload(struct aura_h2_core *core, struc
             return A_H2_IN_PROGRESS_ERR;
         }
     }
+
+    if (final) {
+        int soft_err = dec->soft_error;
+
+        /**
+         * Validation
+         * Missing required pseudo headers
+         */
+        if ((dec->pseudo_flags & A_H2_REQ_PSEUDO_HDRS) != A_H2_REQ_PSEUDO_HDRS) {
+            /* close stream */
+            app_debug(true, 0, ">> missing required pseudo header");
+            return aura_h2_conn_close_stream(core, stream, A_H2_PROTOCOL_ERR, true);
+        }
+
+        aura_hpack_decoder_reset(dec);
+
+        if (soft_err == 0) {
+            return A_H2_ERR_NONE;
+        }
+
+        aura_h2_sen_update(&core->sen, A_H2_SEN_EVT_HPACK_ANOMALY, 0);
+        switch (soft_err) {
+        case A_HPACK_INVALID_PATH_ERR:
+            /* 404 */
+            return aura_h2_submit_error_response(core, stream, 404, NULL, 0);
+
+        case A_HPACK_HEADER_SIZE_TOO_LARGE:
+            /* 431 */
+            return aura_h2_submit_error_response(core, stream, 431, NULL, 0);
+
+        default:
+            /* Usual stream errors */
+            return aura_h2_conn_close_stream(core, stream, aura_h2_translate_hpack_error(soft_err), true);
+        }
+    }
+
     return A_H2_ERR_NONE;
 }
 
@@ -1170,98 +1212,52 @@ static int a_h2_srv_process_headers_early_bailout(struct aura_h2_core *h2_c, str
         *err_idx = A_H2_ERR_STR_IDX_INVALID_ARG;
         return aura_h2_translate_hpack_error(rv);
     }
-    soft_err = dec->soft_error;
 
-    /**
-     * Validation
-     * Missing required pseudo headers
-     */
-    if ((dec->pseudo_flags & A_H2_REQ_PSEUDO_HDRS) != A_H2_REQ_PSEUDO_HDRS) {
-        /* close stream */
-        app_debug(true, 0, ">> missing required pseudo header");
-        return aura_h2_conn_close_stream(h2_c, stream, A_H2_PROTOCOL_ERR, true);
-    }
-
-    aura_hpack_decoder_reset(dec);
-
-    if (soft_err == 0) {
-        return rv;
-    }
-
-    switch (soft_err) {
-    case A_HPACK_INVALID_PATH_ERR:
-        /* 404 */
-        return aura_h2_submit_error_response(h2_c, stream, 404, NULL, 0);
-
-    default:
-        /* Usual stream errors */
-        return aura_h2_conn_close_stream(h2_c, stream, aura_h2_translate_hpack_error(soft_err), true);
-    }
-
-    return A_H2_ERR_NONE;
+    return rv;
 }
 
 static int a_srv_process_cont(struct aura_h2_server_conn *c, struct aura_h2_in_frame *in_frame,
                               struct aura_mem_ctx *mc) {
     struct aura_h2_stream *stream;
-    const uint8_t *src_in = in_frame->cont_payload.src;
-    uint64_t in_len = in_frame->cont_payload.len;
+    const uint8_t *src_in;
+    uint64_t in_len;
     struct aura_hpack_decoder *dec = &c->core.dec;
     int rv, err_idx, soft_err;
     bool final;
 
+    app_debug(true, 0, ">>>> a_srv_process_cont");
     stream = aura_h2_conn_find_stream(&c->core, in_frame->frame.stream_id);
     A_BUG_ON_2(!stream, true);
 
-    stream->received_headers += in_len;
-    if (stream->received_headers > A_MAX_REQ_LEN) {
-        return a_h2_srv_close_conn_immediate(c, A_H2_ENHANCE_YOUR_CALM, A_H2_ERR_STR_IDX_INVALID_ARG);
-    }
-
     if (in_frame->frame.flags & A_H2_FRAME_FLAG_END_HEADERS) {
-        stream->flags |= (A_H2_STREAM_FLAG_HDRS_RECD | A_H2_STREAM_FLAG_EXECUTE);
+        stream->flags |= (A_H2_STREAM_FLAG_HDRS_RECD);
         aura_h2_conn_transition_state(&c->state, A_H2_CONN_STATE_FRAMES);
         final = true;
+        if (stream->flags & A_H2_STREAM_FLAG_END_STREAM)
+            stream->flags |= A_H2_STREAM_FLAG_EXECUTE;
     }
 
+    rv = aura_h2_parse_frame_payload(in_frame);
+    if (rv != A_H2_ERR_NONE) {
+        err_idx = A_H2_ERR_STR_IDX_INVALID_ARG;
+        goto terminate_conn;
+    }
+
+    in_len = in_frame->cont_payload.len;
+    src_in = in_frame->cont_payload.src;
     rv = a_h2_srv_parse_header_payload(&c->core, mc, stream, src_in, in_len, &err_idx);
     if (rv != A_H2_ERR_NONE) {
         if (rv == A_H2_IN_PROGRESS_ERR)
             return rv;
 
-        return a_h2_srv_close_conn_immediate(c, aura_h2_translate_hpack_error(rv), A_H2_ERR_STR_IDX_INVALID_ARG);
+        err_idx = A_H2_ERR_STR_IDX_INVALID_ARG;
+        goto terminate_conn;
     }
 
-    if (final) {
-        soft_err = dec->soft_error;
-        /**
-         * Validation
-         * Missing required pseudo headers
-         */
-        if ((dec->pseudo_flags & A_H2_REQ_PSEUDO_HDRS) != A_H2_REQ_PSEUDO_HDRS) {
-            app_exit(true, 0, "Continuation missing required pseudo headers");
-            /* Close connection */
-            return A_ERR_NONE;
-        }
+    return aura_h2_srv_process_request(c, in_frame->frame.stream_id);
 
-        aura_hpack_decoder_reset(&c->core.dec);
-
-        if (soft_err == 0) {
-            return aura_h2_srv_process_request(c, stream->stream_id);
-        }
-
-        switch (soft_err) {
-        case A_HPACK_INVALID_PATH_ERR:
-            /* 404 */
-            return aura_h2_submit_error_response(&c->core, stream, 404, NULL, 0);
-
-        default:
-            /* Usual stream errors */
-            return aura_h2_conn_close_stream(&c->core, stream, aura_h2_translate_hpack_error(soft_err), true);
-        }
-    }
-
-    return A_H2_ERR_NONE;
+terminate_conn:
+    return a_h2_srv_close_conn_immediate(c, rv, err_idx);
 }
 
 /**/
@@ -1579,7 +1575,7 @@ int aura_h2_srv_process_frame(struct aura_h2_server_conn *c, struct aura_sliding
     struct aura_conn *conn = aura_container_of(c, struct aura_conn, h2_server);
     uint8_t *src;
     uint32_t len;
-    int rv;
+    int rv, sentinel_action;
 
     app_debug(true, 0, ">>>> aura_h2_srv_process_frame");
     static int (*frame_handlers[])(struct aura_h2_server_conn *c, struct aura_h2_in_frame *buf, struct aura_mem_ctx *mc) = {
@@ -1637,7 +1633,6 @@ int aura_h2_srv_process_frame(struct aura_h2_server_conn *c, struct aura_sliding
             (in_frame->frame.type != A_H2_FRAME_TYPE_CONT ||
              c->core.cont_stream_id != in_frame->frame.stream_id)) {
             rv = a_h2_srv_close_conn_immediate(c, A_H2_PROTOCOL_ERR, A_H2_ERR_STR_IDX_INVALID_ARG);
-            aura_sliding_buf_consume(buf, in_frame->expected_bytes);
             return aura_h2_get_app_error(rv);
         }
 
@@ -1651,6 +1646,23 @@ int aura_h2_srv_process_frame(struct aura_h2_server_conn *c, struct aura_sliding
         rv = frame_handlers[in_frame->frame.type](c, in_frame, conn->mc);
         aura_sliding_buf_consume(buf, in_frame->expected_bytes);
         aura_h2_frame_reset_inframe(in_frame);
+
+        /* Run sentinel */
+        sentinel_action = aura_h2_sen_evaluate(&c->core.sen);
+        app_debug(true, 0, ">>> Sentinel action=%d", sentinel_action);
+        switch (sentinel_action) {
+        case A_CONN_SEN_ACT_THROTTLE:
+            aura_conn_sentinel_update(conn, A_CONN_SEN_ACT_THROTTLE, (void *)a_time_s_to_ms(5));
+            break;
+
+        case A_CONN_SEN_ACT_HARD_CLOSE:
+            aura_conn_sentinel_update(conn, A_CONN_SEN_ACT_HARD_CLOSE, NULL);
+            break;
+
+        default:
+            break;
+        }
+
         return aura_h2_get_app_error(rv);
     }
 
