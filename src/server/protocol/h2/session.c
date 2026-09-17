@@ -457,7 +457,7 @@ void aura_h2_conn_sched_attach_stream(struct aura_h2_core *h2_c, struct aura_h2_
 
 void aura_h2_conn_sched_detach_stream(struct aura_h2_core *h2_c, struct aura_h2_stream *stream) {
     A_BUG_ON_2(!stream->queued, true);
-    app_debug(true, 0, ">>>> aura_h2_conn_sched_detach_stream");
+    app_debug(true, 0, ">>>> aura_h2_conn_sched_detach_stream: urg=%d, inc=%d", stream->prio.urgency, stream->prio.incremental);
     aura_heap_dump(&h2_c->scheduler.queues.stream_heap[stream->prio.urgency], true);
     aura_heap_del(&h2_c->scheduler.queues.stream_heap[stream->prio.urgency], &stream->hp_ent);
     --h2_c->scheduler.queues.queued_cnt;
@@ -469,13 +469,13 @@ void aura_h2_update_stream_priority(struct aura_h2_core *h2_c, struct aura_h2_st
     if (stream->prio.urgency = prio->urgency && stream->prio.incremental == prio->incremental)
         return;
 
+    stream->prio = *prio;
     if (stream->queued) {
         aura_h2_conn_sched_detach_stream(h2_c, stream);
         stream->prio = *prio;
         aura_h2_conn_sched_attach_stream(h2_c, stream);
         return;
     }
-    stream->prio = *prio;
 }
 
 /**
@@ -487,6 +487,7 @@ int aura_h2_parse_http_prio(struct aura_pri_ext *prio, const uint8_t *value, int
     sfparse_value val;
     int rv;
 
+    app_debug(true, 0, ">>>> aura_h2_parse_http_prio");
     sfparse_parser_init(&sfp, value, len);
 
     for (;;) {

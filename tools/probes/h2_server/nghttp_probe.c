@@ -122,6 +122,7 @@ int aura_server_tool_h2_probe(const char *host, const char *service, const char 
       A_MAKE_NV(":path", "/api/v1/func1"),
       A_MAKE_NV(":scheme", "https"),
       A_MAKE_NV(":authority", host),
+      A_MAKE_NV("priority", "u=5, i"),
       A_MAKE_NV("accept", "*/*"),
       A_MAKE_NV("user-agent", "nghttp2-probe/1.0.0"),
     };

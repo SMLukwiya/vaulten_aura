@@ -89,7 +89,6 @@ struct aura_h2_sched_iov *aura_h2_get_sched_iov(struct aura_h2_core *h2_c, uint8
 
     s_iov = NULL;
 
-    app_debug(true, 0, ">>>> aura_h2_get_sched_iov");
     /**
      * Get slot in 16 entry discriminate fast path
      * Urgent frames take the first 8 slots
@@ -103,8 +102,6 @@ struct aura_h2_sched_iov *aura_h2_get_sched_iov(struct aura_h2_core *h2_c, uint8
 
         app_debug(true, 0, "aura_h2_get_sched_iov urgent idx=%d", idx);
         if (idx != A_H2_SCHED_URG_CTRL_PRIMARY_SLOT_SZ) {
-            /* @todo: comment on this addition */
-            idx += A_H2_CTRL_FRAME_OFF;
             aura_bitmap_set_bit(idx, sched->queues.urg_ctr_pri_bitmap);
             s_iov = &sched->queues.urg_ctrl_frames[idx];
             memset(s_iov, 0, sizeof(*s_iov));
@@ -692,13 +689,14 @@ int64_t aura_h2_sched_iov_create_data(struct aura_h2_sched_iov *s_iov,
             aura_h2_conn_after_frame_sent(s_iov->h2_c, s_iov->stream_id, s_iov->type, data_len, end_stream);
             rv = data_len;
         }
-    }
-    if (s_iov->type == A_H2_SCHED_HDR) {
+    } else if (s_iov->type == A_H2_SCHED_HDR) {
         /* header only frame */
         data_len = a_min(s_iov->header_len, scratch_len);
         aura_sliding_buf_append(scratch, s_iov->header, data_len);
         aura_sliding_buf_consume(s_iov->buf, data_len);
         *done = data_len == s_iov->header_len;
+        end_stream = s_iov->end_stream && *done;
+
         if (*done) {
             s_iov->header = NULL;
             s_iov->header_len = 0;

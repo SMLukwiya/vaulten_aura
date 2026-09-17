@@ -786,7 +786,8 @@ static int a_header_priority_cb(struct aura_h2_core *h2_c, struct aura_h2_stream
                                 bool process) {
     struct aura_pri_ext prio_ext;
 
-    if (process) {
+    app_debug(true, 0, ">>>> a_header_priority_cb val=%s", value->base);
+    if (!process) {
         if (aura_h2_parse_http_prio(&prio_ext, value->base, value->len) < 0) {
             stream->flags |= A_H2_STREAM_FLAG_BAD_PRIO;
             return A_HPACK_INVALID_HDR_FIELD_ERR;
@@ -1633,6 +1634,7 @@ int aura_h2_srv_process_frame(struct aura_h2_server_conn *c, struct aura_sliding
             (in_frame->frame.type != A_H2_FRAME_TYPE_CONT ||
              c->core.cont_stream_id != in_frame->frame.stream_id)) {
             rv = a_h2_srv_close_conn_immediate(c, A_H2_PROTOCOL_ERR, A_H2_ERR_STR_IDX_INVALID_ARG);
+            aura_sliding_buf_consume(buf, in_frame->expected_bytes);
             return aura_h2_get_app_error(rv);
         }
 
