@@ -20,7 +20,7 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/encrypt/lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/fn/lib_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/heap/lib_v1.c
-    ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/string/lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/url/lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/hashmap/map_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/dense_pool/dynamic_v1.c

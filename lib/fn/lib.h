@@ -15,6 +15,7 @@
 #include "memory/lru_cache.h"
 #include "protocol.h"
 #include "radix/tree.h"
+#include "string/lib.h"
 #include "task_queue/tq.h"
 #include "time_lib.h"
 #include "types_lib.h"
@@ -473,8 +474,7 @@ struct aura_fn_tag {
     uint8_t fn_version[A_FN_VERSION_MAX_LEN]; /* Function version */
     uint64_t fn_id;                           /* Function ID */
     uint64_t timestamp_ms;                    /* Deployment time */
-    // struct aura_fn_triggers fn_triggers;      /* Fn triggers loaded on demand and not saved as part of fn_tag */
-    bool http; /* If function is http triggered, use by the server  */
+    bool http;                                /* If function is http triggered, use by the server  */
 };
 
 /** System functions structure */
@@ -634,12 +634,13 @@ static inline void aura_fn_get_name_and_version(struct iovec *fn, char *fn_name,
          * We therefore copy the function version
          * found after the sep(:).
          */
-        *sep = '\0';
-        func_vlen = ((char *)fn->iov_base + fn->iov_len) - (sep + 1);
-        memcpy(fn_version, sep + 1, func_vlen);
+        *sep++ = '\0';
+        func_vlen = a_min((uint64_t)(((char *)fn->iov_base + fn->iov_len) - sep), func_vlen);
+        if (func_vlen > 0)
+            memcpy(fn_version, sep, func_vlen);
 
         /* account for version and separator */
-        func_len -= func_vlen - 1;
+        func_len -= func_vlen;
     }
 
     memcpy(fn_name, fn->iov_base, func_len);
@@ -694,10 +695,16 @@ int aura_fn_list_delete(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
                         char *fn_name, char *fn_version);
 
 /* Get function meta */
-struct aura_iovec aura_fn_meta_fetch(struct aura_mem_ctx *mc, char *name,
-                                     char *version, AURA_DBHANDLE db, int sock_fd);
+struct aura_iovec aura_fn_meta_fetch(struct aura_mem_ctx *mc, char *name, char *version,
+                                     AURA_DBHANDLE db, int sock_fd, int *error);
 
-/**/
+/**
+ * Fetch function meta data from db
+ * This can be called from the daemon or from the server.
+ * @name: function name
+ * @version: function version
+ * @sock_fd: daemon sock fd. (used when server wants a brokered call to the db)
+ */
 int aura_fn_meta_load(struct aura_fn *fn, struct aura_mem_ctx *mc, char *name,
                       char *version, AURA_DBHANDLE db, int sock_fd);
 
@@ -767,6 +774,11 @@ void aura_fn_stat_dump(struct aura_fn_stat *stats);
 
 /* Dunp function tag */
 void aura_fn_dump_fn_tag(struct aura_fn_tag *tag);
+
+/**
+ * Construct function meta render format for terminal output
+ */
+int aura_fn_meta_construct(struct aura_str_buf *buf, struct aura_fn_meta *meta);
 
 /* ---------- PROFILES ---------- */
 enum {

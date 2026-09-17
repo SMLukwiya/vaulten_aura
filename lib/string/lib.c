@@ -1,87 +1,7 @@
-#include "string_lib.h"
+#include "lib.h"
 #include "slab.h"
 #include <errno.h>
 
-/**
- * Internal 'strlcpy' implementation
- * This returns the actual size of the data that would be copied
- * without truncating @src:. Users must check the value returned
- * and react accordingly, a return value >= @size: indicates data loss.
- * Note: src must be null terminated
- */
-size_t _strlcpy(char *dest, const char *src, size_t size) {
-    char *dest_ptr = dest;
-    const char *src_ptr = src;
-    size_t n_left = size;
-
-    if (n_left && --n_left) {
-        do {
-            if (!(*dest_ptr++ = *src_ptr++))
-                break;
-        } while (--n_left);
-    }
-
-    /* we are at the end */
-    if (!n_left) {
-        if (size)
-            *dest_ptr = '\0'; /* null terminate */
-        while (src_ptr++)
-            ; /* advance to end of src */
-    }
-
-    return (src_ptr - src - 1); /* return size minus null character */
-}
-
-/**
- * Internal 'strlcat' implementation
- * This returns the actual size of the data that would be concatenated
- * without truncating @src:. Users must check the value returned
- * and react accordingly, a return value >= @size: indicates data loss.
- */
-size_t _strlcat(char *dest, const char *src, size_t size) {
-    char *dest_ptr = dest;
-    const char *src_ptr = src;
-    size_t n_left = size, dest_len;
-
-    while (n_left-- && *dest_ptr)
-        dest_ptr++;
-
-    dest_len = dest_ptr - dest;
-    if (!(n_left = size - dest_len)) /* can't copy anything */
-        return dest_len + strlen(src);
-
-    while (*src_ptr) {
-        if (n_left != 1) {
-            *dest_ptr++ = *src_ptr++;
-            n_left--;
-        }
-        src_ptr++;
-    }
-    *dest_ptr = '\0';
-    return (dest_len + (src_ptr - src));
-}
-
-/**
- * Decodes url copying result to @dest:
- * It returns the actual size of decoded url
- * @size: represents size of @dest:
- * @todo: may need revision
- */
-size_t decode_url(const char *url, char *dest, size_t size) {
-    char *c, *dest_ptr;
-
-    for (c = (char *)url; *c && size > 0; ++c) {
-        if (*c == '%' && isxdigit(c[1]) && isxdigit(c[2])) {
-            *dest_ptr++ = BASE_16_TO_10(c[1]) * 16 + BASE_16_TO_10(c[2]);
-            c += 2;
-        } else
-            *dest_ptr++ = *c++;
-    }
-    *dest_ptr = '\0';
-    return (dest_ptr - dest - 1); /* minus null char */
-}
-
-/** @todo: look into utf-8 encoding */
 bool is_valid_utf_8_string(const unsigned char *str) {
     const unsigned char *str_ptr = str;
     int nb;
@@ -227,4 +147,96 @@ bool aura_mem_is_eq(const void *target, size_t target_len, const void *other, si
         return false;
 
     return memcmp(target + 1, other + 1, target_len - 1) == 0;
+}
+
+int aura_str_buf_init(struct aura_str_buf *buf, struct aura_mem_ctx *mc, uint64_t cap) {
+    buf->data = mc ? aura_alloc(mc, cap) : malloc(cap);
+    if (!buf->data)
+        return -1;
+    memset(buf->data, 0, cap);
+    buf->len = 0;
+    buf->cap = cap;
+    buf->mc = mc;
+
+    return 0;
+}
+
+void aura_str_buf_destroy(struct aura_str_buf *buf) {
+    if (buf->data)
+        if (buf->mc)
+            aura_free(buf->data);
+        else
+            free(buf->data);
+
+    buf->data = NULL;
+    buf->len = 0;
+}
+
+int aura_str_buf_reserve(struct aura_str_buf *buf, uint64_t size) {
+    char *old = buf->data;
+
+    if (buf->len + size <= buf->cap)
+        return 0;
+
+    while ((buf->len + size + 1) > buf->cap)
+        buf->cap *= 2;
+
+    if (buf->mc)
+        buf->data = aura_realloc(buf->mc, buf->data, buf->cap);
+    else
+        buf->data = realloc(buf->data, buf->cap);
+
+    if (!buf->data) {
+        buf->data = old;
+        return -1;
+    }
+
+    return 0;
+}
+
+int aura_str_buf_append(struct aura_str_buf *buf, const char *s) {
+    uint64_t len = strlen(s);
+    int rv = aura_str_buf_reserve(buf, len);
+    if (rv < 0)
+        return rv;
+
+    memcpy(buf->data + buf->len, s, len);
+    buf->len += len;
+    buf->data[buf->len] = '\0';
+
+    return 0;
+}
+
+int aura_str_buf_print(struct aura_str_buf *buf, const char *fmt, ...) {
+    int len, rv;
+    va_list ap, ap_copy;
+
+    va_start(ap, fmt);
+    va_copy(ap_copy, ap);
+    /* Determine len */
+    len = vsnprintf(NULL, 0, fmt, ap);
+    va_end(ap);
+
+    if (len < 0) {
+        va_end(ap_copy);
+        return -1;
+    }
+
+    rv = aura_str_buf_reserve(buf, len);
+    if (rv < 0)
+        return rv;
+
+    vsnprintf(buf->data + buf->len, len + 1, fmt, ap_copy);
+    va_end(ap_copy);
+
+    buf->len += len;
+    return 0;
+}
+
+int aura_str_buf_append_field(struct aura_str_buf *buf, const char *prefix, const char *key, const char *value) {
+    return aura_str_buf_print(buf, "%s%-*s%s\n", prefix, A_STR_BUF_KEY_WIDTH, key, value);
+}
+
+int aura_str_buf_append_continuation(struct aura_str_buf *buf, const char *prefix, const char *value) {
+    return aura_str_buf_print(buf, "%s%*s%s\n", prefix, A_STR_BUF_KEY_WIDTH, "", value);
 }

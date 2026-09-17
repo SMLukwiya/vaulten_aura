@@ -15,6 +15,7 @@
 #include "memory/mem.h"
 #include "time_lib.h"
 #include "types_lib.h"
+#include "unix/sock.h"
 #include "user/user.h"
 
 #define A_SOCK_FILE_FD_IDX 0

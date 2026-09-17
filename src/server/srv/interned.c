@@ -2,7 +2,7 @@
 #include "error_lib.h"
 #include "hasher_lib.h"
 #include "slab.h"
-#include "string_lib.h"
+#include "string/lib.h"
 #include "utils_lib.h"
 
 static struct aura_interned_str_arena *a_interned_str_arena_create(struct aura_mem_ctx *mc) {

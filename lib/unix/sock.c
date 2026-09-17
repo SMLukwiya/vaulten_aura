@@ -1,6 +1,6 @@
 #include "sock.h"
 #include "error_lib.h"
-#include "string_lib.h"
+#include "string/lib.h"
 
 /* Adds file descriptor as part of the message */
 static inline void a_integer_add(struct cmsghdr *cmsg, int value) {

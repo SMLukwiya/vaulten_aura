@@ -26,4 +26,7 @@ void aura_dmn_stop_fn(struct iovec *fn, int cli_fd, void *arg);
 /** List functions */
 void aura_dmn_fn_list(struct iovec *state, int cli_fd, void *arg);
 
+/* Show function details */
+void aura_dmn_fn_show(struct iovec *key, int cli_fd, void *arg);
+
 #endif

@@ -21,6 +21,24 @@
 #define A_BITMAP_GENMASK(h, l) (((1UL << ((h) - (l) + 1)) - 1) << (l))
 
 /**
+ * Generate bitmap mask.
+ * Handles the case of size 64 to avoid
+ */
+static inline uint64_t a_bitmap_genmask(uint64_t size, uint64_t offset) {
+    uint64_t mask;
+
+    if (size == 64)
+        mask = UINT64_MAX;
+    else
+        mask = (UINT64_C(1) << size) - 1;
+
+    if (offset)
+        mask &= ~((UINT64_C(1) << offset) - 1);
+
+    return mask;
+}
+
+/**
  * set a bit in memory
  * @pos: the bit to set
  * @addr: the starting address
@@ -141,7 +159,7 @@ static inline uint64_t aura_bitmap_find_next_bit(uint64_t *addr, uint64_t offset
         return size;
 
     /* check if any bit is set */
-    val = *addr & A_BITMAP_GENMASK(size - 1, offset);
+    val = *addr & a_bitmap_genmask(size, offset);
     return val ? a_ctz64(val) : size;
 }
 
@@ -153,7 +171,7 @@ static inline uint64_t aura_bitmap_find_next_empty_bit(uint64_t *addr, uint64_t 
         return size;
 
     /* check if all bits are set */
-    val = ~(*addr) & A_BITMAP_GENMASK(size - 1, offset);
+    val = ~(*addr) & a_bitmap_genmask(size, offset);
     return val ? a_ctz64(val) : size;
 }
 

@@ -5,7 +5,7 @@
 #include "h2/server.h"
 #include "h2/session.h"
 #include "server_srv.h"
-#include "string_lib.h"
+#include "string/lib.h"
 #include "time_lib.h"
 
 struct aura_h2_stream *aura_h2_stream_open(struct aura_h2_core *core, struct aura_mem_ctx *mc,

@@ -76,6 +76,7 @@ typedef enum {
     A_CMD_FN_STATUS,
     A_CMD_FN_START,
     A_CMD_FN_STOP,
+    A_CMD_FN_SHOW, /* show details of a single function */
     A_CMD_FN_LIST,
     /**/
     A_CMD_DB_FETCH_REQUEST,
@@ -102,10 +103,10 @@ struct aura_msg {
     struct iovec data;
 };
 
-#define a_init_msg_hdr(hdr, len_, type_, cmd_type_) \
-    hdr.len = len_;                                 \
-    hdr.type = type_;                               \
-    hdr.cmd_type = cmd_type_;                       \
+#define a_init_msg_hdr(hdr, _len, _type, _cmd_type) \
+    hdr.len = _len;                                 \
+    hdr.type = _type;                               \
+    hdr.cmd_type = _cmd_type;                       \
     hdr.version = 0x010000 /* 1.0.0 */
 
 #define control_len(x) CMSG_LEN(sizeof(x))

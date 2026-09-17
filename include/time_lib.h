@@ -2,6 +2,7 @@
 #define AURA_TIME_H
 
 #include <stdint.h>
+#include <string.h>
 #include <sys/time.h>
 #include <time.h>
 
@@ -64,6 +65,16 @@ static inline uint64_t aura_now_us(int clock_id) {
 /* Get current time time provided timespec */
 static inline int aura_now_ts(struct timespec *ts, int clock_id) {
     return clock_gettime(clock_id, ts);
+}
+
+/* construct human readable time */
+static inline void aura_time_readable(uint64_t t, char *buf, uint64_t len) {
+    struct timespec ts;
+
+    ts.tv_sec = a_time_ms_to_s(t);
+    struct tm *tmp = localtime(&ts.tv_sec);
+    memset(buf, 0, len);
+    strftime(buf, len, "%r, %a %b %d, %Y", tmp);
 }
 
 #endif

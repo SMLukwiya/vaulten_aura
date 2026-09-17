@@ -1,4 +1,3 @@
-#include "command/function.h"
 #include "dmn.h"
 #include "fn/lib.h"
 #include "unix/sock.h"

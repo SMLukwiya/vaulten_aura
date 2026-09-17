@@ -1,8 +1,8 @@
 #include "lru_cache.h"
 #include "bitmap_lib.h"
 #include "bug_lib.h"
+#include "string/lib.h"
 #include <string.h>
-#include <string_lib.h>
 
 int aura_lru_cache_init(struct aura_lru_cache *lc, struct aura_mem_ctx *mc,
                         const char *name, uint8_t cache_id, uint32_t e_cnt,

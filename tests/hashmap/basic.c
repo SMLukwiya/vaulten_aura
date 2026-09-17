@@ -1,6 +1,6 @@
 #include "hashmap/map.h"
 #include "mem.h"
-#include "string_lib.h"
+#include "string/lib.h"
 #include <assert.h>
 
 struct aura_mem_ctx mc;

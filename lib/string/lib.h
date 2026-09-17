@@ -2,6 +2,7 @@
 #define AURA_STRING_H
 
 #include <ctype.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +11,15 @@
 #include "mem.h"
 
 #define BASE_16_TO_10(x) (((x) >= '0' && (x) <= '9') ? ((x) - '0') : (toupper((x)) - 'A' + 10))
+#define A_STR_BUF_KEY_WIDTH 16
+
+/* string buffer */
+struct aura_str_buf {
+    struct aura_mem_ctx *mc;
+    char *data;
+    uint64_t len;
+    uint64_t cap;
+};
 
 /**
  * trim whitespace in the front
@@ -30,9 +40,6 @@ static inline char *aura_str_trim(char *str, uint64_t *len) {
     *len = _len;
     return str;
 }
-
-size_t _strlcpy(char *dest, const char *src, size_t size);
-size_t _strlcat(char *dest, const char *src, size_t size);
 
 /* Duplicate string pointed to by str */
 char *aura_strdup(struct aura_mem_ctx *mc, const char *str);
@@ -57,5 +64,30 @@ bool aura_mem_is_eq(const void *target, size_t target_len, const void *other, si
 
 /* wrapper around strtoul */
 size_t aura_strtoul(const char *nptr, size_t len);
+
+/**
+ * Initialize string buffer
+ */
+int aura_str_buf_init(struct aura_str_buf *buf, struct aura_mem_ctx *mc, uint64_t cap);
+
+/**
+ * Destroy string buffer
+ */
+void aura_str_buf_destroy(struct aura_str_buf *buf);
+
+/**
+ * Add formatted string into the string buffer
+ */
+int aura_str_buf_print(struct aura_str_buf *buf, const char *fmt, ...);
+
+/**
+ * Append key value pair into string buffer.
+ */
+int aura_str_buf_append_field(struct aura_str_buf *buf, const char *prefix, const char *key, const char *value);
+
+/**
+ * Append a single string into string buffer
+ */
+int aura_str_buf_append(struct aura_str_buf *buf, const char *s);
 
 #endif

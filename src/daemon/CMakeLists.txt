@@ -22,7 +22,7 @@ set(lib_sources
     ${vaulten_aura_SOURCE_DIR}/lib/memory/mem_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/memory/slab_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/memory/sliding_buf.c
-    ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/string/lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/user/user.c
     ${vaulten_aura_SOURCE_DIR}/lib/ipc/ipc.c
     ${vaulten_aura_SOURCE_DIR}/lib/ipc/wait.c
@@ -50,6 +50,7 @@ add_executable(aura_daemon
     command/function/deploy.c
     command/function/delete.c
     command/function/status.c
+    command/function/show.c
     command/function/list.c
     command/system.c
     db/broker.c

@@ -23,6 +23,7 @@ add_executable(aura
     commands/function/status.c
     commands/function/start.c
     commands/function/stop.c
+    commands/function/show.c
     commands/function/validate_conf.c
     commands/function/list.c
     commands/sys_cli.c

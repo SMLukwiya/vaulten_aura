@@ -8,6 +8,7 @@
 #include <sys/resource.h>
 #include <sys/wait.h>
 
+#include "bug_lib.h"
 #include "command/function.h"
 #include "command/server.h"
 #include "command/system.h"
@@ -152,6 +153,10 @@ static int a_handle_client_request(struct aura_msg *msg, int cli_fd, void *arg) 
             aura_dmn_stop_fn(&msg->data, cli_fd, arg);
             return 0;
 
+        case A_CMD_FN_SHOW:
+            aura_dmn_fn_show(&msg->data, cli_fd, arg);
+            return 0;
+
         case A_CMD_FN_LIST:
             aura_dmn_fn_list(&msg->data, cli_fd, arg);
             return 0;
@@ -267,7 +272,7 @@ static int a_dmn_load_fn_registry(struct aura_dmn_glob_conf *gc) {
     struct aura_fn_tag *fn_tag;
     struct aura_fn *fn;
     struct aura_lru_entry *fn_lru_e;
-    int error;
+    int error, rv;
 
     fn_list = aura_fn_list_fetch(&gc->mc, gc->db_handle, -1, &error);
     if (!fn_list) {
@@ -286,7 +291,9 @@ static int a_dmn_load_fn_registry(struct aura_dmn_glob_conf *gc) {
         fn = aura_lru_cache_entry(fn_lru_e, struct aura_fn, lc_entry);
         memset(fn, 0, offsetof(struct aura_fn, lc_entry));
 
-        if (aura_fn_meta_load(fn, &gc->mc, fn_tag->fn_name, fn_tag->fn_version, gc->db_handle, -1) < 0) {
+        rv = aura_fn_meta_load(fn, &gc->mc, fn_tag->fn_name, fn_tag->fn_version, gc->db_handle, -1);
+        A_BUG_ON_2(rv == A_DB_REC_NOT_FOUND, true);
+        if (rv < 0) {
             aura_free((void *)fn_list);
             return -1;
         }

@@ -2,7 +2,7 @@
 #include "h2/hpack_huffman_tb_srv.h"
 #include "h2/server.h"
 #include "slab.h"
-#include "string_lib.h"
+#include "string/lib.h"
 
 #include <arpa/inet.h>
 

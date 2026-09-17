@@ -7,7 +7,7 @@
 #include "mem.h"
 #include "slab.h"
 #include "stdatomic.h"
-#include "string_lib.h"
+#include "string/lib.h"
 #include "time_lib.h"
 
 #include <dirent.h>
@@ -970,11 +970,6 @@ static AURA_DB *a_db_open(struct aura_mem_ctx *mc, const char *db_path, int ofla
     if (!db)
         return NULL;
 
-    // db->file_name = strndup(db_file, strlen(db_file));
-    // if (!db->file_name) {
-    //     free(db);
-    //     return NULL;
-    // }
     db->mc = mc;
     db->shutdown = false;
     a_db_update_state(db, A_DB_STATE_STARTUP);
@@ -1364,7 +1359,7 @@ static inline void a_db_tx_tab_get_active_slot_idx(AURA_DB *db, uint64_t *idx, u
 }
 
 /**
- * Assign a true transaction ID for this
+ * Assign a real transaction ID for this
  * transaction. Previous transaction ID
  * was a virtual ID from the specific thread
  */

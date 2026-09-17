@@ -8,20 +8,19 @@
 #include "log_msg.h"
 #include "unix/sock.h"
 #include "utils_lib.h"
-#include <string.h>
 
-struct fn_status_config {
+struct fn_show_config {
     char *fn_name;
 };
 
 /* Allocator fn */
-static void *a_fn_status_option_allocator(void) {
-    return malloc(sizeof(struct fn_status_config));
+static void *a_fn_show_option_allocator(void) {
+    return malloc(sizeof(struct fn_show_config));
 }
 
 /* Deallocator fn */
-static void a_fn_status_option_deallocator(void *opts_ptr) {
-    struct fn_status_config *opts = (struct fn_status_config *)opts_ptr;
+static void a_fn_show_option_deallocator(void *opts_ptr) {
+    struct fn_show_config *opts = (struct fn_show_config *)opts_ptr;
     if (!opts_ptr)
         return;
 
@@ -31,7 +30,7 @@ static void a_fn_status_option_deallocator(void *opts_ptr) {
     free(opts);
 }
 
-struct aura_cli_flag fn_status_flag = {
+struct aura_cli_flag fn_show_flag = {
   .name = "function",
   .short_name = 'f',
   .default_value = NULL,
@@ -40,14 +39,13 @@ struct aura_cli_flag fn_status_flag = {
   .is_required = true,
   .is_set = false,
   .type = A_CLI_FLAG_STRING,
-  .offset_in_option = OPT_OFFSET(struct fn_status_config, fn_name),
-  .description = "Name of the function",
+  .offset_in_option = OPT_OFFSET(struct fn_show_config, fn_name),
+  .description = "Name and version of the function (name:version)",
 };
 
-int aura_cli_fn_status(void *opts_ptr, void *glob_opts) {
+int aura_cli_fn_show(void *opts_ptr, void *glob_opts) {
     struct aura_msg_hdr hdr;
-    struct fn_status_config *opts;
-    int sock_fd, rv;
+    struct fn_show_config *opts;
     uint32_t fn_verion;
     struct aura_iovec data;
     struct aura_fn_evt *evt;
@@ -56,6 +54,7 @@ int aura_cli_fn_status(void *opts_ptr, void *glob_opts) {
     char fn_version[A_FN_VERSION_MAX_LEN];
     char *fn_key_copy;
     struct iovec fn_key;
+    int sock_fd;
     bool dev_mode = false;
 
 #ifdef AURA_DEV_BUILD
@@ -70,7 +69,7 @@ int aura_cli_fn_status(void *opts_ptr, void *glob_opts) {
         return -1;
     }
 
-    opts = (struct fn_status_config *)opts_ptr;
+    opts = (struct fn_show_config *)opts_ptr;
     fn_key_copy = strdup(opts->fn_name);
     fn_key.iov_base = opts->fn_name;
     fn_key.iov_len = strlen(opts->fn_name);
@@ -81,12 +80,12 @@ int aura_cli_fn_status(void *opts_ptr, void *glob_opts) {
         return -1;
     }
 
-    a_init_msg_hdr(hdr, fn_key.iov_len, A_MSG_CMD_EXECUTE, A_CMD_FN_STATUS);
+    a_init_msg_hdr(hdr, fn_key.iov_len, A_MSG_CMD_EXECUTE, A_CMD_FN_SHOW);
 
     /* send over the directory file descriptor */
     if (aura_msg_send(sock_fd, &hdr, fn_key_copy, fn_key.iov_len, -1) != 0) {
-        sys_info(false, errno, cmd_send_failed);
         free(fn_key_copy);
+        sys_info(false, errno, cmd_send_failed);
         return -1;
     }
     free(fn_key_copy);
@@ -109,7 +108,7 @@ int aura_cli_fn_status(void *opts_ptr, void *glob_opts) {
         }
 
         if (evt->msg_len > 0) {
-            app_info(false, 0, "%s", evt->msg);
+            fprintf(stdout, "%s", evt->msg);
         } else {
             switch (evt->error_code) {
             case A_FN_ERROR_GENERIC:
@@ -121,7 +120,7 @@ int aura_cli_fn_status(void *opts_ptr, void *glob_opts) {
                 break;
 
             case A_FN_ERROR_NONE:
-                app_info(false, 0, cli_cmd_msg[A_FN_ERROR_NONE].base);
+                app_info(false, 0, "%s", cli_cmd_msg[A_FN_ERROR_NONE].base);
                 break;
 
             default:
@@ -138,22 +137,22 @@ int aura_cli_fn_status(void *opts_ptr, void *glob_opts) {
 }
 
 /* HELP CMD */
-static void a_fn_status_help() {
-    app_info(false, 0, "aura function status -f <function name>");
+static void a_fn_show_help() {
+    app_info(false, 0, "aura function show -f <function name>");
 }
 
-struct aura_cli_flag *fn_status_flags[] = {
-  &fn_status_flag,
+struct aura_cli_flag *fn_show_flags[] = {
+  &fn_show_flag,
 };
 
-struct aura_cli_cmd fn_status_cli = {
+struct aura_cli_cmd fn_show_cli = {
   .version = "1.0.0",
-  .name = "status",
-  .description = "Get the status of the provided function",
-  .usage = "aura function status -f <function name>",
+  .name = "show",
+  .description = "Show details of a function",
+  .usage = "aura function show -f <function name>",
   .deprecated = NULL,
-  .flags = fn_status_flags,
-  .flag_cnt = ARRAY_SIZE(fn_status_flags),
+  .flags = fn_show_flags,
+  .flag_cnt = ARRAY_SIZE(fn_show_flags),
   .args = NULL,
   .args_cnt = 0,
   .sub_cmds = NULL,
@@ -164,9 +163,9 @@ struct aura_cli_cmd fn_status_cli = {
   .is_hidden = false,
   .is_experimental = false,
   .options = NULL,
-  .options_size = sizeof(struct fn_status_config),
-  .opt_allocator = a_fn_status_option_allocator,
-  .opt_destructor = a_fn_status_option_deallocator,
-  .handler = aura_cli_fn_status,
-  .opt_help = a_fn_status_help,
+  .options_size = sizeof(struct fn_show_config),
+  .opt_allocator = a_fn_show_option_allocator,
+  .opt_destructor = a_fn_show_option_deallocator,
+  .handler = aura_cli_fn_show,
+  .opt_help = a_fn_show_help,
 };

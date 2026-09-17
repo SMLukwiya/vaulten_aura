@@ -2,7 +2,6 @@
 #include "bug_lib.h"
 #include "db/broker.h"
 #include "lib.h"
-#include "string_lib.h"
 
 int _fn_conf_tab[] = {
   [A_IDX_FN_NONE] = 0,
@@ -41,6 +40,7 @@ struct aura_fn_list *aura_fn_list_fetch(struct aura_mem_ctx *mc, AURA_DBHANDLE d
     int rv;
 
     key = a_function_list_key;
+    *error = 0;
     /* brokered */
     if (dmn_sock_fd != -1) {
         rv = aura_db_brokered_fetch(mc, A_NS_FN, A_FN_LIST_SCHEMA_ID, &key, &data_out, dmn_sock_fd);
@@ -633,7 +633,6 @@ struct aura_fn_tag *aura_fn_tag_fetch(AURA_DBHANDLE db, struct aura_mem_ctx *mc,
     }
 
     if (fn_list->func_cnt == 0) {
-        *error = 0;
         return NULL;
     }
 
@@ -783,8 +782,8 @@ struct aura_fn_registry_ent *aura_fn_load_fn_registry_entry(struct aura_fn_regis
     return e;
 }
 
-struct aura_iovec aura_fn_meta_fetch(struct aura_mem_ctx *mc, char *name,
-                                     char *version, AURA_DBHANDLE db, int sock_fd) {
+struct aura_iovec aura_fn_meta_fetch(struct aura_mem_ctx *mc, char *name, char *version,
+                                     AURA_DBHANDLE db, int sock_fd, int *error) {
     struct aura_iovec key, data_out;
     struct aura_db_rec rec;
     char buf[2046];
@@ -794,6 +793,7 @@ struct aura_iovec aura_fn_meta_fetch(struct aura_mem_ctx *mc, char *name,
     memset(buf, 0, sizeof(buf));
     meta.base = NULL;
     meta.len = 0;
+    *error = 0;
 
     /* Brokered call */
     if (sock_fd != -1) {
@@ -801,11 +801,15 @@ struct aura_iovec aura_fn_meta_fetch(struct aura_mem_ctx *mc, char *name,
         key.base = buf;
         key.len = strlen(buf);
 
-        if (aura_db_brokered_fetch(mc, A_NS_FN, A_FN_META_SCHEMA_ID, &key, &data_out, sock_fd) < 0)
+        if (aura_db_brokered_fetch(mc, A_NS_FN, A_FN_META_SCHEMA_ID, &key, &data_out, sock_fd) < 0) {
+            *error = -1;
             return meta;
+        }
 
         meta.base = data_out.base;
         meta.len = data_out.len;
+        if (!meta.base)
+            *error = A_DB_REC_NOT_FOUND;
 
     } else {
         /* Direct call */
@@ -816,6 +820,7 @@ struct aura_iovec aura_fn_meta_fetch(struct aura_mem_ctx *mc, char *name,
 
         rv = aura_db_fetch(db, A_NS_FN, A_FN_META_SCHEMA_ID, &key, &rec);
         if (rv < 0 || rv == A_DB_REC_NOT_FOUND) {
+            *error = rv;
             return meta;
         }
 
@@ -828,11 +833,11 @@ struct aura_iovec aura_fn_meta_fetch(struct aura_mem_ctx *mc, char *name,
 
 int aura_fn_meta_load(struct aura_fn *fn, struct aura_mem_ctx *mc, char *name,
                       char *version, AURA_DBHANDLE db, int sock_fd) {
-    struct aura_iovec meta = aura_fn_meta_fetch(mc, name, version, db, sock_fd);
-    int rv;
+    int rv, error;
+    struct aura_iovec meta = aura_fn_meta_fetch(mc, name, version, db, sock_fd, &error);
 
     if (!meta.base)
-        return -1;
+        return error;
 
     rv = aura_fn_meta_parse((void *)meta.base, &fn->meta);
     aura_free((void *)meta.base);
@@ -1023,6 +1028,37 @@ int aura_fn_stat_compare(struct aura_heap_ent *s1, struct aura_heap_ent *s2) {
     _s2 = aura_container_of(s2, struct aura_fn_stat_wrapper, hp_ent);
 
     return _s1->fn_stat->invocations - _s2->fn_stat->invocations;
+}
+
+int aura_fn_meta_construct(struct aura_str_buf *buf, struct aura_fn_meta *meta) {
+    char time_buf[128];
+    int rv;
+
+    rv = aura_str_buf_append_field(buf, "", "NAME", meta->name);
+    if (rv < 0)
+        return rv;
+    rv = aura_str_buf_append_field(buf, "", "DESCRIPTION", meta->description);
+    if (rv < 0)
+        return rv;
+
+    rv = aura_str_buf_append_field(buf, "", "VERSION", meta->version);
+    if (rv < 0)
+        return rv;
+    rv = aura_str_buf_append_field(buf, "", "HOST", meta->host);
+    if (rv < 0)
+        return rv;
+    rv = aura_str_buf_append_field(buf, "", "ENTYR POINT", meta->entry_point);
+    if (rv < 0)
+        return rv;
+    aura_time_readable(meta->timestamp_ms, time_buf, sizeof(buf));
+    rv = aura_str_buf_append_field(buf, "", "DEPLOYED", time_buf);
+    if (rv < 0)
+        return rv;
+
+    for (int i = 0; i < meta->triggers.cnt; ++i) {
+    }
+
+    return 0;
 }
 
 void aura_fn_meta_dump(struct aura_fn_meta *fn_conf) {

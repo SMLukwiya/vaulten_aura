@@ -6,33 +6,6 @@
 const char fn_status_active[] = "\x1B[1;32mFunction active\x1B[0m";
 const char fn_status_inactive[] = "\x1B[1;32mFunction Inactive\x1B[0m";
 
-static void a_fn_get_name_and_version(struct iovec *fn, char *fn_name,
-                                      uint64_t func_len, char *fn_version,
-                                      uint64_t func_vlen) {
-    memset(fn_name, 0, func_len);
-    memset(fn_version, 0, func_vlen);
-
-    /* assume no version was provided */
-    func_len = fn->iov_len;
-
-    char *sep = strchr(fn->iov_base, ':');
-    if (sep) {
-        /**
-         * Function key provided as <fn_name>:<fn_version>
-         * We therefore copy the function version
-         * found after the sep(:).
-         */
-        *sep = '\0';
-        func_vlen = ((char *)fn->iov_base + fn->iov_len) - sep;
-        memcpy(fn_version, sep + 1, func_vlen);
-
-        /* account for version and separator */
-        func_len -= func_vlen - 1;
-    }
-
-    memcpy(fn_name, fn->iov_base, func_len);
-}
-
 void aura_dmn_fn_status(struct iovec *fn, int cli_fd, void *arg) {
     struct aura_dmn_glob_conf *gc = arg;
     AURA_DBHANDLE db = gc->db_handle;
@@ -46,7 +19,7 @@ void aura_dmn_fn_status(struct iovec *fn, int cli_fd, void *arg) {
     char buf[2000];
     int error, rv;
 
-    a_fn_get_name_and_version(fn, fn_name, sizeof(fn_name), fn_version, sizeof(fn_version));
+    aura_fn_get_name_and_version(fn, fn_name, sizeof(fn_name), fn_version, sizeof(fn_version));
     fn_tag = aura_fn_tag_fetch(db, &gc->mc, fn_name, fn_version, &error);
     if (!fn_tag) {
         evt.state = A_FN_OP_STATE_FAILED;
@@ -109,7 +82,7 @@ void aura_dmn_start_fn(struct iovec *fn, int cli_fd, void *arg) {
     char key_buf[2000];
     int error;
 
-    a_fn_get_name_and_version(fn, fn_name, sizeof(fn_name), fn_version, sizeof(fn_version));
+    aura_fn_get_name_and_version(fn, fn_name, sizeof(fn_name), fn_version, sizeof(fn_version));
     fn_tag = aura_fn_tag_fetch(db, &gc->mc, fn_name, fn_version, &error);
     if (!fn_tag) {
         evt.state = A_FN_OP_STATE_FAILED;
@@ -125,7 +98,7 @@ void aura_dmn_start_fn(struct iovec *fn, int cli_fd, void *arg) {
         goto out;
     }
 
-    memcpy(fn_version, fn_tag->fn_version, A_FN_VERSION_MAX_LEN);
+    memcpy(fn_version, fn_tag->fn_version, strlen(fn_tag->fn_version));
     aura_free(fn_tag);
 
     memset(key_buf, 0, sizeof(key_buf));
@@ -173,7 +146,7 @@ void aura_dmn_stop_fn(struct iovec *fn, int cli_fd, void *arg) {
     char key_buf[2000];
     int error;
 
-    a_fn_get_name_and_version(fn, fn_name, sizeof(fn_name), fn_version, sizeof(fn_version));
+    aura_fn_get_name_and_version(fn, fn_name, sizeof(fn_name), fn_version, sizeof(fn_version));
     fn_tag = aura_fn_tag_fetch(db, &gc->mc, fn_name, fn_version, &error);
     if (!fn_tag) {
         evt.state = A_FN_OP_STATE_FAILED;

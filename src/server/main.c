@@ -38,7 +38,7 @@
 #include "server_srv.h"
 #include "slab.h"
 #include "socket_srv.h"
-#include "string_lib.h"
+#include "string/lib.h"
 #include "types_lib.h"
 #include "unix/sock.h"
 #include "user/user.h"
@@ -1438,7 +1438,9 @@ static int a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd) 
 
             fn = aura_lru_cache_entry(fn_e, struct aura_fn, lc_entry);
             memset(fn, 0, offsetof(struct aura_fn, lc_entry));
-            if (aura_fn_meta_load(fn, mc, fn_tag->fn_name, fn_tag->fn_version, NULL, dmn_sock_fd) < 0)
+            rv = aura_fn_meta_load(fn, mc, fn_tag->fn_name, fn_tag->fn_version, NULL, dmn_sock_fd);
+            A_BUG_ON_2(rv == A_DB_REC_NOT_FOUND, true);
+            if (rv < 0)
                 return -1;
 
             /* only load functions which can be invoked(reachable from the outside) */

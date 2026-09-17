@@ -1,7 +1,7 @@
 #include "header_srv.h"
 #include "http_lib.h"
 #include "runtime/request.h"
-#include "string_lib.h"
+#include "string/lib.h"
 #include "task_srv.h"
 
 struct _aura_task *aura_task_create(struct aura_h2_stream *stream, struct aura_mem_ctx *mc,

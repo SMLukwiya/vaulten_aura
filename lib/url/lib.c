@@ -1,6 +1,6 @@
 #include "lib.h"
 #include "error_lib.h"
-#include <string_lib.h>
+#include "string/lib.h"
 
 static inline int a_decode_hex(int8_t c) {
     if ('0' <= c && c <= '9')

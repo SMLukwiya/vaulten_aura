@@ -10,7 +10,7 @@
 #include "protocol.h"
 #include "slab.h"
 #include "socket_srv.h"
-#include "string_lib.h"
+#include "string/lib.h"
 
 #include <stdatomic.h>
 #include <stdbool.h>

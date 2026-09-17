@@ -12,7 +12,7 @@
 #include "quickjs.h"
 #include "quickjs_internals.h"
 #include "request/req.h"
-#include "string_lib.h"
+#include "string/lib.h"
 #include "utils_lib.h"
 
 static int32_t a_qjs_utf8_handler(A_QJS_TEXT_UTF8DecoderState *st, int byte_or_eof, int *restore_byte);

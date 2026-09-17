@@ -8,7 +8,7 @@ set(common_sources
     ${vaulten_aura_SOURCE_DIR}/lib/memory/mem_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/memory/slab_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/memory/sliding_buf.c
-    ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/string/lib.c
 )
 
 # -------------------- DB TESTS -------------------- #
@@ -18,7 +18,7 @@ add_executable(test_aura_db
     ${vaulten_aura_SOURCE_DIR}/lib/hasher_lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/file/lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/encrypt/lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/string/lib.c
     ${common_sources}
 )
 target_link_libraries(test_aura_db PUBLIC OpenSSL::SSL OpenSSL::Crypto)
@@ -145,7 +145,7 @@ set_tests_properties(heap_test PROPERTIES
 add_executable(test_aura_url
     url/basic.c
     ${vaulten_aura_SOURCE_DIR}/lib/url/lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/string/lib.c
     ${common_sources}
 )
 
@@ -172,7 +172,7 @@ add_executable(test_aura_hashmap
     hashmap/basic.c
     ${vaulten_aura_SOURCE_DIR}/lib/hashmap/map_v1.c
     ${vaulten_aura_SOURCE_DIR}/lib/hasher_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/string/lib.c
     ${common_sources}
 )
 
@@ -201,7 +201,7 @@ add_executable(test_aura_hpack
     ${vaulten_aura_SOURCE_DIR}/src/server/protocol/h2/header.c
     ${vaulten_aura_SOURCE_DIR}/src/server/srv/interned.c
     ${vaulten_aura_SOURCE_DIR}/lib/hasher_lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/string_lib.c
+    ${vaulten_aura_SOURCE_DIR}/lib/string/lib.c
     ${common_sources}
 )
 

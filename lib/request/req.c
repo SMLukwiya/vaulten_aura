@@ -1,7 +1,7 @@
 #include "req.h"
 #include "error_lib.h"
 #include "http_lib.h"
-#include "string_lib.h"
+#include "string/lib.h"
 
 Request *aura_task_create2(struct aura_mem_ctx *mc, uint8_t method, struct aura_kv_vec *headers,
                            const uint8_t *body, uint64_t cont_len, uint8_t *url) {

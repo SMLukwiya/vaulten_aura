@@ -31,17 +31,14 @@ int aura_dmn_db_req(struct iovec *data, int cli_fd, struct aura_dmn_glob_conf *g
         switch (request->schema_id) {
         case A_FN_CODE_SCHEMA_ID:
             struct aura_iovec code = aura_fn_code_fetch(&gc->mc, fn_name, fn_version, db, -1);
-            // if (!code.base) {
-            //     res = aura_resp_send(cli_fd, NULL, 0);
-            //     return res;
-            // }
 
             res = aura_resp_send(cli_fd, code.base, code.len);
             aura_free(code.base);
             break;
 
         case A_FN_META_SCHEMA_ID:
-            struct aura_iovec meta = aura_fn_meta_fetch(&gc->mc, fn_name, fn_version, db, -1);
+            int error;
+            struct aura_iovec meta = aura_fn_meta_fetch(&gc->mc, fn_name, fn_version, db, -1, &error);
 
             res = aura_resp_send(cli_fd, meta.base, meta.len);
             aura_free(meta.base);

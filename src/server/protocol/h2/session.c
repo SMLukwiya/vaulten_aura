@@ -469,13 +469,13 @@ void aura_h2_update_stream_priority(struct aura_h2_core *h2_c, struct aura_h2_st
     if (stream->prio.urgency = prio->urgency && stream->prio.incremental == prio->incremental)
         return;
 
-    stream->prio = *prio;
     if (stream->queued) {
         aura_h2_conn_sched_detach_stream(h2_c, stream);
         stream->prio = *prio;
         aura_h2_conn_sched_attach_stream(h2_c, stream);
         return;
     }
+    stream->prio = *prio;
 }
 
 /**

@@ -1,5 +1,5 @@
 #include "header_srv.h"
-#include "string_lib.h"
+#include "string/lib.h"
 #include "token_srv.h"
 
 int aura_header_add_header_field(struct aura_mem_ctx *mc, struct aura_header_vector *hdrs,

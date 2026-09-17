@@ -1,6 +1,6 @@
 #include "error_lib.h"
 #include "map.h"
-#include "string_lib.h"
+#include "string/lib.h"
 
 int aura_rh_map_init(struct aura_rh_map *map, struct aura_mem_ctx *mc,
                      uint32_t initial_cap, a_rh_map_key_t key_type, bool can_resize) {

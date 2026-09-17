@@ -114,17 +114,6 @@ struct aura_db_rec {
     struct aura_iovec data;
 };
 
-/** @todo: remove */
-// struct aura_db_completion {
-//     uint64_t req_id;
-//     int client_fd;
-//     uint32_t state;
-//     int status;
-//     bool proceed;
-//     void *user_data; /* opaque user data */
-//     void (*on_complete)(struct aura_db_completion *, ssize_t db_res, AURA_DBHANDLE db);
-// };
-
 typedef enum {
     A_DB_STATE_STARTUP,
     A_DB_STATE_RECOVERY,

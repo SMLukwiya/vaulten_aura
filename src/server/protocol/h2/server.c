@@ -12,7 +12,7 @@
 #include "server_srv.h"
 #include "slab.h"
 #include "socket_srv.h"
-#include "string_lib.h"
+#include "string/lib.h"
 #include "utils_lib.h"
 #include "worker_srv.h"
 
