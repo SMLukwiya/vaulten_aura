@@ -1,8 +1,8 @@
 #include "lib.h"
 
-int aura_stream_provider_init(struct aura_stream_provider *p, void *ctx,
-                              struct aura_stream_src_ops *ops, void *opaque,
-                              opaque_destructor_fn fn) {
+int aura_js_stream_provider_init(struct aura_stream_provider *p, void *ctx,
+                                 struct aura_stream_src_ops *ops, void *opaque,
+                                 opaque_destructor_fn fn) {
     memset(p, 0, sizeof(*p));
     p->opaque = opaque;
     p->opaque_destructor = fn;

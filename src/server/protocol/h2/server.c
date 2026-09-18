@@ -7,7 +7,7 @@
 #include "h2/hpack.h"
 #include "h2/scheduler.h"
 #include "h2/sentinel.h"
-#include "header_srv.h"
+#include "header.h"
 #include "route_srv.h"
 #include "server_srv.h"
 #include "slab.h"
@@ -358,7 +358,7 @@ int aura_submit_response(struct aura_h2_server_conn *h2_conn, struct aura_h2_str
     //     return rv;
 }
 
-struct aura_basic_header *a_get_slot(struct aura_h2_stream *stream, struct aura_mem_ctx *mc) {
+struct aura_kv_iovec *a_get_slot(struct aura_h2_stream *stream, struct aura_mem_ctx *mc) {
 
     if (stream->res.headers.cnt >= stream->res.headers.cap) {
         stream->res.headers.cap = stream->res.headers.cap == 0 ? 16 : stream->res.headers.cap * 2;
@@ -385,9 +385,9 @@ int aura_h2_submit_error_response(struct aura_h2_core *h2_c, struct aura_h2_stre
         stream->res.content_length = len;
         stream->res.body = body;
     }
-    struct aura_basic_header *slot = a_get_slot(stream, conn->mc);
-    slot->name.len = sizeof("content-type") - 1;
-    slot->name.base = aura_strndup(conn->mc, "content-type", slot->name.len);
+    struct aura_kv_iovec *slot = a_get_slot(stream, conn->mc);
+    slot->key.len = sizeof("content-type") - 1;
+    slot->key.base = aura_strndup(conn->mc, "content-type", slot->key.len);
     slot->value.len = sizeof("application/json") - 1;
     slot->value.base = aura_strndup(conn->mc, "application/json", slot->value.len);
 
@@ -399,7 +399,7 @@ int aura_h2_submit_error_response(struct aura_h2_core *h2_c, struct aura_h2_stre
 }
 
 int aura_h2_submit_rt_response(struct aura_h2_core *h2_conn, struct aura_h2_stream *stream,
-                               _Response *resp, struct aura_mem_ctx *mc) {
+                               Response *resp, struct aura_mem_ctx *mc) {
     int status, rv;
 
     rv = A_H2_ERR_NONE;
@@ -711,15 +711,6 @@ static int a_header_path_cb(struct aura_h2_core *h2_c, struct aura_h2_stream *st
     return A_HPACK_OK;
 }
 
-static a_http_scheme_t a_http_get_scheme(const char *scheme, size_t len) {
-    if (strncasecmp(scheme, "HTTP", len) == 0)
-        return A_SCHEME_HTTP;
-    else if (strncasecmp(scheme, "HTTPS", len) == 0)
-        return A_SCHEME_HTTPS;
-    else
-        return A_SCHEME_NONE;
-}
-
 /**
  * Returns 0 if parsed scheme is valid and
  * supported, otherwise err
@@ -729,7 +720,7 @@ static int a_header_scheme_cb(struct aura_h2_core *h2_c, struct aura_h2_stream *
     /**/
     app_debug(true, 0, ">>>> a_header_scheme_cb %s", value->base);
     if (process) {
-        stream->req.scheme = a_http_get_scheme(value->base, value->len);
+        stream->req.scheme = aura_http_scheme_get_scheme_t(value->base, value->len);
         if (stream->req.scheme == A_SCHEME_NONE)
             return A_HPACK_INVALID_VALUE_ERR;
     }
@@ -816,9 +807,11 @@ static int aura_h2_srv_process_request(struct aura_h2_server_conn *c, uint32_t s
     struct aura_fn_registry_ent *fn_ent;
     struct aura_work_queue *wq;
     struct aura_conn *conn;
-    struct _aura_task *task;
-    _Request *req;
-    _Response *resp;
+    struct aura_task *task;
+    Request *req;
+    Response *resp;
+    char *url;
+    uint64_t url_len;
     int rv;
 
     stream = aura_h2_conn_find_stream(&c->core, stream_id);
@@ -831,21 +824,45 @@ static int aura_h2_srv_process_request(struct aura_h2_server_conn *c, uint32_t s
         fn_ent = conn->fn_ent;
         A_BUG_ON_2(!fn_ent, true);
 
-        /* Create task */
-        // task = aura_task_create(
-        //   stream,
-        //   conn->mc,
-        //   conn->fn_ent->fn->meta.http_trigger.path.base,
-        //   conn->srv_ctx->next_task_id++,
-        //   conn->conn_id,
-        //   conn->conn_tab_idx,
-        //   A_TASK_PROTOCOL_H2);
-        // if (!task)
-        //     return A_H2_INTERNAL_ERR;
+        /* @todo: load the function to cache */
+        if (fn_ent->load_state == A_FN_UNLOADED) {
+            /* @todo: could it be activated and done async */
+        }
 
-        // rv = aura_work_queue_add(route->wq, route->fn, task);
+        /* calculate url len */
+        const char *scheme = a_http_scheme_str[stream->req.scheme];
+        url = aura_url_construct(conn->mc, scheme, stream->req.authority.host.base, stream->req.path.base, NULL, 0);
+        if (!url)
+            return A_H2_INTERNAL_ERR;
+        req = aura_js_req_create(
+          conn->mc,
+          stream->req.method,
+          &stream->req.headers,
+          stream->req.body,
+          stream->req.content_length,
+          url);
+        aura_free(url);
+        if (!req)
+            return A_H2_INTERNAL_ERR;
+
+        /* Since body could have been transfered to the request, account for it on the stream */
+        if (aura_http_method_can_accept_body(stream->req.method)) {
+            stream->req.body = NULL;
+            stream->req.content_length = 0;
+        }
+
+        /* Create task */
+        task = aura_task_create(conn->mc, fn_ent->fn->meta.fn_id, NULL, 0, req, A_TASK_PENDING);
+        if (!task) {
+            aura_js_req_destroy(req);
+            return A_H2_INTERNAL_ERR;
+        }
+
+        /* enqueue task */
+        aura_fn_queue_enqueue_task(&fn_ent->fn_queue, task);
+
         if (rv) {
-            aura_rt_req_destroy(req);
+            aura_js_req_destroy(req);
             aura_free(task);
             return A_H2_INTERNAL_ERR;
         }

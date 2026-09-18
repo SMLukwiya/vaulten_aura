@@ -37,7 +37,7 @@ static JSClassDef request_class = {
 
 static void a_qjs_response_finalizer(JSRuntime *rt, JSValue val) {
     Response *res = JS_GetOpaque(val, response_id);
-    aura_res_destroy(res);
+    aura_js_res_destroy(res);
 }
 
 /* Response class definition */
@@ -443,11 +443,11 @@ void aura_qjs_reset(struct aura_qjs_execution_ctx *exec_ctx) {
 
     if (event_ctx->event.request) {
         aura_stream_provider_destroy(event_ctx->event.request->sp);
-        aura_req_destroy(event_ctx->event.request);
+        aura_js_req_destroy(event_ctx->event.request);
     }
 
     // if (event_ctx->event.response)
-    //     aura_res_destroy(event_ctx->event.response);
+    //     aura_js_res_destroy(event_ctx->event.response);
 
     event_ctx->event.request = NULL;
     // event_ctx->event.response = NULL;

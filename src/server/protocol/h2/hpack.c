@@ -2085,7 +2085,7 @@ int aura_hpack_encode_content_length(struct aura_hpack_encoder *enc, uint64_t va
 }
 
 int aura_hpack_encode_headers(struct aura_hpack_encoder *enc, struct aura_intern_tab *intern_tab,
-                              struct aura_basic_header *hdr_field, uint64_t hdr_cnt) {
+                              struct aura_kv_iovec *hdr_field, uint64_t hdr_cnt) {
     bool should_intern_value;
     int rv;
 
@@ -2106,8 +2106,8 @@ int aura_hpack_encode_headers(struct aura_hpack_encoder *enc, struct aura_intern
         a_hpack_header_find_or_create(
           &header,
           intern_tab,
-          hdr_field[i].name.base,
-          hdr_field[i].name.len,
+          hdr_field[i].key.base,
+          hdr_field[i].key.len,
           hdr_field[i].value.base,
           hdr_field[i].value.len,
           true,
@@ -2184,7 +2184,7 @@ int aura_hpack_encoder_update_tab_size(struct aura_hpack_encoder *enc, size_t ma
 }
 
 int aura_hpack_encode_header_test(struct aura_hpack_encoder *enc, struct aura_intern_tab *intern_tab,
-                                  struct aura_basic_header *hdr) {
+                                  struct aura_kv_iovec *hdr) {
     bool should_intern_value;
     uint8_t *dest;
     size_t dest_len, hdr_size = 0;
@@ -2195,8 +2195,8 @@ int aura_hpack_encode_header_test(struct aura_hpack_encoder *enc, struct aura_in
     a_hpack_header_find_or_create(
       &header,
       intern_tab,
-      hdr->name.base,
-      hdr->name.len,
+      hdr->key.base,
+      hdr->key.len,
       hdr->value.base,
       hdr->value.len,
       true,
@@ -2208,7 +2208,7 @@ int aura_hpack_encode_header_test(struct aura_hpack_encoder *enc, struct aura_in
 
 int aura_hpack_encode_header_indexed_name_test(struct aura_hpack_encoder *enc,
                                                struct aura_intern_tab *intern_tab,
-                                               struct aura_basic_header *hdr, int index,
+                                               struct aura_kv_iovec *hdr, int index,
                                                a_hpack_indexing_mode ind_mode) {
     uint8_t *dest;
     size_t dest_len, hdr_size = 0, rv;
@@ -2221,8 +2221,8 @@ int aura_hpack_encode_header_indexed_name_test(struct aura_hpack_encoder *enc,
     a_hpack_header_find_or_create(
       &header,
       intern_tab,
-      hdr->name.base,
-      hdr->name.len,
+      hdr->key.base,
+      hdr->key.len,
       hdr->value.base,
       hdr->value.len,
       true,
@@ -2258,7 +2258,7 @@ int aura_hpack_encode_header_indexed_name_test(struct aura_hpack_encoder *enc,
 
 int aura_hpack_encode_header_new_name_test(struct aura_hpack_encoder *enc,
                                            struct aura_intern_tab *intern_tab,
-                                           struct aura_basic_header *hdr,
+                                           struct aura_kv_iovec *hdr,
                                            a_hpack_indexing_mode ind_mode) {
     uint8_t *dest;
     size_t dest_len, hdr_size = 0, rv;
@@ -2271,8 +2271,8 @@ int aura_hpack_encode_header_new_name_test(struct aura_hpack_encoder *enc,
     a_hpack_header_find_or_create(
       &header,
       intern_tab,
-      hdr->name.base,
-      hdr->name.len,
+      hdr->key.base,
+      hdr->key.len,
       hdr->value.base,
       hdr->value.len,
       true,

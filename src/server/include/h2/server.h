@@ -6,6 +6,7 @@
 #include "h2/session.h"
 #include "h2/stream.h"
 #include "mem.h"
+#include "request/js/req.h"
 #include "types_lib.h"
 
 #include <stdint.h>
@@ -90,7 +91,7 @@ static inline bool aura_h2_conn_error_is_fatal(int err) {
  * Construct a response to send to the peer
  */
 int aura_h2_submit_rt_response(struct aura_h2_core *h2_conn, struct aura_h2_stream *stream,
-                               _Response *resp, struct aura_mem_ctx *mc);
+                               Response *resp, struct aura_mem_ctx *mc);
 
 /* Create h2 server connection */
 struct aura_h2_server_conn *aura_h2_srv_conn_create(struct aura_mem_ctx *mc);

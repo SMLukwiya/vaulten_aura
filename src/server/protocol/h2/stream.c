@@ -136,8 +136,8 @@ void aura_h2_stream_dump(struct aura_h2_stream *stream) {
     app_debug(true, 0, "    stream header buf size: %lu", aura_sliding_buf_read_len(stream->out_buf));
 }
 
-int aura_h2_stream_claim_rt_request(struct aura_mem_ctx *mc, struct aura_h2_stream *stream, _Request *req) {
-    struct aura_basic_header *header;
+int aura_h2_stream_claim_rt_request(struct aura_mem_ctx *mc, struct aura_h2_stream *stream, Request *req) {
+    struct aura_kv_iovec *header;
 
     /* Take ownership of url structure and its underlying memory */
     stream->req.authority.host = req->parsed_url.authority.host;
@@ -159,7 +159,7 @@ int aura_h2_stream_claim_rt_request(struct aura_mem_ctx *mc, struct aura_h2_stre
     // stream->req.headers = req->headers;
 
     if (req->headers.entries && req->headers.cnt > 0) {
-        stream->req.headers.entries = aura_alloc(mc, sizeof(struct aura_basic_header) * req->headers.cnt);
+        stream->req.headers.entries = aura_alloc(mc, sizeof(struct aura_kv_iovec) * req->headers.cnt);
         if (!stream->req.headers.entries)
             return -1;
 
@@ -168,21 +168,21 @@ int aura_h2_stream_claim_rt_request(struct aura_mem_ctx *mc, struct aura_h2_stre
             // header = &req->headers.entries[i];
             // stream->req.headers.entries[i].name.base = aura_strndup(mc, header->name.base, header->name.len);
             // stream->req.headers.entries[i].value.base = aura_strndup(mc, header->value.base, header->value.len);
-            stream->req.headers.entries[i] = req->headers.entries[i];
+            // stream->req.headers.entries[i] = req->headers.entries[i];
             // memset(&req->headers.entries[i], 0, sizeof(*req->headers.entries));
-            stream->req.headers.cnt++;
+            // stream->req.headers.cnt++;
         }
         /* release headers from request object */
         req->headers.cnt = 0;
     }
 
-    aura_rt_req_destroy(req);
+    aura_js_req_destroy(req);
 
     return 0;
 }
 
-int aura_h2_stream_claim_rt_response(struct aura_h2_stream *stream, _Response *resp, struct aura_mem_ctx *mc) {
-    // struct aura_basic_header *header;
+int aura_h2_stream_claim_rt_response(struct aura_h2_stream *stream, Response *resp, struct aura_mem_ctx *mc) {
+    // struct aura_kv_iovec*header;
 
     stream->res.status_code = resp->status;
     stream->res.content_length = resp->body_len;
@@ -200,8 +200,8 @@ int aura_h2_stream_claim_rt_response(struct aura_h2_stream *stream, _Response *r
         /* Take ownership of response headers */
         for (int i = 0; i < resp->headers.cnt; ++i) {
             // memcpy(&stream->res.headers.entries[i], header, sizeof(*header));
-            stream->res.headers.entries[i] = resp->headers.entries[i];
-            stream->res.headers.cnt++;
+            // stream->res.headers.entries[i] = resp->headers.entries[i];
+            // stream->res.headers.cnt++;
         }
         /* release headers from response object */
         resp->headers.cnt = 0;

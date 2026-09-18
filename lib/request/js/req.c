@@ -3,8 +3,8 @@
 #include "http_lib.h"
 #include "string/lib.h"
 
-Request *aura_task_create2(struct aura_mem_ctx *mc, uint8_t method, struct aura_kv_vec *headers,
-                           const uint8_t *body, uint64_t cont_len, uint8_t *url) {
+Request *aura_js_req_create(struct aura_mem_ctx *mc, uint8_t method, struct aura_kv_vec *headers,
+                            const uint8_t *body, uint64_t cont_len, uint8_t *url) {
     Request *req;
 
     req = aura_alloc(mc, sizeof(*req));
@@ -20,7 +20,7 @@ Request *aura_task_create2(struct aura_mem_ctx *mc, uint8_t method, struct aura_
     if (headers->entries && headers->cnt > 0) {
         req->headers.entries = aura_alloc(mc, sizeof(*req->headers.entries) * headers->cnt);
         if (!req->headers.entries) {
-            aura_req_destroy(req);
+            aura_js_req_destroy(req);
             return NULL;
         }
 
@@ -33,7 +33,7 @@ Request *aura_task_create2(struct aura_mem_ctx *mc, uint8_t method, struct aura_
 
     req->body = NULL;
     req->body_len = 0;
-    if (req->method == A_HTTP_POST) {
+    if (req->method == A_HTTP_POST || req->method == A_HTTP_PUT || req->method == A_HTTP_PATCH) {
         req->body = body;
         req->body_len = cont_len;
 
@@ -41,7 +41,7 @@ Request *aura_task_create2(struct aura_mem_ctx *mc, uint8_t method, struct aura_
     }
 }
 
-void aura_req_destroy(Request *req) {
+void aura_js_req_destroy(Request *req) {
     if (!req)
         return;
 
@@ -62,37 +62,37 @@ void aura_req_destroy(Request *req) {
     aura_free(req);
 }
 
-int aura_req_stream_provider_create(struct aura_mem_ctx *mc, Request *req,
-                                    struct aura_stream_src_ops *ops, void *opaque,
-                                    opaque_destructor_fn fn) {
+int aura_js_req_stream_provider_create(struct aura_mem_ctx *mc, Request *req,
+                                       struct aura_stream_src_ops *ops, void *opaque,
+                                       opaque_destructor_fn fn) {
     req->sp = aura_alloc(mc, sizeof(*req->sp));
     if (!req->sp) {
         return -1;
     }
 
-    if (aura_stream_provider_init(req->sp, req, ops, opaque, fn) < 0) {
+    if (aura_js_stream_provider_init(req->sp, req, ops, opaque, fn) < 0) {
         return -1;
     }
 
     return 0;
 }
 
-int aura_res_stream_provider_create(struct aura_mem_ctx *mc, Response *res,
-                                    struct aura_stream_src_ops *ops, void *opaque,
-                                    opaque_destructor_fn fn) {
+int aura_js_res_stream_provider_create(struct aura_mem_ctx *mc, Response *res,
+                                       struct aura_stream_src_ops *ops, void *opaque,
+                                       opaque_destructor_fn fn) {
     res->sp = aura_alloc(mc, sizeof(*res->sp));
     if (!res->sp) {
         return -1;
     }
 
-    if (aura_stream_provider_init(res->sp, res, ops, opaque, fn) < 0) {
+    if (aura_js_stream_provider_init(res->sp, res, ops, opaque, fn) < 0) {
         return -1;
     }
 
     return 0;
 }
 
-Response *aura_res_create(struct aura_mem_ctx *mc) {
+Response *aura_js_res_create(struct aura_mem_ctx *mc) {
     Response *resp;
 
     resp = aura_alloc(mc, sizeof(*resp));
@@ -103,7 +103,7 @@ Response *aura_res_create(struct aura_mem_ctx *mc) {
     return resp;
 }
 
-void aura_res_destroy(Response *res) {
+void aura_js_res_destroy(Response *res) {
     if (!res)
         return;
 
@@ -129,15 +129,15 @@ static inline struct aura_kv_iovec *a_req_get_kv_slot(struct aura_mem_ctx *mc,
     return &headers->entries[headers->cnt++];
 }
 
-struct aura_kv_iovec *aura_req_get_kv_slot(struct aura_mem_ctx *mc, Request *req) {
+struct aura_kv_iovec *aura_js_req_get_kv_slot(struct aura_mem_ctx *mc, Request *req) {
     return a_req_get_kv_slot(mc, &req->headers);
 }
 
-struct aura_kv_iovec *aura_res_get_kv_slot(struct aura_mem_ctx *mc, Response *resp) {
+struct aura_kv_iovec *aura_js_res_get_kv_slot(struct aura_mem_ctx *mc, Response *resp) {
     return a_req_get_kv_slot(mc, &resp->headers);
 }
 
-void aura_req_dump(Request *req) {
+void aura_js_req_dump(Request *req) {
     app_debug(true, 0, "AURA_REQUEST");
     app_debug(true, 0, " url=%s", req->url);
     app_debug(true, 0, " scheme=%s", req->scheme.base);
@@ -150,7 +150,7 @@ void aura_req_dump(Request *req) {
     app_debug(true, 0, " body consumer data=%p", req->bc.opaque);
 }
 
-void aura_res_dump(Response *resp) {
+void aura_js_res_dump(Response *resp) {
     app_debug(true, 0, "AURA_RT_RESPONSE");
     app_debug(true, 0, "    Status: %d", resp->status);
     app_debug(true, 0, "    Body: %p", resp->body);

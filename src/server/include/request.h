@@ -1,9 +1,12 @@
 #ifndef AURA_SRV_REQUEST_H
+#define AURA_SRV_REQUEST_H
 
-#include "header_srv.h"
-#include "http_lib.h"
-#include "types_lib.h"
 #include <string.h>
+
+#include "header.h"
+#include "http_lib.h"
+#include "request/js/req.h"
+#include "types_lib.h"
 
 /* Http request structure */
 struct aura_http_req {
@@ -15,7 +18,8 @@ struct aura_http_req {
     size_t content_length; /** @todo: may not be needed */
     const char *body;      /* request body, zero copy */
     struct aura_iovec query;
-    struct aura_header_vector headers;
+    struct aura_kv_vec headers;
+    struct aura_kv_vec2 headers2;
     int version; /* represent in numeric */
     uint8_t method;
     uint8_t scheme;
@@ -27,8 +31,7 @@ struct aura_http_res {
     const char *reason;
     const char *body;
     size_t content_length; /* = SIZE_MAX when there is no data */
-    struct aura_header_vector headers;
-    struct aura_header_vector2 headers2;
+    struct aura_kv_vec headers;
     uint16_t status_code;
 };
 

@@ -12,7 +12,6 @@
 #include "executors/js/quickjs/rt.h"
 #include "http_lib.h"
 #include "mem.h"
-#include "runtime/request.h"
 #include "session.h"
 #include "slab.h"
 

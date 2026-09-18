@@ -487,17 +487,24 @@ struct aura_fn_list {
 
 typedef void (*opaque_destructor_fn)(void *opaque);
 
-/* Function registry entry */
+/**
+ * Function registry entry.
+ *
+ */
 struct aura_fn_registry_ent {
-    struct aura_fn_tag fn_tag;
     struct aura_fn *fn;
-    struct aura_fn_queue fn_queue;
     void *opaque; /* Function data(http) */
     opaque_destructor_fn opaque_dest;
+    struct aura_fn_tag fn_tag;
+    struct aura_fn_queue fn_queue;
     uint8_t load_state;
 };
 
-/* Function registry structure */
+/**
+ * Function registry structure
+ * A structure to contain available functions,
+ * partially loaded or fully loaded.
+ */
 struct aura_fn_registry {
     struct aura_fn_registry_ent entries[A_FN_MAX_REGISTRY_CNT];
     struct aura_rh_map hashmap; /* Quick fn lookup */
@@ -761,6 +768,12 @@ int aura_fn_stat_compare(struct aura_heap_ent *s1, struct aura_heap_ent *s2);
 
 /* Initialize function queue */
 int aura_fn_queue_init(struct aura_fn_queue *q, struct aura_worker_pool *glob_pool);
+
+/* Enqueue new task */
+static inline void aura_fn_queue_enqueue_task(struct aura_fn_queue *fn_q, struct aura_task *task) {
+    aura_list_add_tail(&fn_q->task_list, &task->entry);
+    fn_q->nr_active++;
+}
 
 /* Destroy function structure */
 void aura_fn_destroy(struct aura_fn *fn);

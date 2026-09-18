@@ -1,10 +1,10 @@
-#include "header_srv.h"
+#include "header.h"
 #include "string/lib.h"
 #include "token_srv.h"
 
-int aura_header_add_header_field(struct aura_mem_ctx *mc, struct aura_header_vector *hdrs,
+int aura_header_add_header_field(struct aura_mem_ctx *mc, struct aura_kv_vec *hdrs,
                                  struct aura_header_field *header) {
-    struct aura_basic_header *slot;
+    struct aura_kv_iovec *slot;
 
     if (hdrs->cnt >= hdrs->cap) {
         hdrs->cap = hdrs->cap == 0 ? 16 : hdrs->cap * 2;
@@ -14,8 +14,8 @@ int aura_header_add_header_field(struct aura_mem_ctx *mc, struct aura_header_vec
     }
 
     slot = &hdrs->entries[hdrs->cnt++];
-    slot->name.base = aura_strndup(mc, header->name->data, header->name->len);
-    slot->name.len = header->name->len;
+    slot->key.base = aura_strndup(mc, header->name->data, header->name->len);
+    slot->key.len = header->name->len;
     if (header->flags & A_HDR_FIELD_FLAG_VALUE_INTERNED) {
         slot->value.base = aura_strndup(mc, header->value.interned->data, header->value.interned->len);
         slot->value.len = header->value.interned->len;

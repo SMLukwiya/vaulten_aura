@@ -273,3 +273,27 @@ void aura_url_destroy(struct aura_url *parsed_url) {
     if (parsed_url->query.base)
         aura_free(parsed_url->query.base);
 }
+
+char *aura_url_construct(struct aura_mem_ctx *mc, const char *scheme, const char *host,
+                         const char *path, char *buf, uint64_t len) {
+    uint64_t _len = strlen(scheme) + strlen(host) + strlen(path) + 3 + 1; /* "://" + '/0' */
+    char *_path;
+
+    /* allocate */
+    if (!path) {
+        _path = aura_alloc(mc, _len);
+        if (!_path)
+            return NULL;
+        snprintf(_path, _len, "%s://%s%s", scheme, host, path);
+        return _path;
+    } else {
+        memset(buf, 0, len);
+        /**
+         * Build using the buffer provided.
+         * Truncate if buffer is too small
+         */
+        _len = _len > len ? len : _len;
+        snprintf(buf, _len, "%s://%s%s", scheme, host, path);
+        return buf;
+    }
+}

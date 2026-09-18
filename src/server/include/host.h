@@ -21,7 +21,6 @@ struct aura_srv_host_conf {
     uint32_t def_tls_off; /* default tls identity offset */
     uint32_t *other_tls_off;
     uint32_t other_tls_cnt;
-    // struct aura_router router;
     struct aura_evt_src evt_src; /* Http event source */
     struct aura_iovec *h2_origin_frame;
     struct aura_srv_sec_policy *def_security_policy; /* default security policy */

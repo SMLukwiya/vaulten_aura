@@ -8,10 +8,7 @@
 #include "error_lib.h"
 #include "event_ctx/context.h"
 #include "http_lib.h"
-#include "mem.h"
-#include "quickjs.h"
 #include "quickjs_internals.h"
-#include "request/req.h"
 #include "string/lib.h"
 #include "utils_lib.h"
 
@@ -601,7 +598,7 @@ static JSValue a_js_req_body_get(JSContext *ctx, JSValueConst this_val) {
         opaque->async_promise_cb[0] = JS_UNDEFINED;
         opaque->async_promise_cb[1] = JS_UNDEFINED;
 
-        if (aura_req_stream_provider_create(
+        if (aura_js_req_stream_provider_create(
               th_data->mc,
               req,
               &stream_src_ops,
@@ -646,7 +643,7 @@ static JSValue a_js_req_body_text(JSContext *ctx, JSValueConst this_val, int arg
     uint8_t *out;
     uint64_t out_len;
 
-    aura_req_dump(req);
+    aura_js_req_dump(req);
     if (bc->state == A_BODY_NOT_CONSUMED) {
         if (!bc->opaque)
             dec_st_ptr = &dec_st;
@@ -788,7 +785,7 @@ static JSValue a_qjs_res_body_get(JSContext *ctx, JSValueConst this_val) {
         opaque->async_promise_cb[0] = JS_UNDEFINED;
         opaque->async_promise_cb[1] = JS_UNDEFINED;
 
-        if (aura_res_stream_provider_create(
+        if (aura_js_res_stream_provider_create(
               rt_data->mc,
               res,
               &res_stream_src_ops,
@@ -1103,7 +1100,7 @@ static JSValue a_qjs_res_json(JSContext *ctx, JSValueConst this_val, int argc, J
 //         return JS_ThrowSyntaxError(ctx, "Header value can not be undefined");
 //     }
 
-//     hdr_slot = aura_res_get_kv_slot(ts->mc, resp);
+//     hdr_slot = aura_js_res_get_kv_slot(ts->mc, resp);
 //     if (!hdr_slot) {
 //         JS_FreeCString(ctx, n);
 //         JS_FreeCString(ctx, v);
@@ -1307,7 +1304,7 @@ JSValue aura_js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
             //     goto err;
             // }
 
-            hdr_slot = aura_req_get_kv_slot(ts->mc, req);
+            hdr_slot = aura_js_req_get_kv_slot(ts->mc, req);
             if (!hdr_slot) {
                 JS_FreeCString(ctx, key);
                 JS_FreeCString(ctx, value);
@@ -1350,7 +1347,7 @@ err:
     JS_FreeValue(ctx, fns[0]);
     JS_FreeValue(ctx, fns[1]);
     if (req)
-        aura_req_destroy(req);
+        aura_js_req_destroy(req);
     js_error = JS_NewString(ctx, "Operation failed");
     JS_Throw(ctx, js_error);
     return JS_EXCEPTION;
@@ -1418,7 +1415,7 @@ static JSValue a_qjs_response_constructor(JSContext *ctx, JSValueConst this_val,
             return JS_ThrowTypeError(ctx, "Invalid response body provided");
     }
 
-    Response *resp = aura_res_create(rt_data->mc);
+    Response *resp = aura_js_res_create(rt_data->mc);
     if (!resp)
         return JS_ThrowOutOfMemory(ctx);
 
@@ -1433,7 +1430,7 @@ static JSValue a_qjs_response_constructor(JSContext *ctx, JSValueConst this_val,
             if (buf && buf_len > 0) {
                 resp->body = js_malloc(ctx, buf_len); // aura_alloc(rt_data->mc, buf_len);
                 if (!resp->body) {
-                    aura_res_destroy(resp);
+                    aura_js_res_destroy(resp);
                     return JS_ThrowOutOfMemory(ctx);
                 }
 
@@ -1451,7 +1448,7 @@ static JSValue a_qjs_response_constructor(JSContext *ctx, JSValueConst this_val,
             if (buf && byte_len > 0) {
                 resp->body = js_malloc(ctx, byte_len); // aura_alloc(rt_data->mc, byte_len);
                 if (!resp->body) {
-                    aura_res_destroy(resp);
+                    aura_js_res_destroy(resp);
                     return JS_ThrowOutOfMemory(ctx);
                 }
 
@@ -1481,7 +1478,7 @@ static JSValue a_qjs_response_constructor(JSContext *ctx, JSValueConst this_val,
             if (buf && byte_len > 0) {
                 resp->body = js_malloc(ctx, byte_len); // aura_alloc(rt_data->mc, byte_len);
                 if (!resp->body) {
-                    aura_res_destroy(resp);
+                    aura_js_res_destroy(resp);
                     return JS_ThrowOutOfMemory(ctx);
                 }
 
@@ -1580,7 +1577,7 @@ static JSValue a_qjs_response_constructor(JSContext *ctx, JSValueConst this_val,
                 value = JS_GetPropertyStr(ctx, val, key);
                 if (!JS_IsString(value)) {
                     rv = JS_ThrowTypeError(ctx, "Invalid header value for key: %s, provided", key);
-                    aura_res_destroy(resp);
+                    aura_js_res_destroy(resp);
                     JS_FreeValue(ctx, value);
                     JS_FreeCString(ctx, key);
                     JS_FreeValue(ctx, val);
@@ -1590,12 +1587,12 @@ static JSValue a_qjs_response_constructor(JSContext *ctx, JSValueConst this_val,
                 const char *val_str = JS_ToCStringLen(ctx, &v_len, value);
                 JS_FreeValue(ctx, value);
 
-                hdr_slot = aura_res_get_kv_slot(rt_data->mc, resp);
+                hdr_slot = aura_js_res_get_kv_slot(rt_data->mc, resp);
                 if (!hdr_slot) {
                     JS_FreeCString(ctx, key);
                     JS_FreeCString(ctx, val_str);
                     JS_FreeValue(ctx, val);
-                    aura_res_destroy(resp);
+                    aura_js_res_destroy(resp);
                     return JS_ThrowOutOfMemory(ctx);
                 }
 
@@ -1613,14 +1610,14 @@ static JSValue a_qjs_response_constructor(JSContext *ctx, JSValueConst this_val,
     /* Create object */
     JSValue proto = JS_GetPropertyStr(ctx, this_val, "prototype");
     if (JS_IsException(proto)) {
-        aura_res_destroy(resp);
+        aura_js_res_destroy(resp);
         return JS_EXCEPTION;
     }
 
     JSValue obj = JS_NewObjectProtoClass(ctx, proto, response_id);
     JS_FreeValue(ctx, proto);
     if (JS_IsException(obj)) {
-        aura_res_destroy(resp);
+        aura_js_res_destroy(resp);
         return JS_EXCEPTION;
     }
 

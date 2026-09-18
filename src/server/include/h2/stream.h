@@ -7,7 +7,7 @@
 #include "list_lib.h"
 #include "mem.h"
 #include "request.h"
-#include "runtime/request.h"
+#include "request/js/req.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -265,11 +265,11 @@ bool aura_h2_stream_can_send(struct aura_h2_stream *stream, bool is_server);
 void aura_h2_stream_dump(struct aura_h2_stream *stream);
 
 /* Claim values from rt response object */
-int aura_h2_stream_claim_rt_response(struct aura_h2_stream *stream, _Response *resp,
+int aura_h2_stream_claim_rt_response(struct aura_h2_stream *stream, Response *resp,
                                      struct aura_mem_ctx *mc);
 
 /* Claim values from rt response object */
-int aura_h2_stream_claim_rt_request(struct aura_mem_ctx *mc, struct aura_h2_stream *stream, _Request *req);
+int aura_h2_stream_claim_rt_request(struct aura_mem_ctx *mc, struct aura_h2_stream *stream, Request *req);
 
 /* Stream scheduler compare function */
 int aura_h2_stream_cmp_fn(struct aura_heap_ent *e1, struct aura_heap_ent *e2);

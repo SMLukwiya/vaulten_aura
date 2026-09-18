@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "list_lib.h"
-#include "task/task.h"
+#include "task/lib.h"
 #include "timer/timer.h"
 
 enum a_worker_flags {
@@ -78,9 +78,6 @@ int aura_worker_pool_init(struct aura_worker_pool *wp);
 
 /**/
 int aura_task_queue_enqueue(struct aura_task_queue *tq, struct aura_task *task);
-
-/**/
-int aura_schedule_task(struct aura_fn_queue *fn_q, struct aura_task *task);
 
 /**/
 int aura_task_queue_flush(struct aura_task_queue *tq);

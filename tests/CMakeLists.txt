@@ -229,7 +229,7 @@ set_tests_properties(hpack_test PROPERTIES
 add_executable(test_aura_qjs
     js/basic.c
     ${vaulten_aura_SOURCE_DIR}/lib/file/lib.c
-    ${vaulten_aura_SOURCE_DIR}/lib/request/req.c
+    ${vaulten_aura_SOURCE_DIR}/lib/request/js/req.c
     ${vaulten_aura_SOURCE_DIR}/lib/url/lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/file/lib.c
     ${vaulten_aura_SOURCE_DIR}/lib/executors/js/quickjs/rt.c

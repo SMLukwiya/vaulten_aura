@@ -3,8 +3,6 @@
 
 #include "fn/lib.h"
 #include "list_lib.h"
-#include "runtime/runtime.h"
-#include "task_srv.h"
 
 #include <pthread.h>
 #include <stdint.h>
@@ -29,7 +27,7 @@ struct aura_work_queue {
     pthread_mutex_t mutex;
     pthread_attr_t th_attr;
     pthread_cond_t cond_var;
-    struct aura_runtime rt;
+    // struct aura_runtime rt;
     struct aura_list_head task_list;
     uint32_t max_instances;
     uint32_t curr_instances;
@@ -51,7 +49,7 @@ int aura_work_queue_destroy(struct aura_work_queue *wq);
 /**
  * Add a task to the work queue
  */
-int aura_work_queue_add(struct aura_work_queue *wq, struct aura_fn *fn, struct _aura_task *task);
+int aura_work_queue_add(struct aura_work_queue *wq, struct aura_fn *fn, struct aura_task *task);
 
 /**/
 int aura_work_queue_thread_vec_add(struct aura_wq_thread_vec *vec, struct aura_mem_ctx *mc,

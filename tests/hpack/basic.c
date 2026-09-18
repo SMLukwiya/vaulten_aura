@@ -1,5 +1,5 @@
 #include "h2/hpack.h"
-#include "header_srv.h"
+#include "header.h"
 #include "interned.h"
 #include <assert.h>
 
@@ -17,16 +17,16 @@ int aura_hpack_header_decode_test(struct aura_hpack_decoder *dec, struct aura_in
                                   size_t in_len, size_t *hdr_cnt, bool final);
 
 int aura_hpack_encode_header_test(struct aura_hpack_encoder *enc, struct aura_intern_tab *intern_tab,
-                                  struct aura_basic_header *hdr);
+                                  struct aura_kv_iovec *hdr);
 
 int aura_hpack_encode_header_indexed_name_test(struct aura_hpack_encoder *enc,
                                                struct aura_intern_tab *intern_tab,
-                                               struct aura_basic_header *hdr, int index,
+                                               struct aura_kv_iovec *hdr, int index,
                                                a_hpack_indexing_mode ind_mode);
 
 int aura_hpack_encode_header_new_name_test(struct aura_hpack_encoder *enc,
                                            struct aura_intern_tab *intern_tab,
-                                           struct aura_basic_header *hdr,
+                                           struct aura_kv_iovec *hdr,
                                            a_hpack_indexing_mode ind_mode);
 
 int aura_hpack_decoder_update_tab_size(struct aura_hpack_decoder *dec, size_t max_settings_size);
@@ -64,13 +64,13 @@ static void a_hpack_test_decode(void) {
     struct aura_header_field *dec_fields;
     int rv;
 
-    struct aura_basic_header nv_pairs1[] = {
+    struct aura_kv_iovec nv_pairs1[] = {
       A_MAKE_HDR(":method", "GET"),
       A_MAKE_HDR(":path", "/example/index.html"),
       A_MAKE_HDR(":scheme", "https"),
     };
 
-    struct aura_basic_header nv_pairs2[] = {
+    struct aura_kv_iovec nv_pairs2[] = {
       A_MAKE_HDR(":status", "200"),
       A_MAKE_HDR(":path", "/index.html"),
       A_MAKE_HDR("authorization", "hippopotamus-getamus"),
@@ -121,7 +121,7 @@ static void a_hpack_test_encode_indexed(void) {
     const uint8_t hdr_data[] = {0x84}, *end;
     struct aura_header_field hdr;
 
-    struct aura_basic_header nv_pair = A_MAKE_HDR(":path", "/");
+    struct aura_kv_iovec nv_pair = A_MAKE_HDR(":path", "/");
 
     assert(aura_hpack_encoder_init(&enc, &mc, A_HPACK_INITIAL_SETTINGS_HDR_SZ) == 0);
     assert(aura_hpacK_decoder_init(&dec, &mc, A_HPACK_INITIAL_SETTINGS_HDR_SZ) == 0);
@@ -132,7 +132,7 @@ static void a_hpack_test_encode_indexed(void) {
 
     rv = aura_hpack_decode(&dec, dest, end, intern_tab, &hdr, true);
     assert(rv == 1);
-    assert(strcmp(hdr.name->data, nv_pair.name.base) == 0);
+    assert(strcmp(hdr.name->data, nv_pair.key.base) == 0);
     assert(strcmp(hdr.value.interned->data, nv_pair.value.base) == 0);
 
     aura_hpack_encoder_destroy(&enc);
@@ -145,7 +145,7 @@ static void a_hpack_test_decode_indexed_name_no_inc(void) {
     size_t dest_len;
     struct aura_header_field hdr;
 
-    struct aura_basic_header nv_pairs[] = {
+    struct aura_kv_iovec nv_pairs[] = {
       A_MAKE_HDR("user-agent", "aura"),
       A_MAKE_HDR("user-agent", "x"),
     };
@@ -164,7 +164,7 @@ static void a_hpack_test_decode_indexed_name_no_inc(void) {
 
         rv = aura_hpack_decode(&dec, dest, end, intern_tab, &hdr, true);
         assert(rv == dest_len);
-        assert(strcmp(hdr.name->data, nv_pairs[i].name.base) == 0);
+        assert(strcmp(hdr.name->data, nv_pairs[i].key.base) == 0);
         if (hdr.flags & A_HDR_FIELD_FLAG_VALUE_INTERNED)
             assert(strcmp(hdr.value.interned->data, nv_pairs[i].value.base) == 0);
         else
@@ -183,7 +183,7 @@ static void a_hpack_test_decode_indexed_inc(void) {
     struct aura_header_field hdr;
     struct aura_hpack_tab_entry *e;
 
-    struct aura_basic_header nv_pair = A_MAKE_HDR("x-aura", "aura");
+    struct aura_kv_iovec nv_pair = A_MAKE_HDR("x-aura", "aura");
 
     assert(aura_hpack_encoder_init(&enc, &mc, A_HPACK_INITIAL_SETTINGS_HDR_SZ) == 0);
     assert(aura_hpacK_decoder_init(&dec, &mc, A_HPACK_INITIAL_SETTINGS_HDR_SZ) == 0);
@@ -213,7 +213,7 @@ static void a_hpack_test_decode_duplicate_indexed_repr(void) {
     struct aura_header_field *dec_fields;
     int rv;
 
-    struct aura_basic_header nv_pairs[] = {
+    struct aura_kv_iovec nv_pairs[] = {
       A_MAKE_HDR("host", "aling"),
       A_MAKE_HDR("host", "aling"),
     };
@@ -242,7 +242,7 @@ static void a_hpack_test_decode_duplicate_indexed_repr(void) {
 static void a_hpack_test_decode_indexed_name_inc_evict(void) {
     uint8_t value[1025], *src_in;
     size_t in_len, hdr_cnt;
-    struct aura_basic_header hdr;
+    struct aura_kv_iovec hdr;
     struct aura_header_field *dec_fields;
     int rv;
 
@@ -257,23 +257,23 @@ static void a_hpack_test_decode_indexed_name_inc_evict(void) {
     hdr.value.base = value;
     hdr.value.len = sizeof(value) - 1;
 
-    hdr.name.base = (char *)static_table.entries[17].header_field.name->data;
-    hdr.name.len = static_table.entries[17].header_field.name->len;
+    hdr.key.base = (char *)static_table.entries[17].header_field.name->data;
+    hdr.key.len = static_table.entries[17].header_field.name->len;
     rv = aura_hpack_encode_header_indexed_name_test(&enc, intern_tab, &hdr, 17, A_HPACK_HDR_FIELD_WITH_INDEXING);
     assert(rv == 0);
 
-    hdr.name.base = (char *)static_table.entries[18].header_field.name->data;
-    hdr.name.len = static_table.entries[18].header_field.name->len;
+    hdr.key.base = (char *)static_table.entries[18].header_field.name->data;
+    hdr.key.len = static_table.entries[18].header_field.name->len;
     rv = aura_hpack_encode_header_indexed_name_test(&enc, intern_tab, &hdr, 18, A_HPACK_HDR_FIELD_WITH_INDEXING);
     assert(rv == 0);
 
-    hdr.name.base = (char *)static_table.entries[19].header_field.name->data;
-    hdr.name.len = static_table.entries[19].header_field.name->len;
+    hdr.key.base = (char *)static_table.entries[19].header_field.name->data;
+    hdr.key.len = static_table.entries[19].header_field.name->len;
     rv = aura_hpack_encode_header_indexed_name_test(&enc, intern_tab, &hdr, 19, A_HPACK_HDR_FIELD_WITH_INDEXING);
     assert(rv == 0);
 
-    hdr.name.base = (char *)static_table.entries[20].header_field.name->data;
-    hdr.name.len = static_table.entries[20].header_field.name->len;
+    hdr.key.base = (char *)static_table.entries[20].header_field.name->data;
+    hdr.key.len = static_table.entries[20].header_field.name->len;
     rv = aura_hpack_encode_header_indexed_name_test(&enc, intern_tab, &hdr, 20, A_HPACK_HDR_FIELD_WITH_INDEXING);
     assert(rv == 0);
 
@@ -301,7 +301,7 @@ static void a_hpack_test_decode_newname_no_inc(void) {
     const uint8_t *src_in, *end;
     size_t in_len;
 
-    struct aura_basic_header nv_pairs[] = {
+    struct aura_kv_iovec nv_pairs[] = {
       A_MAKE_HDR("x-custom-aura-content-type-long", "v-aura"),
       A_MAKE_HDR("y", "x"),
       A_MAKE_HDR("x-custom-aura-content-type-long", "v"),
@@ -321,7 +321,7 @@ static void a_hpack_test_decode_newname_no_inc(void) {
 
         rv = aura_hpack_decode(&dec, src_in, end, intern_tab, &hdr, true);
         assert(rv == in_len);
-        assert(strcmp(hdr.name->data, nv_pairs[i].name.base) == 0);
+        assert(strcmp(hdr.name->data, nv_pairs[i].key.base) == 0);
         if (hdr.flags & A_HDR_FIELD_FLAG_VALUE_INTERNED)
             assert(strcmp(hdr.value.interned->data, nv_pairs[i].value.base) == 0);
         else
@@ -343,7 +343,7 @@ static void a_hpack_test_decode_newname_inc(void) {
     const uint8_t *src_in, *end;
     size_t in_len;
 
-    struct aura_basic_header nv_pair = A_MAKE_HDR("x-aura", "aura");
+    struct aura_kv_iovec nv_pair = A_MAKE_HDR("x-aura", "aura");
 
     assert(aura_hpack_encoder_init(&enc, &mc, A_HPACK_INITIAL_SETTINGS_HDR_SZ) == 0);
     assert(aura_hpacK_decoder_init(&dec, &mc, A_HPACK_INITIAL_SETTINGS_HDR_SZ) == 0);
@@ -371,13 +371,13 @@ static void a_hpack_test_decode_newname_inc(void) {
 static void a_hpack_test_decode_clearall_inc(void) {
     uint8_t value[4060];
     const uint8_t *src_in, *end;
-    struct aura_basic_header nv_pair;
+    struct aura_kv_iovec nv_pair;
     size_t in_len;
     struct aura_header_field hdr;
     int rv;
 
-    nv_pair.name.base = "x-aura";
-    nv_pair.name.len = sizeof("x-aura") - 1;
+    nv_pair.key.base = "x-aura";
+    nv_pair.key.len = sizeof("x-aura") - 1;
     memset(value, '0', sizeof(value));
     value[sizeof(value) - 1] = '\0';
     nv_pair.value.base = value;
@@ -531,12 +531,12 @@ static void a_hpack_test_table_size_change(void) {
     size_t in_len, hdr_cnt;
     struct aura_header_field *dec_fields;
 
-    struct aura_basic_header nv_pair1[] = {
+    struct aura_kv_iovec nv_pair1[] = {
       A_MAKE_HDR("aura", "vaulten"),
       A_MAKE_HDR("charlies", "angels"),
     };
 
-    struct aura_basic_header nv_pair2[] = {
+    struct aura_kv_iovec nv_pair2[] = {
       A_MAKE_HDR(":path", "/index.html"),
     };
 
@@ -621,7 +621,7 @@ static void a_hpack_test_table_size_change(void) {
 
 static void _a_hpack_test_encode_decode(struct aura_hpack_encoder *enc,
                                         struct aura_hpack_decoder *dec,
-                                        struct aura_basic_header *hdrs, size_t hdr_cnt) {
+                                        struct aura_kv_iovec *hdrs, size_t hdr_cnt) {
     struct aura_header_field *dec_fields;
     uint8_t *src_in;
     size_t in_len, dec_hdr_cnt;
@@ -642,7 +642,7 @@ static void _a_hpack_test_encode_decode(struct aura_hpack_encoder *enc,
     assert(hdr_cnt == dec_hdr_cnt);
 
     for (int i = 0; i < hdr_cnt; ++i) {
-        assert(memcmp(hdrs[i].name.base, dec_fields[i].name->data, hdrs[i].name.len) == 0);
+        assert(memcmp(hdrs[i].key.base, dec_fields[i].name->data, hdrs[i].key.len) == 0);
         if (dec_fields[i].flags & A_HDR_FIELD_FLAG_VALUE_INTERNED) {
             assert(memcmp(hdrs[i].value.base, dec_fields[i].value.interned->data, hdrs[i].value.len) == 0);
         } else
@@ -653,7 +653,7 @@ static void _a_hpack_test_encode_decode(struct aura_hpack_encoder *enc,
 }
 
 static void a_hpack_test_encode_decode() {
-    struct aura_basic_header nv_pairs1[] = {
+    struct aura_kv_iovec nv_pairs1[] = {
       A_MAKE_HDR(":status", "200 OK"),
       A_MAKE_HDR("access-control-allow-origin", "*"),
       A_MAKE_HDR("cache-control", "private, max-age=0, must-revalidate"),
@@ -670,7 +670,7 @@ static void a_hpack_test_encode_decode() {
       A_MAKE_HDR("x-cache-lookup", "MISS from alphabravo:3128"),
       A_MAKE_HDR("x-lb-nocache", "true"),
     };
-    struct aura_basic_header nv_pairs2[] = {
+    struct aura_kv_iovec nv_pairs2[] = {
       A_MAKE_HDR(":status", "304 Not Modified"),
       A_MAKE_HDR("age", "0"),
       A_MAKE_HDR("cache-control", "max-age=56682045"),
@@ -683,7 +683,7 @@ static void a_hpack_test_encode_decode() {
       A_MAKE_HDR("x-cache", "HIT from alphabravo"),
       A_MAKE_HDR("x-cache-lookup", "HIT from alphabravo:3128"),
     };
-    struct aura_basic_header nv_pairs3[] = {
+    struct aura_kv_iovec nv_pairs3[] = {
       A_MAKE_HDR(":status", "304 Not Modified"),
       A_MAKE_HDR("age", "0"),
       A_MAKE_HDR("cache-control", "max-age=56682072"),
@@ -696,7 +696,7 @@ static void a_hpack_test_encode_decode() {
       A_MAKE_HDR("x-cache", "HIT from alphabravo"),
       A_MAKE_HDR("x-cache-lookup", "HIT from alphabravo:3128"),
     };
-    struct aura_basic_header nv_pairs4[] = {
+    struct aura_kv_iovec nv_pairs4[] = {
       A_MAKE_HDR(":status", "304 Not Modified"),
       A_MAKE_HDR("age", "0"),
       A_MAKE_HDR("cache-control", "max-age=56682022"),
@@ -709,7 +709,7 @@ static void a_hpack_test_encode_decode() {
       A_MAKE_HDR("x-cache", "HIT from alphabravo"),
       A_MAKE_HDR("x-cache-lookup", "HIT from alphabravo:3128"),
     };
-    struct aura_basic_header nv_pairs5[] = {
+    struct aura_kv_iovec nv_pairs5[] = {
       A_MAKE_HDR(":status", "304 Not Modified"),
       A_MAKE_HDR("age", "0"),
       A_MAKE_HDR("cache-control", "max-age=4461139"),
@@ -722,7 +722,7 @@ static void a_hpack_test_encode_decode() {
       A_MAKE_HDR("x-cache", "HIT from alphabravo"),
       A_MAKE_HDR("x-cache-lookup", "HIT from alphabravo:3128"),
     };
-    struct aura_basic_header nv_pairs6[] = {
+    struct aura_kv_iovec nv_pairs6[] = {
       A_MAKE_HDR(":status", "304 Not Modified"),
       A_MAKE_HDR("age", "0"),
       A_MAKE_HDR("cache-control", "max-age=18645951"),
@@ -735,7 +735,7 @@ static void a_hpack_test_encode_decode() {
       A_MAKE_HDR("x-cache", "HIT from alphabravo"),
       A_MAKE_HDR("x-cache-lookup", "HIT from alphabravo:3128"),
     };
-    struct aura_basic_header nv_pairs7[] = {
+    struct aura_kv_iovec nv_pairs7[] = {
       A_MAKE_HDR(":status", "304 Not Modified"),
       A_MAKE_HDR("age", "0"),
       A_MAKE_HDR("cache-control", "max-age=31536000"),
@@ -748,7 +748,7 @@ static void a_hpack_test_encode_decode() {
       A_MAKE_HDR("x-cache", "HIT from alphabravo"),
       A_MAKE_HDR("x-cache-lookup", "HIT from alphabravo:3128"),
     };
-    struct aura_basic_header nv_pairs8[] = {
+    struct aura_kv_iovec nv_pairs8[] = {
       A_MAKE_HDR(":status", "304 Not Modified"),
       A_MAKE_HDR("age", "0"),
       A_MAKE_HDR("cache-control", "max-age=31536000"),
@@ -761,7 +761,7 @@ static void a_hpack_test_encode_decode() {
       A_MAKE_HDR("x-cache", "HIT from alphabravo"),
       A_MAKE_HDR("x-cache-lookup", "HIT from alphabravo:3128"),
     };
-    struct aura_basic_header nv_pairs9[] = {
+    struct aura_kv_iovec nv_pairs9[] = {
       A_MAKE_HDR(":status", "304 Not Modified"),
       A_MAKE_HDR("age", "0"),
       A_MAKE_HDR("cache-control", "max-age=31536000"),
@@ -774,7 +774,7 @@ static void a_hpack_test_encode_decode() {
       A_MAKE_HDR("x-cache", "HIT from alphabravo"),
       A_MAKE_HDR("x-cache-lookup", "HIT from alphabravo:3128"),
     };
-    struct aura_basic_header nv_pairs10[] = {
+    struct aura_kv_iovec nv_pairs10[] = {
       A_MAKE_HDR(":status", "304 Not Modified"),
       A_MAKE_HDR("age", "0"),
       A_MAKE_HDR("cache-control", "max-age=56682045"),

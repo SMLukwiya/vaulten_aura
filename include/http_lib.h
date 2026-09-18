@@ -1,6 +1,8 @@
 #ifndef AURA_HTTP_H
 #define AURA_HTTP_H
 
+#include <stdbool.h>
+
 /* Method */
 typedef enum {
     A_HTTP_NONE,
@@ -52,6 +54,15 @@ static const char *a_http_scheme_str[] = {
   "HTTPS",
 };
 
+static inline a_http_scheme_t aura_http_scheme_get_scheme_t(const char *scheme, uint64_t len) {
+    if (strncasecmp(scheme, "HTTP", len) == 0)
+        return A_SCHEME_HTTP;
+    else if (strncasecmp(scheme, "HTTPS", len) == 0)
+        return A_SCHEME_HTTPS;
+    else
+        return A_SCHEME_NONE;
+}
+
 /* Response code */
 typedef enum {
     A_HTTP_OK = 200,
@@ -92,5 +103,9 @@ typedef enum {
     A_HTTP_VERSION_NOT_SUPPORTED = 505,
     A_HTTP_INSUFFICIENT_STORAGE = 507,
 } a_http_resp_code_t;
+
+static inline bool aura_http_method_can_accept_body(uint8_t method) {
+    return method == A_HTTP_POST || method == A_HTTP_PATCH || method == A_HTTP_PUT;
+}
 
 #endif

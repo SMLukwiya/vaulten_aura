@@ -770,7 +770,7 @@ int aura_fn_queue_init(struct aura_fn_queue *fn_q, struct aura_worker_pool *glob
     return 0;
 }
 
-void aura_fn_queue_destroy(struct aura_fn_queue *fn_q) {
+static void a_fn_queue_destroy(struct aura_fn_queue *fn_q) {
     aura_list_delete(&fn_q->fn_node);
     pthread_mutex_destroy(&fn_q->lock);
 }
@@ -811,7 +811,7 @@ struct aura_fn_registry_ent *aura_fn_load_fn_registry_entry(struct aura_fn_regis
     aura_rh_map_key_init(&key, fn_tag->fn_id, sizeof(uint64_t), A_RH_KEY_U64);
 
     if (aura_rh_map_put(&r->hashmap, &key, (void *)e) < 0) {
-        aura_fn_queue_destroy(&e->fn_queue);
+        a_fn_queue_destroy(&e->fn_queue);
         return NULL;
     }
     r->cnt++;

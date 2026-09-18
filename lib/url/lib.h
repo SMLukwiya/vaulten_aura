@@ -22,4 +22,16 @@ int aura_url_get_default_port(struct aura_url *url);
 
 void aura_url_destroy(struct aura_url *parsed_url);
 
+/**
+ * Construct a url
+ * Return the constructed url as a string
+ * If buffer is not provided, the resulting string is
+ * allocated and returned.
+ * If buffer is provided, exactly len-1(accounting for null terminator)
+ * is placed into the buffer, which could result in truncation if
+ * resulting url exceeds the provided buffer len
+ */
+char *aura_url_construct(struct aura_mem_ctx *mc, const char *scheme, const char *host,
+                         const char *path, char *buf, uint64_t len);
+
 #endif

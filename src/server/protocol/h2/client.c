@@ -5,7 +5,7 @@
 #include "h2/client.h"
 #include "connection.h"
 #include "executors/js/quickjs/bindings.h"
-#include "header_srv.h"
+#include "header.h"
 #include "pending_req.h"
 #include "picotls.h"
 #include "server_srv.h"
@@ -658,7 +658,7 @@ void aura_cli_handle_conn_failure(struct aura_conn *conn) {
         a_list_dequeue(p_req, &conn->srv_ctx->req_coord.head, p_list);
 
         fetch_ctx = p_req->user_data;
-        aura_qjs_trigger_promise_rejection(fetch_ctx->ctx, fetch_ctx->reject, "SOME ERROR");
+        // aura_qjs_trigger_promise_rejection(fetch_ctx->ctx, fetch_ctx->reject, "SOME ERROR");
         aura_pending_req_destroy(p_req);
     }
 

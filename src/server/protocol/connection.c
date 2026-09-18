@@ -5,6 +5,7 @@
 #include "picotls.h"
 #include "server_srv.h"
 #include "socket_srv.h"
+#include "task/lib.h"
 #include "time_lib.h"
 #include "tls_srv.h"
 
@@ -225,7 +226,7 @@ void aura_conn_destroy(struct aura_conn *conn) {
             switch (p_req->type) {
             case A_PENDING_REQ_H2_JS:
                 fetch_ctx = p_req->user_data;
-                aura_qjs_trigger_promise_rejection(fetch_ctx->ctx, fetch_ctx->reject, "SOME ERROR");
+                // aura_qjs_trigger_promise_rejection(fetch_ctx->ctx, fetch_ctx->reject, "SOME ERROR");
                 aura_pending_req_destroy(p_req);
                 break;
 
@@ -863,50 +864,50 @@ void aura_conn_process_completions(struct aura_srv_ctx *srv_ctx) {
     struct aura_conn *conn;
     struct aura_h2_client_conn *c;
     struct aura_h2_stream *stream;
-    struct _aura_task *task;
-    _Response *resp;
+    struct aura_task *task;
+    Response *resp;
     int rv = -256;
 
-    while (!aura_list_is_empty(&srv_ctx->completions.list)) {
-        pthread_mutex_lock(&srv_ctx->completions.lock);
-        a_list_dequeue(comp, &srv_ctx->completions.list, c_list);
-        pthread_mutex_unlock(&srv_ctx->completions.lock);
-        aura_task_dump(comp->task);
+    // while (!aura_list_is_empty(&srv_ctx->completions.list)) {
+    //     pthread_mutex_lock(&srv_ctx->completions.lock);
+    //     a_list_dequeue(comp, &srv_ctx->completions.list, c_list);
+    //     pthread_mutex_unlock(&srv_ctx->completions.lock);
+    //     aura_task_dump(comp->task);
 
-        task = comp->task;
-        conn = aura_dyn_dense_pool_get_slot(srv_ctx->conn_tab, task->conn_idx);
-        if (!conn) {
-            aura_completion_destroy(comp);
-            return;
-        }
+    //     task = comp->task;
+    //     conn = aura_dyn_dense_pool_get_slot(srv_ctx->conn_tab, task->conn_idx);
+    //     if (!conn) {
+    //         aura_completion_destroy(comp);
+    //         return;
+    //     }
 
-        switch (task->protocol) {
-        case A_TASK_PROTOCOL_H2:
-            c = &conn->h2_client;
-            resp = task->res_data;
-            aura_rt_resp_dump(resp);
-            A_BUG_ON_2(!resp, true);
+    //     switch (task->protocol) {
+    //     case A_TASK_PROTOCOL_H2:
+    //         c = &conn->h2_client;
+    //         resp = task->res_data;
+    //         aura_rt_resp_dump(resp);
+    //         A_BUG_ON_2(!resp, true);
 
-            stream = aura_h2_conn_find_stream(&c->core, task->stream_id);
-            if (!stream) {
-                aura_completion_destroy(comp);
-                /* update some starts */
-                return;
-            }
+    //         stream = aura_h2_conn_find_stream(&c->core, task->stream_id);
+    //         if (!stream) {
+    //             aura_completion_destroy(comp);
+    //             /* update some starts */
+    //             return;
+    //         }
 
-            rv = aura_h2_submit_rt_response(&c->core, stream, resp, srv_ctx->mc);
-            aura_completion_destroy(comp);
-            if (rv < 0) {
-                aura_list_delete(&conn->c_list);
-                aura_list_add_tail(&srv_ctx->queues.reap, &conn->c_list);
-                aura_conn_transition_state(conn, A_CONN_STATE_CLOSING);
-            }
-            break;
-        case A_TASK_PROTOCOL_H3:
-        default:
-            break;
-        }
-    }
+    //         rv = aura_h2_submit_rt_response(&c->core, stream, resp, srv_ctx->mc);
+    //         aura_completion_destroy(comp);
+    //         if (rv < 0) {
+    //             aura_list_delete(&conn->c_list);
+    //             aura_list_add_tail(&srv_ctx->queues.reap, &conn->c_list);
+    //             aura_conn_transition_state(conn, A_CONN_STATE_CLOSING);
+    //         }
+    //         break;
+    //     case A_TASK_PROTOCOL_H3:
+    //     default:
+    //         break;
+    //     }
+    // }
 }
 
 void aura_conn_process_reap_queue(struct aura_srv_ctx *srv_ctx) {

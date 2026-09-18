@@ -61,9 +61,9 @@ static inline bool aura_stream_is_done(struct aura_stream_provider *p) {
 /**
  *
  */
-int aura_stream_provider_init(struct aura_stream_provider *p, void *ctx,
-                              struct aura_stream_src_ops *ops, void *opaque,
-                              opaque_destructor_fn fn);
+int aura_js_stream_provider_init(struct aura_stream_provider *p, void *ctx,
+                                 struct aura_stream_src_ops *ops, void *opaque,
+                                 opaque_destructor_fn fn);
 
 /** */
 void aura_stream_provider_destroy(struct aura_stream_provider *sp);

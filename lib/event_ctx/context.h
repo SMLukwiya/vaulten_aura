@@ -5,15 +5,11 @@
 
 #include "fn/lib.h"
 #include "radix/tree.h"
-#include "request/req.h"
+#include "request/js/req.h"
 #include "timer/timer.h"
 
 #define A_EVT_SRC_MAX_CNT 16
 #define A_EVT_SRC_NAME_MAX_LEN 64
-
-enum aura_msg_data_kind {
-    A_ROUTING_INFO
-};
 
 /* Function execution context event */
 struct aura_exec_ctx_evt {

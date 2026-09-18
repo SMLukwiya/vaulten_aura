@@ -5,7 +5,7 @@
 #include "compiler_lib.h"
 #include "error_lib.h"
 #include "h2/stream.h"
-#include "header_srv.h"
+#include "header.h"
 #include "mem.h"
 #include "sliding_buf.h"
 #include "token_srv.h"
@@ -386,7 +386,7 @@ int aura_hpack_encode_status(struct aura_hpack_encoder *enc,
 int aura_hpack_encode_content_length(struct aura_hpack_encoder *enc, uint64_t value);
 
 int aura_hpack_encode_headers(struct aura_hpack_encoder *enc, struct aura_intern_tab *intern_tab,
-                              struct aura_basic_header *hdr_field, size_t hdr_cnt);
+                              struct aura_kv_iovec *hdr_field, size_t hdr_cnt);
 
 ssize_t aura_hpack_decode(struct aura_hpack_decoder *dec, const uint8_t *src_in,
                           const uint8_t *end, struct aura_intern_tab *intern_tab,

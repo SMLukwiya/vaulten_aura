@@ -1,10 +1,10 @@
 #include "request.h"
 
-static void a_route_hdr_vec_destroy(struct aura_header_vector *hdr_vec) {
-    struct aura_basic_header *hdr;
+static void a_route_hdr_vec_destroy(struct aura_kv_vec *hdr_vec) {
+    struct aura_kv_iovec *hdr;
     for (int i = 0; i < hdr_vec->cnt; ++i) {
         hdr = &hdr_vec->entries[i];
-        aura_free(hdr->name.base);
+        aura_free(hdr->key.base);
         aura_free(hdr->value.base);
     }
 }

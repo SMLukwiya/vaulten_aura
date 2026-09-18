@@ -64,35 +64,42 @@ typedef struct aura_qjs_response {
     bool streaming;
 } Response;
 
-/* Create request object */
-Request *aura_task_create2(struct aura_mem_ctx *mc, uint8_t method, struct aura_kv_vec *headers,
-                           const uint8_t *body, uint64_t cont_len, uint8_t *url);
+/**
+ * Create request object.
+ * The headers are duplicated to give the request its own version
+ * If the http method supports a body, the body is transfered to the
+ * request. As such, make sure to account for that after the function
+ * successfully returns.
+ * The url is also duplicated to give the request its own version
+ */
+Request *aura_js_req_create(struct aura_mem_ctx *mc, uint8_t method, struct aura_kv_vec *headers,
+                            const uint8_t *body, uint64_t cont_len, uint8_t *url);
 
 /* Create response object */
-Response *aura_res_create(struct aura_mem_ctx *mc);
+Response *aura_js_res_create(struct aura_mem_ctx *mc);
 
 /* Destroy request object */
-void aura_req_destroy(Request *req);
+void aura_js_req_destroy(Request *req);
 
 /* Destroy response object */
-void aura_res_destroy(Response *res);
+void aura_js_res_destroy(Response *res);
 
-struct aura_kv_iovec *aura_req_get_kv_slot(struct aura_mem_ctx *mc, Request *req);
-struct aura_kv_iovec *aura_res_get_kv_slot(struct aura_mem_ctx *mc, Response *resp);
+struct aura_kv_iovec *aura_js_req_get_kv_slot(struct aura_mem_ctx *mc, Request *req);
+struct aura_kv_iovec *aura_js_res_get_kv_slot(struct aura_mem_ctx *mc, Response *resp);
 
 /* */
-int aura_req_stream_provider_create(struct aura_mem_ctx *mc, Request *req,
-                                    struct aura_stream_src_ops *ops, void *opaque,
-                                    opaque_destructor_fn fn);
+int aura_js_req_stream_provider_create(struct aura_mem_ctx *mc, Request *req,
+                                       struct aura_stream_src_ops *ops, void *opaque,
+                                       opaque_destructor_fn fn);
 
 /**/
-int aura_res_stream_provider_create(struct aura_mem_ctx *mc, Response *res,
-                                    struct aura_stream_src_ops *ops, void *opaque,
-                                    opaque_destructor_fn fn);
+int aura_js_res_stream_provider_create(struct aura_mem_ctx *mc, Response *res,
+                                       struct aura_stream_src_ops *ops, void *opaque,
+                                       opaque_destructor_fn fn);
 
 /* Print request */
-void aura_req_dump(Request *req);
+void aura_js_req_dump(Request *req);
 /* Print response */
-void aura_res_dump(Response *res);
+void aura_js_res_dump(Response *res);
 
 #endif

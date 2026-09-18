@@ -1355,7 +1355,14 @@ void a_load_fn_destructor(const void *stat) {
     aura_free(_stat);
 }
 
-static struct aura_route2 *a_http_fn_create_opaque(struct aura_mem_ctx *mc) {
+/**
+ * Create a function route.
+ * This is attached to an http function
+ * and can contain additional configs
+ * to associate with the function and it's
+ * invocations
+ */
+static struct aura_route2 *a_http_fn_create_route(struct aura_mem_ctx *mc) {
     struct aura_route2 *route_info = aura_alloc(mc, sizeof(*route_info));
     if (!route_info) {
         return NULL;
@@ -1462,7 +1469,7 @@ static int a_preload_functions(struct aura_srv_global_ctx *gc, int dmn_sock_fd) 
                 return 0;
             }
             ent->fn = fn;
-            struct aura_route2 *route_info = a_http_fn_create_opaque(mc);
+            struct aura_route2 *route_info = a_http_fn_create_route(mc);
             if (!route_info) {
                 sys_debug(true, 0, "function loading: route_info err");
                 return -1;

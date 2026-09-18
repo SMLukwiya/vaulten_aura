@@ -8,6 +8,12 @@
 #include "types_lib.h"
 #include "url/lib.h"
 
+enum aura_task_state {
+    A_TASK_STATE_QUEUED,
+    A_TASK_STATE_RUNNING,
+    A_TASK_STATE_DONE,
+};
+
 enum aura_task_flags {
     A_TASK_PENDING = 1,
 };
@@ -33,5 +39,11 @@ static inline void aura_task_start_time(struct aura_task *task) {
 static inline void aura_task_complete2(struct aura_task *task) {
     task->completed_at = aura_now_ms(CLOCK_MONOTONIC);
 }
+
+/* create a task */
+struct aura_task *aura_task_create(struct aura_mem_ctx *mc, uint64_t fn_id, uint8_t *payload,
+                                   uint64_t p_len, void *opaque, uint32_t flags);
+
+void aura_task_destroy(struct aura_task *task);
 
 #endif

@@ -3,8 +3,10 @@
 
 #include "interned.h"
 #include "mem.h"
+#include "request/js/req.h"
 #include "slab.h"
 #include "types_lib.h"
+
 #include <stdbool.h>
 
 #define A_HDR_FIELD_FLAG_NAME_INTERNED 1 << 0
@@ -15,12 +17,6 @@
 #define A_HDR_FIELD_FLAG_CAN_HUFFMAN 1 << 5
 #define A_HDR_FIELD_FLAG_EMIT 1 << 6
 #define A_HDR_FIELD_FLAG_FINAL 1 << 7
-
-/* Key value header field structure */
-struct aura_basic_header {
-    struct aura_iovec name;
-    struct aura_iovec value;
-};
 
 /* header field structure */
 struct aura_header_field {
@@ -36,19 +32,13 @@ struct aura_header_field {
     uint8_t flags;
 };
 
-struct aura_header_vector {
-    struct aura_basic_header *entries;
-    size_t cnt;
-    size_t cap;
-};
-
-struct aura_header_vector2 {
+struct aura_kv_vec2 {
     struct aura_header_field *entries;
     uint32_t cnt;
     uint32_t cap;
 };
 
-int aura_header_add_header_field(struct aura_mem_ctx *mc, struct aura_header_vector *hdrs,
+int aura_header_add_header_field(struct aura_mem_ctx *mc, struct aura_kv_vec *hdrs,
                                  struct aura_header_field *nv);
 
 bool aura_header_name_valid(const char *s);

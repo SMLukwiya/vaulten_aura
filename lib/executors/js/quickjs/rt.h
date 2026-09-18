@@ -6,7 +6,7 @@
 #include "fn/lib.h"
 #include "mem.h"
 #include "quickjs.h"
-#include "request/req.h"
+#include "request/js/req.h"
 
 #define A_READ 1
 #define A_WRITE 2

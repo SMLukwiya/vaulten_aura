@@ -24,7 +24,7 @@ void *aura_qjs_thread_routine(void *_arg) {
     struct aura_fn *fn;
     struct aura_runtime *rt;
     struct aura_qjs_runtime *qjs_rt;
-    struct _aura_task *task;
+    struct aura_task *task;
     Response *resp;
     int res;
     bool timedout, is_part_of_min;
@@ -33,14 +33,14 @@ void *aura_qjs_thread_routine(void *_arg) {
     wq = arg->wq;
     fn = arg->fn;
     is_part_of_min = arg->is_part_of_min;
-    rt = &wq->rt;
+    // rt = &wq->rt;
     free(_arg);
 
     /* Create underlying qjs engine */
-    if (wq->rt.ops.on_create(&wq->rt, wq->srv_ctx, fn) < 0) {
-        return NULL;
-    }
-    qjs_rt = wq->rt.rt_ctx;
+    // if (wq->rt.ops.on_create(&wq->rt, wq->srv_ctx, fn) < 0) {
+    //     return NULL;
+    // }
+    // qjs_rt = wq->rt.rt_ctx;
     qjs_rt->_is_part_of_min = is_part_of_min;
     res = pthread_mutex_lock(&wq->mutex);
     if (res)
@@ -72,13 +72,13 @@ void *aura_qjs_thread_routine(void *_arg) {
                 /* error break */
                 wq->curr_instances--;
                 /** @todo: update stats */
-                wq->rt.ops.on_destroy(&wq->rt);
+                // wq->rt.ops.on_destroy(&wq->rt);
                 pthread_mutex_unlock(&wq->mutex);
                 return NULL;
             }
         }
 
-        a_list_dequeue(task, &wq->task_list, t_list);
+        // a_list_dequeue(task, &wq->task_list, t_list);
         if (task) {
             wq->idle_instances--;
             struct aura_completion *c;
@@ -86,12 +86,12 @@ void *aura_qjs_thread_routine(void *_arg) {
             res = pthread_mutex_unlock(&wq->mutex);
             if (res)
                 return NULL;
-            res = rt->ops.on_execute(rt, task);
+            // res = rt->ops.on_execute(rt, task);
             c = aura_completion_create(wq->srv_ctx->mc, task);
             if (!c) {
                 /** @todo: handle stream connection closing */
                 aura_task_destroy(task);
-                wq->rt.ops.on_destroy(&wq->rt);
+                // wq->rt.ops.on_destroy(&wq->rt);
                 return NULL;
             }
             aura_completion_queue_push(&wq->srv_ctx->completions, c);
@@ -102,7 +102,7 @@ void *aura_qjs_thread_routine(void *_arg) {
         if (aura_list_is_empty(&wq->task_list) && wq->quit) {
             wq->curr_instances--;
             /* use the same cond var to signal the last closing thread */
-            wq->rt.ops.on_destroy(&wq->rt);
+            // wq->rt.ops.on_destroy(&wq->rt);
             if (wq->curr_instances == 0) {
                 pthread_cond_signal(&wq->cond_var);
             }
@@ -112,7 +112,7 @@ void *aura_qjs_thread_routine(void *_arg) {
 
         if (aura_list_is_empty(&wq->task_list) && timedout) {
             wq->curr_instances--;
-            wq->rt.ops.on_destroy(&wq->rt);
+            // wq->rt.ops.on_destroy(&wq->rt);
             pthread_mutex_unlock(&wq->mutex);
             break;
         }
@@ -151,8 +151,8 @@ int aura_work_queue_init(struct aura_work_queue *wq, struct aura_srv_ctx *srv_ct
     int rv;
 
     memset(wq, 0, sizeof(*wq));
-    aura_rt_init(&wq->rt, fn, fn->backend);
-    A_BUG_ON_2(!wq->rt.backend, true);
+    // aura_rt_init(&wq->rt, fn, fn->backend);
+    // A_BUG_ON_2(!wq->rt.backend, true);
 
     rv = pthread_attr_init(&wq->th_attr);
     if (rv) {
@@ -263,7 +263,7 @@ int aura_work_queue_destroy(struct aura_work_queue *wq) {
     return 0;
 }
 
-int aura_work_queue_add(struct aura_work_queue *wq, struct aura_fn *fn, struct _aura_task *task) {
+int aura_work_queue_add(struct aura_work_queue *wq, struct aura_fn *fn, struct aura_task *task) {
     pthread_t new_th_id;
     int rv;
 
@@ -273,8 +273,8 @@ int aura_work_queue_add(struct aura_work_queue *wq, struct aura_fn *fn, struct _
     if (rv)
         return rv;
 
-    aura_list_head_init(&task->t_list);
-    aura_list_add_tail(&wq->task_list, &task->t_list);
+    // aura_list_head_init(&task->t_list);
+    // aura_list_add_tail(&wq->task_list, &task->t_list);
 
     /* Wake idling instances */
     if (wq->idle_instances > 0) {
