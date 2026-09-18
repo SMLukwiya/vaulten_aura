@@ -90,4 +90,9 @@ int aura_str_buf_append_field(struct aura_str_buf *buf, const char *prefix, cons
  */
 int aura_str_buf_append(struct aura_str_buf *buf, const char *s);
 
+/**
+ * Append continuation to an already structured field
+ */
+int aura_str_buf_append_continuation(struct aura_str_buf *buf, const char *prefix, const char *value);
+
 #endif

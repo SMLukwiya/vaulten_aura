@@ -384,7 +384,7 @@ struct aura_fn_cron_trigger {
 };
 
 /* Fn tag trigger structure */
-struct fn_trigger {
+struct aura_fn_trigger {
     union {
         struct aura_fn_http_trigger http;
         struct aura_fn_cron_trigger cron;
@@ -392,9 +392,13 @@ struct fn_trigger {
     uint8_t trigger;
 } __attribute__((packed));
 
+/**
+ * Function triggers.
+ * An array of all triggers
+ */
 struct aura_fn_triggers {
-    struct fn_trigger entries[A_FN_MAX_TRIGGERS]; /* Function triggers */
-    uint8_t cnt;                                  /* Trigger count */
+    struct aura_fn_trigger entries[A_FN_MAX_TRIGGERS]; /* Function triggers */
+    uint8_t cnt;                                       /* Trigger count */
     uint8_t cap;
 };
 
@@ -408,8 +412,6 @@ struct aura_fn_meta {
     const char *host;
     const char *entry_point;
     struct aura_fn_triggers triggers;
-    struct aura_fn_http_trigger http_trigger;
-    struct aura_fn_cron_trigger cron_trigger;
     struct aura_fn_resources fn_resources;
     struct {
         struct aura_fn_ingress inbound;
@@ -658,22 +660,22 @@ int aura_fn_meta_parse(void *meta, struct aura_fn_meta *fn_meta);
 int aura_fn_config_parse(void *config, struct aura_fn_config *fn_config);
 
 /* Destroy funtion meta data */
-void aura_fn_meta_destroy(const struct aura_fn_meta *fn_meta);
+void aura_fn_meta_destroy(struct aura_fn_meta *fn_meta);
 
 /* Destroy function config */
 void aura_fn_config_destroy(struct aura_fn_config *fn_config);
 
 /* Destroy function resource structure */
-void aura_fn_resources_destroy(const struct aura_fn_resources *resources);
+void aura_fn_resources_destroy(struct aura_fn_resources *resources);
 
 /* Destroy function http trigger structure */
-void aura_fn_http_trigger_destroy(const struct aura_fn_http_trigger *http_trigger);
+void aura_fn_http_trigger_destroy(struct aura_fn_http_trigger *http_trigger);
 
 /* Destroy function cron trigger structure */
-void aura_fn_cron_trigger_destroy(const struct aura_fn_cron_trigger *cron_trigger);
+void aura_fn_cron_trigger_destroy(struct aura_fn_cron_trigger *cron_trigger);
 
 /* Destroy function networking structure */
-void aura_fn_networking_destroy(const void *networking);
+void aura_fn_networking_destroy(void *networking);
 
 /**
  * Get 'tiny' function meta data from

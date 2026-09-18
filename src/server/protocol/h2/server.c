@@ -832,16 +832,16 @@ static int aura_h2_srv_process_request(struct aura_h2_server_conn *c, uint32_t s
         A_BUG_ON_2(!fn_ent, true);
 
         /* Create task */
-        task = aura_task_create(
-          stream,
-          conn->mc,
-          conn->fn_ent->fn->meta.http_trigger.path.base,
-          conn->srv_ctx->next_task_id++,
-          conn->conn_id,
-          conn->conn_tab_idx,
-          A_TASK_PROTOCOL_H2);
-        if (!task)
-            return A_H2_INTERNAL_ERR;
+        // task = aura_task_create(
+        //   stream,
+        //   conn->mc,
+        //   conn->fn_ent->fn->meta.http_trigger.path.base,
+        //   conn->srv_ctx->next_task_id++,
+        //   conn->conn_id,
+        //   conn->conn_tab_idx,
+        //   A_TASK_PROTOCOL_H2);
+        // if (!task)
+        //     return A_H2_INTERNAL_ERR;
 
         // rv = aura_work_queue_add(route->wq, route->fn, task);
         if (rv) {

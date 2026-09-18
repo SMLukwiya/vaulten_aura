@@ -3,6 +3,12 @@
 #include "db/broker.h"
 #include "lib.h"
 
+/**
+ * Function configuration table
+ * Keeps the node indexes of
+ * the various configuration so
+ * they can be accessed un O(1) time.
+ */
 int _fn_conf_tab[] = {
   [A_IDX_FN_NONE] = 0,
   [A_IDX_FN_FUNCTION] = 0,
@@ -30,7 +36,8 @@ int _fn_conf_tab[] = {
   [A_IDX_FN_NETWORKING] = 0,
 };
 
-size_t _fn_conf_tab_size = ARRAY_SIZE(_fn_conf_tab);
+/* size of the configuration table */
+size_t _fn_conf_tab_size = ARR_CNT(_fn_conf_tab);
 
 struct aura_fn_list *aura_fn_list_fetch(struct aura_mem_ctx *mc, AURA_DBHANDLE db,
                                         int dmn_sock_fd, int *error) {
@@ -73,6 +80,10 @@ struct aura_fn_list *aura_fn_list_fetch(struct aura_mem_ctx *mc, AURA_DBHANDLE d
     return fn_list;
 }
 
+/**
+ * Parse and structure all function triggers for a particular function
+ * @todo: triggers array size is a MAX, ensure there is no overflow
+ */
 static int a_fn_triggers_parse(void *meta, struct aura_fn_triggers *fn_triggers) {
     const st_aura_blob_node *nodes;
     const st_aura_blob_kv_pair *kv_pairs, *kv;
@@ -81,6 +92,7 @@ static int a_fn_triggers_parse(void *meta, struct aura_fn_triggers *fn_triggers)
     const st_aura_blob_node *kv_val_node;
     uint32_t kv_cnt, kv_idx, arr_cnt, arr_idx;
     const char *kv_key, *kv_val;
+    struct aura_fn_trigger *trigger_slot;
 
     nodes = aura_blob_get_nodes(meta);
     kv_pairs = aura_blob_get_kvs(meta);
@@ -91,7 +103,9 @@ static int a_fn_triggers_parse(void *meta, struct aura_fn_triggers *fn_triggers)
 
     fn_triggers->cnt = 0;
     if (fn_tab[A_IDX_FN_TRIGGERS] != 0) {
-        struct aura_fn_http_trigger *http_trigger = &fn_triggers->entries[fn_triggers->cnt].http;
+        trigger_slot = &fn_triggers->entries[fn_triggers->cnt++];
+        // struct aura_fn_http_trigger *http_trigger = &fn_triggers->entries[fn_triggers->cnt].http;
+        struct aura_fn_http_trigger *http_trigger = &trigger_slot->http;
         /* http */
         if (fn_tab[A_IDX_FN_HTTP_TRIGGER] != 0) {
             trigger_node = &nodes[fn_tab[A_IDX_FN_HTTP_TRIGGER]];
@@ -119,13 +133,16 @@ static int a_fn_triggers_parse(void *meta, struct aura_fn_triggers *fn_triggers)
                     /**/
                 }
             }
-            fn_triggers->entries[fn_triggers->cnt].trigger = A_FN_TRIGGER_HTTP;
-            fn_triggers->cnt++;
+            // fn_triggers->entries[fn_triggers->cnt].trigger = A_FN_TRIGGER_HTTP;
+            trigger_slot->trigger = A_FN_TRIGGER_HTTP;
+            // fn_triggers->cnt++;
         }
 
         /* Cron trigger */
         if (fn_tab[A_IDX_FN_CRON_TRIGGER] != 0) {
-            struct aura_fn_cron_trigger *cron_trigger = &fn_triggers->entries[fn_triggers->cnt].cron;
+            trigger_slot = &fn_triggers->entries[fn_triggers->cnt++];
+            // struct aura_fn_cron_trigger *cron_trigger = &fn_triggers->entries[fn_triggers->cnt].cron;
+            struct aura_fn_cron_trigger *cron_trigger = &trigger_slot->cron;
             trigger_node = &nodes[fn_tab[A_IDX_FN_CRON_TRIGGER]];
             kv_idx = trigger_node->map.kv_idx;
             kv_cnt = trigger_node->map.kv_cnt;
@@ -158,8 +175,9 @@ static int a_fn_triggers_parse(void *meta, struct aura_fn_triggers *fn_triggers)
                     cron_trigger_retry_node = &nodes[fn_tab[A_IDX_FN_CRON_RETRIES]];
                 }
             }
-            fn_triggers->entries[fn_triggers->cnt].trigger = A_FN_TRIGGER_CRON;
-            fn_triggers->cnt++;
+            // fn_triggers->entries[fn_triggers->cnt].trigger = A_FN_TRIGGER_CRON;
+            trigger_slot->trigger = A_FN_TRIGGER_CRON;
+            // fn_triggers->cnt++;
         }
 
         /* Queue trigger */
@@ -181,6 +199,14 @@ static int a_fn_triggers_parse(void *meta, struct aura_fn_triggers *fn_triggers)
     }
 
     return 0;
+}
+
+static inline struct aura_fn_trigger *a_fn_get_trigger(struct aura_fn_triggers *triggers, uint8_t type) {
+    for (int i = 0; i < triggers->cnt; ++i) {
+        if (triggers->entries[i].trigger == type)
+            return &triggers->entries[i];
+    }
+    return NULL;
 }
 
 /**
@@ -224,7 +250,7 @@ int aura_fn_list_add_fn(AURA_DBHANDLE db, struct aura_mem_ctx *mc, struct aura_f
             memcpy(new_fn->fn_version, fn_meta->version, strlen(fn_meta->version));
         new_fn->fn_id = fn_meta->fn_id;
         new_fn->timestamp_ms = fn_meta->fn_id;
-        new_fn->http = fn_meta->http_trigger.path.base ? true : false;
+        new_fn->http = a_fn_get_trigger(&fn_meta->triggers, A_FN_TRIGGER_HTTP) ? true : false;
 
         if (aura_db_insert(
               db,
@@ -413,9 +439,6 @@ int aura_fn_meta_parse(void *meta, struct aura_fn_meta *fn_meta) {
     }
 
     /* FN triggers */
-    const st_aura_blob_node *fn_triggers_node, *http_trigger_node, *cron_trigger_node, *queue_trigger_node;
-    const st_aura_blob_node *cron_trigger_retry_node;
-
     if (a_fn_triggers_parse(meta, &fn_meta->triggers) < 0)
         goto exception;
 
@@ -552,7 +575,24 @@ exception:
 void *aura_fn_config_blob(struct aura_fn_config *config) {
 }
 
-void aura_fn_meta_destroy(const struct aura_fn_meta *fn_meta) {
+static inline void a_fn_triggers_destroy(struct aura_fn_triggers *triggers) {
+    struct aura_fn_trigger *fn_trigger;
+
+    for (int i = 0; i < triggers->cnt; ++i) {
+        fn_trigger = &triggers->entries[i];
+        switch (fn_trigger->trigger) {
+        case A_FN_TRIGGER_HTTP:
+            aura_fn_http_trigger_destroy(&fn_trigger->http);
+            break;
+
+        case A_FN_TRIGGER_CRON:
+            aura_fn_cron_trigger_destroy(&fn_trigger->cron);
+            break;
+        }
+    }
+}
+
+void aura_fn_meta_destroy(struct aura_fn_meta *fn_meta) {
     if (fn_meta->name)
         free((void *)fn_meta->name);
     if (fn_meta->description)
@@ -569,12 +609,9 @@ void aura_fn_meta_destroy(const struct aura_fn_meta *fn_meta) {
     if (fn_meta->entry_point)
         free((void *)fn_meta->entry_point);
 
+    a_fn_triggers_destroy(&fn_meta->triggers);
+
     aura_fn_resources_destroy(&fn_meta->fn_resources);
-
-    aura_fn_http_trigger_destroy(&fn_meta->http_trigger);
-
-    aura_fn_cron_trigger_destroy(&fn_meta->cron_trigger);
-
     aura_fn_networking_destroy(&fn_meta->networking);
 }
 
@@ -590,13 +627,13 @@ void aura_fn_config_destroy(struct aura_fn_config *fn_config) {
     }
 }
 
-void aura_fn_resources_destroy(const struct aura_fn_resources *resources) {
+void aura_fn_resources_destroy(struct aura_fn_resources *resources) {
     if (!resources)
         return;
     /**/
 }
 
-void aura_fn_http_trigger_destroy(const struct aura_fn_http_trigger *http_trigger) {
+void aura_fn_http_trigger_destroy(struct aura_fn_http_trigger *http_trigger) {
     if (!http_trigger)
         return;
 
@@ -604,12 +641,12 @@ void aura_fn_http_trigger_destroy(const struct aura_fn_http_trigger *http_trigge
         free(http_trigger->path.base);
 }
 
-void aura_fn_cron_trigger_destroy(const struct aura_fn_cron_trigger *cron_trigger) {
+void aura_fn_cron_trigger_destroy(struct aura_fn_cron_trigger *cron_trigger) {
     if (!cron_trigger)
         return;
 }
 
-void aura_fn_networking_destroy(const void *networking) {
+void aura_fn_networking_destroy(void *networking) {
     if (!networking)
         return;
     /**/
@@ -1055,8 +1092,47 @@ int aura_fn_meta_construct(struct aura_str_buf *buf, struct aura_fn_meta *meta) 
     if (rv < 0)
         return rv;
 
+    /* Triggers */
     for (int i = 0; i < meta->triggers.cnt; ++i) {
+        struct aura_fn_trigger *fn_trigger = &meta->triggers.entries[i];
+        char line[128];
+
+        memset(line, 0, sizeof(line));
+        switch (fn_trigger->trigger) {
+        case A_FN_TRIGGER_HTTP:
+            const char *method = aura_http_methods_str[fn_trigger->http.method];
+            snprintf(line, sizeof(line), "HTTP %-4s %s", method, fn_trigger->http.path.base);
+            break;
+
+        case A_FN_TRIGGER_CRON:
+            snprintf(line, sizeof(line), "CRON %s (%s)", fn_trigger->cron.cron_schedule, "parse cron");
+            break;
+
+        default:
+            break;
+        }
+
+        if (i == 0)
+            aura_str_buf_append_field(buf, "", "TRIGGERS", line);
+        else
+            aura_str_buf_append_continuation(buf, "", line);
     }
+    aura_str_buf_append(buf, "\n");
+
+    /* Resources */
+    char line[128];
+    memset(line, 0, sizeof(line));
+    snprintf(line, sizeof(line), "Memory limit soft=%u, hard=%u", meta->fn_resources.mem_limit_mb_soft, meta->fn_resources.mem_limit_mb_hard);
+    aura_str_buf_append_field(buf, "", "RESOURCES", line);
+
+    memset(line, 0, sizeof(line));
+    snprintf(line, sizeof(line), "CPU shares=%u", meta->fn_resources.cpu_shares);
+    aura_str_buf_append_continuation(buf, "", line);
+
+    memset(line, 0, sizeof(line));
+    snprintf(line, sizeof(line), "TIMEOUT %u", meta->fn_resources.timeout);
+    aura_str_buf_append_continuation(buf, "", line);
+    aura_str_buf_append(buf, "\n");
 
     return 0;
 }
